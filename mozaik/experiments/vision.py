@@ -2267,3 +2267,105 @@ class MapTwoStrokeGabor(VisualExperiment):
 
     def do_analysis(self, data_store):
         pass
+
+
+class FindIdealGabor(VisualExperiment):
+    """
+    Find orientation, phase and spatial frequency preference of a neuron
+    with known receptive field center location and diameter, by showing it
+    Gabor functions with the parameters above varied.
+
+    Specifically, show all combinations of supplied orientations, phases and
+    spatial frequencies.
+
+
+    Parameters
+    ----------
+    model : Model
+          The model on which to execute the experiment.
+
+    Other parameters
+    ----------------
+    relative_luminance : float
+        Luminance of the Gabor patch relative to background luminance.
+        0. is dark, 1.0 is double the background luminance.
+
+    orientations : list(float)
+        List of orientations of the Gabor function to present.
+
+    phases : list(float)
+        List of phases of the Gabor function to present.
+
+    spatial_frequencies : list(float)
+        List of spatial frequencies of the Gabor function to present.
+
+    diameter : float
+        Maximal diameter of the Gabor patch.
+        The standard deviation of the gabor patch is set to be diameter/6
+        (so that radius is 3 standard deviations).
+
+    x : float
+        The x coordinate of the Gabor patch.
+
+    y : float
+        The y coordinate of the Gabor patch.
+
+    flash_duration : float
+        How long we present each Gabor, in milliseconds.
+
+    duration : float
+        How long each stimulus lasts. After flash_duration only blank frame is
+        shown.
+
+    num_trials : int
+        How many times we show all possible combinations.
+    """
+
+
+    required_parameters = ParameterSet({
+            'relative_luminance' : float,
+            'orientations' : list,
+            'phases' : list,
+            'spatial_frequencies' : list,
+            'diameter' : float,
+            'flash_duration' : float, 
+            'x' : float,
+            'y' : float,
+            'num_trials' : int,
+            'duration' : float,
+    })
+
+
+    def __init__(self, model, parameters):
+        VisualExperiment.__init__(self, model, parameters)
+        common_params = {
+            'size_x' : model.visual_field.size_x,
+            'size_y' : model.visual_field.size_y,
+            'location_x' : 0.0,
+            'location_y' : 0.0,
+            'background_luminance' : self.background_luminance,
+            'density' : self.density,
+            'frame_duration' : self.frame_duration,
+            'flash_duration' : self.parameters.flash_duration,
+            'duration' : self.parameters.duration,
+            'x' : self.parameters.x,
+            'y' : self.parameters.y,
+            'size' : self.parameters.diameter,
+            'relative_luminance' : self.parameters.relative_luminance,
+        }
+
+        # Try all possible combinations of orientation, phase and spatial frequency 
+        for trial in range(self.parameters.num_trials):
+            for orientation in self.parameters.orientations:
+                for phase in self.parameters.phases:
+                    for spatial_frequency in self.parameters.spatial_frequencies:
+                        self.stimuli.append(
+                            topo.SimpleGaborPatch(
+                                orientation = orientation,
+                                phase = phase,
+                                spatial_frequency = spatial_frequency,
+                                trial=trial,
+                                **common_params))
+
+    def do_analysis(self, data_store):
+        pass
