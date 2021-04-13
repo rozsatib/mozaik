@@ -2319,6 +2319,9 @@ class FindIdealGabor(VisualExperiment):
 
     num_trials : int
         How many times we show all possible combinations.
+
+    neuron_id : int
+        ID number of the neuron we are measuring, for later identification.
     """
 
 
@@ -2333,6 +2336,7 @@ class FindIdealGabor(VisualExperiment):
             'y' : float,
             'num_trials' : int,
             'duration' : float,
+            'neuron_id' : int,
     })
 
 
