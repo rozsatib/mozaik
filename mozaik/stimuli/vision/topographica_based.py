@@ -823,69 +823,7 @@ class VonDerHeydtIllusoryBar(TopographicaBasedVisualStimulus):
                 yield (b,[0])
 
 
-class GaborStimulus(TopographicaBasedVisualStimulus):
-    """
-    Parent class for Gabor stimuli.
-    """
-
-    def get_gabor(
-        self,
-        x=None,
-        y=None,
-        orientation=None,
-        phase=None,
-        spatial_frequency=None,
-        sigma=None,
-        n_sigmas=3,
-        background_luminance=None,
-        relative_luminance=None,
-        density=None,
-        size_x=None
-    ):
-        """
-        Returns a frame with a Gabor function with the specified parameters.
-        If some parameters are not supplied, tries to get them from the calling class.
-        """
-        # Set function arguments from self if possible
-        loc = locals()
-        params = loc
-        for var_name in loc:
-            if var_name is "self":
-                continue
-            if loc[var_name] is None and hasattr(self,var_name):
-                params[var_name] = getattr(self,var_name)
-
-        gabor = imagen.Gabor(
-            aspect_ratio=1,  # Ratio of pattern width to height.
-                             # Set since the patch has to be round
-            mask_shape=imagen.Disk(smoothing=0, size=params["n_sigmas"]),
-            # Gabor patch should fit inside tide/circle
-            # the size is rescalled according to the size
-            # of Gabor patch
-            frequency=params["spatial_frequency"],
-            phase=params["phase"],  # Initial phase of the sinusoid
-            bounds=BoundingBox(radius=params["size_x"] / 2.0),
-            # BoundingBox of the area in which the pattern is
-            # generated, radius=1: box with side length 2!
-            size=params["sigma"] * 2.0,  # size = 2*standard_deviation
-            # => on the radius r=size, the intensity is ~0.14
-            orientation=params["orientation"],  # In radians
-            x=params["x"],  # x-coordinate of Gabor patch center
-            y=params["y"],  # y-coordinate of Gabor patch center
-            xdensity=params["density"],  # Number of points in one unit
-                                         # of length in x direction
-            ydensity=params["density"],  # Number of points in one unit
-                                         # of length in y direction
-            scale=2.0 * params["background_luminance"] * params["relative_luminance"]
-            # Difference between maximal and minimal value
-            # => min value = -scale/2, max value = scale/2
-        )()
-        gabor = gabor + params["background_luminance"]
-        return gabor
-
-    
-
-class SimpleGaborPatch(GaborStimulus):
+class SimpleGaborPatch(TopographicaBasedVisualStimulus):
     """A flash of a Gabor patch
 
     This stimulus corresponds to flashing a Gabor patch of a specific
@@ -898,23 +836,113 @@ class SimpleGaborPatch(GaborStimulus):
     orientation = SNumber(rad, period=pi, bounds=[0,pi], doc="Gabor patch orientation")
     phase = SNumber(rad, period=2*pi, bounds=[0,2*pi], doc="Gabor patch phase")
     spatial_frequency = SNumber(cpd, doc="Spatial frequency of the grating")
-    sigma = SNumber(degrees, doc="Size of the Gabor patch")
+    size = SNumber(degrees, doc="Size of the Gabor patch")
     flash_duration = SNumber(ms, doc="The duration of the bar presentation.")
     relative_luminance = SNumber(dimensionless,bounds=[0,1.0],doc="The scale of the stimulus. 0 is dark, 1.0 is double the background luminance")
     x = SNumber(degrees, doc="The x location of the center of the Gabor patch.")
     y = SNumber(degrees, doc="The y location of the center of the Gabor patch.")
+    grid = SNumber(dimensionless, doc = "Boolean string to decide whether there is grid or not")
+    n_sigmas = SNumber(dimensionless, default = 3., doc="Number of standard deviations to sample the Gabor function for.")
+
 
     def frames(self):
-        for i in xrange(int(self.flash_duration / self.frame_duration)):
-            yield (self.get_gabor(),[1])
-        blank = imagen.Constant(
-            scale=self.background_luminance,
-            bounds=BoundingBox(radius=self.size_x / 2),
-            xdensity=self.density,
-            ydensity=self.density,
-        )()
+        num_frames = 0
+        if self.grid:
+            grid_pattern = hex_grid()
         while True:
-            yield (blank, [0])
+            gabor = imagen.Gabor(
+                        aspect_ratio = 1, # Ratio of pattern width to height.
+                                          # Set since the patch has to be round
+                        mask_shape=imagen.Disk(smoothing=0, size=self.n_sigmas),
+                            # Gabor patch should fit inside tide/circle
+                            # the size is rescalled according to the size
+                            # of Gabor patch
+                        frequency = self.spatial_frequency,
+                        phase = self.phase, # Initial phase of the sinusoid
+                        bounds = BoundingBox(radius=self.size_x/2.), 
+                            # BoundingBox of the
+                            # area in which the pattern is generated,
+                            # radius=1: box with side length 2!
+                        size = self.size/self.n_sigmas, # size = 2*standard_deviation
+                            # => on the radius r=size, the intensity is ~0.14
+                        orientation=self.orientation, # In radians
+                        x = self.x,  # x-coordinate of Gabor patch center
+                        y = self.y,  # y-coordinate of Gabor patch center
+                        xdensity=self.density, # Number of points in one unit of length in x direction
+                        ydensity=self.density, # Number of points in one unit of length in y direction
+                        scale=2*self.background_luminance*self.relative_luminance, 
+                                # Difference between maximal and minimal value 
+                                # => min value = -scale/2, max value = scale/2
+                                )()
+            gabor = gabor+self.background_luminance # rescalling
+            blank = imagen.Constant(scale=self.background_luminance,
+                                    bounds=BoundingBox(radius=self.size_x/2),
+                                    xdensity=self.density,
+                                    ydensity=self.density)()
+            if self.grid:
+                gabor = gabor*grid_pattern
+                blank = blank*grid_pattern
+            num_frames += 1
+            if (num_frames-1) * self.frame_duration < self.flash_duration: 
+                yield (gabor, [1])
+            else:
+                yield (blank, [0])
+
+    def hex_grid(self):
+        """Creates an 2D array representing hexagonal grid based on given parameters
+
+        Algorithm:
+            First, it creates a tide containing two lines looking like: ___/
+                the height of the tide is size/2
+                the width of the tide is sqrt(3)/2*size
+                NOTE: one of the parameters is not an integer -> therefore rounding
+                    is present and for big grids it can be off by several pixels
+                    the oddness can be derived from the ratio of width and height
+                    the more close to sqrt(3) the better
+
+            Second, it replicates the the tide to create hexagonal tiding of the 
+            following form              ___ 
+                                    ___/   \
+                                       \___/
+            Third, it replicates the hexagonal tide and rotates it
+
+            Fourth, it computes shifts based on parameters size, size_x, size_y
+                    and cuts out the relevant part of the array
+
+        Returns:
+            array with values 1 or 0, 0 representing the hexagonal grid
+        """
+        # imagen is used to create the slant line /
+        ln = imagen.Line(bounds = BoundingBox(radius=self.size/4.), 
+                    orientation = pi/3, smoothing=0,
+                    xdensity = self.density, ydensity = self.density,  
+                    thickness=1./self.density)()
+        # cutting the relevant part of the created line
+        idx = ln.argmax(axis=0).argmax()
+        line = ln[:,idx:-idx]
+        # Creating the horizontal line _
+        hline = numpy.zeros((line.shape[0], line.shape[1]*2))
+        hline[-1,:] = 1
+        # Creating hexagonal tide
+        tide = numpy.hstack((hline,line))  # joins horizontal line and slant line
+        tide = numpy.hstack((tide, tide[::-1,:]))  # mirrors the tide in horizontal direction
+        tide = numpy.vstack((tide, tide[::-1,:]))  # mirrors the tide in vertical direction
+        d, k = tide.shape
+        k = k/3
+        # Creating hex
+        x_reps = int(self.size_x/self.size) + 2
+        y_reps = int(self.size_y/self.size) + 2
+        # pixel sizes
+        x_size = int(self.size_x*self.density)
+        y_size = int(self.size_y*self.density)
+        grid = numpy.hstack((numpy.vstack((tide,)*y_reps),)*x_reps)
+        # starting indices in each dimension
+        i = int((0.5+int(self.size_y/self.size)*1.5)*k)-int(self.density*self.size_y/2)
+        j = d - int(self.size_x%self.size*self.density/2.)
+        grid = grid[j:j+x_size,i:i+y_size]
+        center = grid.shape[0]/2
+        return 1-grid.T
+
 
 class TwoStrokeGaborPatch(TopographicaBasedVisualStimulus):
     """A flash of two consecutive Gabor patches next to each other
@@ -941,6 +969,7 @@ class TwoStrokeGaborPatch(TopographicaBasedVisualStimulus):
     x_direction = SNumber(degrees, doc="The x direction for the second stroke.")
     y_direction = SNumber(degrees, doc="The y direction for the second stroke.")
     grid = SNumber(dimensionless, doc = "Boolean string to decide whether there is grid or not")
+    n_sigmas = SNumber(dimensionless, default = 3., doc="Number of standard deviations to sample the Gabor function for.")
 
 
     def frames(self):
@@ -953,7 +982,7 @@ class TwoStrokeGaborPatch(TopographicaBasedVisualStimulus):
             gabor = imagen.Gabor(
                         aspect_ratio = 1, # Ratio of pattern width to height.
                                           # Set since the patch has to be round
-                        mask_shape=imagen.Disk(smoothing=0, size=3*self.size),
+                        mask_shape=imagen.Disk(smoothing=0, size=self.n_sigmas),
                             # Gabor patch should fit inside tide/circle
                             # the size is rescalled according to the size
                             # of Gabor patch
@@ -962,7 +991,7 @@ class TwoStrokeGaborPatch(TopographicaBasedVisualStimulus):
                         bounds = BoundingBox(radius=self.size_x/2), 
                             # BoundingBox of the area in which the pattern is
                             # generated, radius=1: box with side length 2!
-                        size = self.size/3, # size = 2*standard_deviation
+                        size = self.size/self.n_sigmas, # size = 2*standard_deviation
                             # => on the radius r=size, the intensity is ~0.14
                         orientation=self.orientation, # In radians
                         x = self.x,  # x-coordinate of Gabor patch center
@@ -1053,6 +1082,67 @@ class TwoStrokeGaborPatch(TopographicaBasedVisualStimulus):
         grid = grid[j:j+x_size,i:i+y_size]
         center = grid.shape[0]/2
         return 1-grid.T
+
+
+class GaborStimulus(TopographicaBasedVisualStimulus):
+    """
+    Parent class for Gabor stimuli.
+    """
+
+    def get_gabor(
+        self,
+        x=None,
+        y=None,
+        orientation=None,
+        phase=None,
+        spatial_frequency=None,
+        sigma=None,
+        n_sigmas=3,
+        background_luminance=None,
+        relative_luminance=None,
+        density=None,
+        size_x=None
+    ):
+        """
+        Returns a frame with a Gabor function with the specified parameters.
+        If some parameters are not supplied, tries to get them from the calling class.
+        """
+        # Set function arguments from self if possible
+        loc = locals()
+        params = loc
+        for var_name in loc:
+            if var_name is "self":
+                continue
+            if loc[var_name] is None and hasattr(self,var_name):
+                params[var_name] = getattr(self,var_name)
+
+        gabor = imagen.Gabor(
+            aspect_ratio=1,  # Ratio of pattern width to height.
+                             # Set since the patch has to be round
+            mask_shape=imagen.Disk(smoothing=0, size=params["n_sigmas"]),
+            # Gabor patch should fit inside tide/circle
+            # the size is rescalled according to the size
+            # of Gabor patch
+            frequency=params["spatial_frequency"],
+            phase=params["phase"],  # Initial phase of the sinusoid
+            bounds=BoundingBox(radius=params["size_x"] / 2.0),
+            # BoundingBox of the area in which the pattern is
+            # generated, radius=1: box with side length 2!
+            size=params["sigma"] * 2.0,  # size = 2*standard_deviation
+            # => on the radius r=size, the intensity is ~0.14
+            orientation=params["orientation"],  # In radians
+            x=params["x"],  # x-coordinate of Gabor patch center
+            y=params["y"],  # y-coordinate of Gabor patch center
+            xdensity=params["density"],  # Number of points in one unit
+                                         # of length in x direction
+            ydensity=params["density"],  # Number of points in one unit
+                                         # of length in y direction
+            scale=2.0 * params["background_luminance"] * params["relative_luminance"]
+            # Difference between maximal and minimal value
+            # => min value = -scale/2, max value = scale/2
+        )()
+        gabor = gabor + params["background_luminance"]
+        return gabor
 
 
 class ContinuousGaborMovementAndJump(GaborStimulus):

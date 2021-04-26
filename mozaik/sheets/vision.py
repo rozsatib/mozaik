@@ -169,6 +169,8 @@ class VisualCorticalUniformSheet(SheetWithMagnificationFactor):
     def __init__(self, model, parameters):
         SheetWithMagnificationFactor.__init__(self, model, parameters)
         dx, dy = self.cs_2_vf(parameters.sx, parameters.sy)
+        
+        from pyNN.random import NumpyRNG
         rs = space.RandomStructure(boundary=space.Cuboid(dx, dy, 0),
                                    origin=(0.0, 0.0, 0.0),
                                    rng=mozaik.pynn_rng)
@@ -179,7 +181,6 @@ class VisualCorticalUniformSheet(SheetWithMagnificationFactor):
                                        structure=rs,
                                        initial_values=self.parameters.cell.initial_values,
                                        label=self.name)
-
 
 class VisualCorticalUniformSheet3D(VisualCorticalUniformSheet):
     """
