@@ -1289,7 +1289,8 @@ class RadialGaborApparentMotion(GaborStimulus):
         x_pos = self.x + gabor_diameter * np.outer(radii, np.cos(angles))
         y_pos = self.y + gabor_diameter * np.outer(radii, np.sin(angles))
         n_radii, n_angles = x_pos.shape
-        angles_mat = np.vstack([angles] * n_radii)
+        if self.n_circles > 0:
+            angles_mat = np.vstack([angles] * n_radii)
 
         # Set overlapping Gabor locations to NaN, except the ones we allow,
         # which are the ones with same or perpendicular orientation as the center
