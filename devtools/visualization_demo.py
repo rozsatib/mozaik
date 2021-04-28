@@ -133,22 +133,71 @@ def MapTwoStrokeGabor_default_parameters():
 
 def CompareSlowVersusFastGaborMotion_default_parameters():
     d = {
-            "num_trials": 2,
-            "x": 1,
-            "y": 1,
-            "orientation": 0,
-            "phase": 1,
-            "spatial_frequency": 2,
-            "sigma": 0.17,
-            "n_sigmas": 3.0,
-            "center_relative_luminance": 0.5,
-            "surround_relative_luminance": 0.7,
-            "movement_speeds": [5.0, 180.0],
-            #"angles": list(np.linspace(0, 2 * np.pi, 12, endpoint=False)),
-            "angles": [0],
-            "moving_gabor_orientation_radial": True,
-            "radius": 5,
-        }
+        "num_trials": 2,
+        "x": 1,
+        "y": 1,
+        "orientation": 0,
+        "phase": 1,
+        "spatial_frequency": 2,
+        "sigma": 0.17,
+        "n_sigmas": 3.0,
+        "center_relative_luminance": 0.5,
+        "surround_relative_luminance": 0.7,
+        "movement_speeds": [5.0, 180.0],
+        # "angles": list(np.linspace(0, 2 * np.pi, 12, endpoint=False)),
+        "angles": [0],
+        "moving_gabor_orientation_radial": True,
+        "radius": 5,
+    }
+    return d
+
+
+def MeasureGaborFlashDuration_default_parameters():
+    d = {
+        "num_trials": 10,
+        "x": 1,
+        "y": 1,
+        "orientation": 0,
+        "phase": 1,
+        "spatial_frequency": 0.8,
+        "sigma": 3.0 / 6.0,
+        "n_sigmas": 3.0,
+        "relative_luminance": 1.0,
+        "min_duration": 14,
+        "max_duration": 41,
+        "step": 1,
+        "blank_duration": 100,
+    }
+    return d
+
+
+def RunApparentMotionConfigurations_default_parameters():
+    d = {
+        "num_trials": 1,
+        "x": 0,
+        "y": 0,
+        "orientation": 0,
+        "phase": 0,
+        "spatial_frequency": 0.8,
+        "sigma": 0.5,
+        "n_sigmas": 3.0,
+        "center_relative_luminance": 0.5,
+        "surround_relative_luminance": 1.0,
+        "configurations": [
+            "SECTOR_ISO",
+            "SECTOR_CROSS",
+            "SECTOR_CF",
+            "SECTOR_RND",
+            "FULL_ISO",
+            "FULL_CROSS",
+            "FULL_RND",
+            "CENTER_ONLY",
+        ],
+        "random_order": False,
+        "n_circles": 3,
+        "flash_center" : True,
+        "flash_duration" : 28
+    }
     return d
 
 
@@ -221,6 +270,31 @@ def demo_experiment_2():
     experiment = am.CompareSlowVersusFastGaborMotion(model=model, parameters=parameters)
     viz.show_experiment(experiment, merge_stimuli=False)
 
+
+def demo_experiment_3():
+    model_params = visual_stim_default_parameters()
+    model_params["frame_duration"] = 7
+    model = dm.DummyModel(**model_params)
+    params = MeasureGaborFlashDuration_default_parameters()
+    params["orientation"] = np.pi / 4
+    params["x"] = 1
+    params["y"] = 1
+    parameters = ParameterSet(params)
+    experiment = am.MeasureGaborFlashDuration(model=model, parameters=parameters)
+    viz.show_experiment(experiment, merge_stimuli=True)
+
+
+def demo_experiment_4():
+    model_params = visual_stim_default_parameters()
+    model_params["frame_duration"] = 7
+    model = dm.DummyModel(**model_params)
+    params = RunApparentMotionConfigurations_default_parameters()
+    params["orientation"] = np.pi / 4
+    params["x"] = 0
+    params["y"] = 0
+    parameters = ParameterSet(params)
+    experiment = am.RunApparentMotionConfigurations(model=model, parameters=parameters)
+    viz.show_experiment(experiment, merge_stimuli=False, frame_delay=100)
 
 def main():
     demo_experiment_2()
