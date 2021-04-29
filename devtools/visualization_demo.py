@@ -43,8 +43,8 @@ def visual_stim_default_parameters():
             "density": 10.0,
             "location_x": 0.0,
             "location_y": 0.0,
-            "size_x": 11.0,
-            "size_y": 11.0,
+            "size_x": 21.0,
+            "size_y": 21.0,
         }
     )
     return d
@@ -134,20 +134,19 @@ def MapTwoStrokeGabor_default_parameters():
 def CompareSlowVersusFastGaborMotion_default_parameters():
     d = {
         "num_trials": 2,
-        "x": 1,
-        "y": 1,
+        "x": 0,
+        "y": 0,
         "orientation": 0,
         "phase": 1,
         "spatial_frequency": 2,
-        "sigma": 0.17,
+        "sigma": 0.5,
         "n_sigmas": 3.0,
         "center_relative_luminance": 0.5,
         "surround_relative_luminance": 0.7,
         "movement_speeds": [5.0, 180.0],
-        # "angles": list(np.linspace(0, 2 * np.pi, 12, endpoint=False)),
-        "angles": [0],
+        "angles": list(np.linspace(0, 2 * np.pi, 12, endpoint=False)),
         "moving_gabor_orientation_radial": True,
-        "radius": 5,
+        "n_circles": 3,
     }
     return d
 
@@ -193,7 +192,7 @@ def RunApparentMotionConfigurations_default_parameters():
             "FULL_RND",
             "CENTER_ONLY",
         ],
-        "random_order": False,
+        "random_order": True,
         "n_circles": 3,
         "flash_center" : True,
         "flash_duration" : 28
@@ -263,7 +262,7 @@ def demo_experiment_1():
 
 def demo_experiment_2():
     model_params = visual_stim_default_parameters()
-    model_params["frame_duration"] = 2
+    model_params["frame_duration"] = 7
     model = dm.DummyModel(**model_params)
     params = CompareSlowVersusFastGaborMotion_default_parameters()
     parameters = ParameterSet(params)

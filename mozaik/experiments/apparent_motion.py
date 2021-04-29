@@ -667,6 +667,7 @@ class CompareSlowVersusFastGaborMotion(VisualExperiment):
             "phase": self.parameters.phase,
             "spatial_frequency": self.parameters.spatial_frequency,
             "sigma": self.parameters.sigma,
+            "n_sigmas": self.parameters.n_sigmas,
             "center_relative_luminance": self.parameters.center_relative_luminance,
         }
 
@@ -678,11 +679,20 @@ class CompareSlowVersusFastGaborMotion(VisualExperiment):
             "moving_relative_luminance": self.parameters.surround_relative_luminance,
             "moving_gabor_orientation_radial": self.parameters.moving_gabor_orientation_radial,
         }
+        center_specific_params = {
+            "size" : 2*common_params["sigma"]*common_params["n_sigmas"],
+            "relative_luminance" : common_params["center_relative_luminance"],
+        }
 
         am_params = common_params.copy()
         am_params.update(am_specific_params)
         cont_mov_params = common_params.copy()
         cont_mov_params.update(cont_mov_specific_params)
+        center_params = common_params.copy()
+        center_params.update(center_specific_params)
+        del center_params["sigma"]
+        del center_params["center_relative_luminance"]
+
         for trial in xrange(0, self.parameters.num_trials):
             for speed in self.parameters.movement_speeds:
                 gabor_diameter = 2.0 * self.parameters.sigma * self.parameters.n_sigmas
@@ -708,13 +718,13 @@ class CompareSlowVersusFastGaborMotion(VisualExperiment):
                         trial=trial,
                         **am_params
                     )
+
                     # Center-only stimulation
                     co_stim = topo.SimpleGaborPatch(
                         duration=stim_duration,
-                        flash_duration=stim_duration,
-                        relative_luminance=self.parameters.center_relative_luminance,
+                        flash_duration=flash_duration,
                         trial=trial,
-                        **common_params
+                        **center_params
                     )
 
                     # Continuous Motion
@@ -732,11 +742,11 @@ class CompareSlowVersusFastGaborMotion(VisualExperiment):
                     # Center-only stimulation
                     co_stim_0 = topo.SimpleGaborPatch(
                         duration=stim_duration,
-                        flash_duration=stim_duration,
-                        relative_luminance=self.parameters.center_relative_luminance,
+                        flash_duration=flash_duration,
                         trial=trial,
-                        **common_params
+                        **center_params
                     )
+
                     self.stimuli.append(am_stim)
                     self.stimuli.append(co_stim)
                     self.stimuli.append(cont_mov_stim)
@@ -927,7 +937,7 @@ class RunApparentMotionConfigurations(VisualExperiment):
             "symmetric": True,
             "flash_center": self.parameters.flash_center,
             "duration": self.parameters.flash_duration
-            * (self.parameters.n_circles + 1),
+            * (self.parameters.n_circles + 1 + 1), # Center & 1 flash_duration blank
         }
 
         valid_configs = [
@@ -958,9 +968,8 @@ class RunApparentMotionConfigurations(VisualExperiment):
                     c1_params = {
                         "start_angle": 0,
                         "end_angle": 0,
-                        "n_gabors": 1,
+                        "n_gabors": 0,
                         "n_circles": 0,
-                        "duration": params["flash_duration"],
                     }
                 elif c1 == "SECTOR":
                     c1_params = {

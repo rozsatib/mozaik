@@ -1249,6 +1249,10 @@ class RadialGaborApparentMotion(GaborStimulus):
         """
         Sets positions of overlapping Gabors to NaN, except ones
         """
+        # If start_angle == end_angle, it will overlap, but we don't want to delete it
+        if x_pos.shape[1] == 1:
+            return x_pos, y_pos
+
         # Test overlap of patches on same eccentricity
         for i in range(x_pos.shape[0]):
             for j in range(x_pos.shape[1]):
@@ -1272,6 +1276,7 @@ class RadialGaborApparentMotion(GaborStimulus):
                     np.isclose(angles[j] % np.pi, allowed_orientation_axes)
                 )
                 if (overlap_0 or overlap_1) and not allowed_orientation:
+                    print("Removing (%.2f,%.2f)" % (x_pos[i,j],y_pos[i,j]))
                     x_pos[i, j] = np.nan
                     y_pos[i, j] = np.nan
         return x_pos, y_pos
