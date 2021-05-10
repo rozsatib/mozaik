@@ -12,7 +12,7 @@ from mozaik.tools.distribution_parametrization import PyNNDistribution
 from collections import OrderedDict
 
 
-
+from builtins import zip
 
 logger = mozaik.getMozaikLogger()
 
@@ -111,7 +111,7 @@ class ModularConnector(Connector):
         connection_list = []
         z = numpy.zeros((self.target.pop.size,))
         for i in numpy.nonzero(self.target.pop._mask_local)[0]: 
-            connection_list.extend(zip(numpy.arange(0,self.source.pop.size,1),z+i,self.weight_scaler*self._obtain_weights(i).flatten(),self._obtain_delays(i).flatten()))
+            connection_list.extend(list(zip(numpy.arange(0,self.source.pop.size,1),z+i,self.weight_scaler*self._obtain_weights(i).flatten(),self._obtain_delays(i).flatten())))
         
         self.method = self.sim.FromListConnector(connection_list)
         self.proj = self.sim.Projection(
@@ -147,9 +147,9 @@ class ModularSamplingProbabilisticConnector(ModularConnector):
             delays = self._obtain_delays(i)
                 
             co = Counter(sample_from_bin_distribution(weights, int(self.parameters.num_samples.next())))
-            v = v + numpy.sum(co.values())
-            k = co.keys()
-            a = numpy.array([k,numpy.zeros(len(k))+i,self.weight_scaler*numpy.multiply(self.parameters.base_weight.next(len(k)),co.values()),numpy.array(delays)[k]])
+            v = v + numpy.sum(list(co.values()))
+            k = list(co.keys())
+            a = numpy.array([k,numpy.zeros(len(k))+i,self.weight_scaler*numpy.multiply(self.parameters.base_weight.next(len(k)),list(co.values())),numpy.array(delays)[k]])
             cl.append(a)
 
         cl = numpy.hstack(cl).T
@@ -257,9 +257,9 @@ class ModularSamplingProbabilisticConnectorAnnotationSamplesCount(ModularConnect
             else:
                 assert self.parameters.num_samples > 2*int(samples), ("%s: %d %d" % (self.name,self.parameters.num_samples,2*int(samples)))
                 co = Counter(sample_from_bin_distribution(weights, int(self.parameters.num_samples - 2*int(samples))))
-            v = v + numpy.sum(co.values())
-            k = co.keys()
-            a = numpy.array([k,numpy.zeros(len(k))+i,self.weight_scaler*numpy.multiply(self.parameters.base_weight.next(len(k)),co.values()),numpy.array(delays)[k]])
+            v = v + numpy.sum(list(co.values()))
+            k = list(co.keys())
+            a = numpy.array([k,numpy.zeros(len(k))+i,self.weight_scaler*numpy.multiply(self.parameters.base_weight.next(len(k)),list(co.values())),numpy.array(delays)[k]])
             cl.append(a)
 
         cl = numpy.hstack(cl).T
