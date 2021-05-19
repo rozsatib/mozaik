@@ -128,13 +128,13 @@ class MapSimpleGabor(VisualExperiment):
             assert (
                 model.visual_field.size_x == model.visual_field.size_y
             ), "Different sizes not yet implemented"
-        for trial in xrange(0, self.parameters.num_trials):
-            for rot in xrange(0, self.parameters.rotations):
-                for row in xrange(
+        for trial in range(0, self.parameters.num_trials):
+            for rot in range(0, self.parameters.rotations):
+                for row in range(
                     self.parameters.circles - 1, -self.parameters.circles, -1
                 ):
                     colmax = 2 * self.parameters.circles - 2 - abs(row)
-                    for column in xrange(-colmax, colmax + 1, 2):
+                    for column in range(-colmax, colmax + 1, 2):
                         # central coordinates of presented Gabor patch
                         # relative to the central tide
                         x = column * 0.5 * self.parameters.size
@@ -346,13 +346,13 @@ class MapTwoStrokeGabor(VisualExperiment):
                 model.visual_field.size_x == model.visual_field.size_y
             ), "Different sizes not yet implemented"
 
-        for trial in xrange(0, self.parameters.num_trials):
-            for rot in xrange(0, self.parameters.rotations):
-                for row in xrange(
+        for trial in range(0, self.parameters.num_trials):
+            for rot in range(0, self.parameters.rotations):
+                for row in range(
                     self.parameters.circles - 1, -self.parameters.circles, -1
                 ):
                     colmax = 2 * self.parameters.circles - 2 - abs(row)
-                    for column in xrange(-colmax, colmax + 1, 2):
+                    for column in range(-colmax, colmax + 1, 2):
                         for direction in (-1, 1):
                             # central coordinates of presented Gabor patch
                             # relative to the central tide
@@ -405,7 +405,7 @@ class MapTwoStrokeGabor(VisualExperiment):
                             # experiments, from and into the outer circle
                             # In case of outer_circle == False generates only
                             # one experiment
-                            for inverse in xrange(1 + outer_circle):
+                            for inverse in range(1 + outer_circle):
                                 self.stimuli.append(
                                     topo.TwoStrokeGaborPatch(
                                         frame_duration=self.frame_duration,
@@ -547,7 +547,7 @@ class MeasureGaborFlashDuration(VisualExperiment):
             "relative_luminance": self.parameters.relative_luminance,
             "grid": False,
         }
-        for trial in xrange(0, self.parameters.num_trials):
+        for trial in range(0, self.parameters.num_trials):
             trial_stims = [
                 topo.SimpleGaborPatch(
                     flash_duration=flash_duration,
@@ -693,7 +693,7 @@ class CompareSlowVersusFastGaborMotion(VisualExperiment):
         del center_params["sigma"]
         del center_params["center_relative_luminance"]
 
-        for trial in xrange(0, self.parameters.num_trials):
+        for trial in range(0, self.parameters.num_trials):
             for speed in self.parameters.movement_speeds:
                 gabor_diameter = 2.0 * self.parameters.sigma * self.parameters.n_sigmas
                 flash_duration = gabor_diameter / speed * 1000
@@ -950,7 +950,7 @@ class RunApparentMotionConfigurations(VisualExperiment):
             "FULL_RND",
             "CENTER_ONLY",
         ]
-        for trial in xrange(0, self.parameters.num_trials):
+        for trial in range(0, self.parameters.num_trials):
             trial_stims = []
             for configuration in self.parameters.configurations:
                 assert (

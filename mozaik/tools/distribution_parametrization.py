@@ -108,7 +108,7 @@ class MozaikExtendedParameterSet(ParameterSet):
                    pstr=f.read()
                    f.close()
                 else:
-                   pstr = request.urlopen(initialiser).text
+                   pstr = urllib.request.urlopen(initialiser).text
                 self._url = initialiser
             except IOError:
                 pstr = initialiser

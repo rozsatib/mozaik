@@ -235,7 +235,7 @@ class MeasureSparseWithCurrentInjection(VisualExperiment):
 
         self.direct_stimulation = []
 
-        for k in xrange(0, self.parameters.num_trials):
+        for k in range(0, self.parameters.num_trials):
             d  = OrderedDict()
             p = MozaikExtendedParameterSet({
                                 'population_selector' : self.parameters.stimulation_configuration,
@@ -249,7 +249,7 @@ class MeasureSparseWithCurrentInjection(VisualExperiment):
         p['sheet'] = self.parameters.stimulation_sheet
 
     
-        for k in xrange(0, self.parameters.num_trials):
+        for k in range(0, self.parameters.num_trials):
             self.stimuli.append(topo.SparseNoise(
                 frame_duration = self.frame_duration,
                             time_per_image = self.parameters.time_per_image,
@@ -1591,8 +1591,8 @@ class MeasureTextureSensitivityFullfield(VisualExperiment):
         VisualExperiment.__init__(self, model,parameters)
         for image in self.parameters.images:
             for ty, t in enumerate(self.parameters.types):
-             for i in xrange(0, self.parameters.num_images):                
-                 for k in xrange(0, self.parameters.num_trials):
+             for i in range(0, self.parameters.num_images):                
+                 for k in range(0, self.parameters.num_trials):
                     im = textu.PSTextureStimulus(
                             frame_duration = self.frame_duration,
                             duration=self.parameters.image_duration,
