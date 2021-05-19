@@ -4,6 +4,7 @@ import mozaik.stimuli.vision.topographica_based as topo
 import numpy
 import numpy as np
 import random
+import mozaik
 
 
 class MapSimpleGabor(VisualExperiment):
@@ -653,6 +654,7 @@ class CompareSlowVersusFastGaborMotion(VisualExperiment):
 
     def __init__(self, model, parameters):
         VisualExperiment.__init__(self, model, parameters)
+        logger = mozaik.getMozaikLogger()
         common_params = {
             "size_x": model.visual_field.size_x,
             "size_y": model.visual_field.size_y,
@@ -697,6 +699,9 @@ class CompareSlowVersusFastGaborMotion(VisualExperiment):
             for speed in self.parameters.movement_speeds:
                 gabor_diameter = 2.0 * self.parameters.sigma * self.parameters.n_sigmas
                 flash_duration = gabor_diameter / speed * 1000
+                flash_duration_new = np.round(flash_duration / self.frame_duration) * self.frame_duration
+                if trial == 0:
+                    logger.info("CompareSlowVersusFastGaborMotion: Calculated flash duration %.2f ms, must be integer multiple of the frame duration %.2f ms, modifiying it to %.2f" % (flash_duration, self.frame_duration, flash_duration_new))
                 assert (
                     flash_duration >= self.frame_duration
                 ), "Gabor flash duration must be at least as long as the frame duration"
