@@ -1176,6 +1176,7 @@ class ContinuousGaborMovementAndJump(GaborStimulus):
     movement_angle = SNumber(rad, period=2*pi, bounds=[0,2*pi], doc="Incidence angle of the moving patch to the center patch.")
     moving_gabor_orientation_radial = SNumber(dimensionless, doc = "Boolean string, radial or cross patch")
     center_flash_duration = SNumber(ms, doc="Duration of flashing the Gabor patch in the center.")
+    neuron_id = SNumber(dimensionless, default=0, doc="ID of measured neuron. Required to pair recordings to stimuli.")
 
     def frames(self):
         assert self.movement_duration >= 2*self.frame_duration, "Movement must be at least 2 frames long"
@@ -1241,6 +1242,7 @@ class RadialGaborApparentMotion(GaborStimulus):
     random = SNumber(dimensionless, default=False, doc = "Boolean string - if True, random shuffle the locations and flash times of Gabor patches.")
     flash_center = SNumber(dimensionless, doc = "Boolean string, flash in center or not")
     centrifugal = SNumber(dimensionless, default=False, doc = "Boolean string - if True, patches move out from the center, rather than towards it.")
+    neuron_id = SNumber(dimensionless, default=0, doc="ID of measured neuron. Required to pair recordings to stimuli.")
 
     def is_overlapping(self,x0, y0, x1, y1, diameter):
         return (x0-x1)**2 + (y0-y1)**2 < diameter**2

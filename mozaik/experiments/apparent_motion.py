@@ -629,6 +629,9 @@ class CompareSlowVersusFastGaborMotion(VisualExperiment):
         Number of eccentricities at which Gabor patches are flashed. The movement range
         of the continuously moving Gabor is set to cover an equivalent distance.
 
+    neuron_id : int
+        ID of measured neuron. Required to pair recordings to stimuli.
+
     num_trials : int
         Number of trials of showing the stimuli.
     """
@@ -648,6 +651,7 @@ class CompareSlowVersusFastGaborMotion(VisualExperiment):
             "angles": list,
             "moving_gabor_orientation_radial": bool,
             "n_circles": int,
+            "neuron_id": int,
             "num_trials": int,
         }
     )
@@ -671,6 +675,7 @@ class CompareSlowVersusFastGaborMotion(VisualExperiment):
             "sigma": self.parameters.sigma,
             "n_sigmas": self.parameters.n_sigmas,
             "center_relative_luminance": self.parameters.center_relative_luminance,
+            "neuron_id": self.parameters.neuron_id,
         }
 
         am_specific_params = {
@@ -822,6 +827,9 @@ class RunApparentMotionConfigurations(VisualExperiment):
     flash_center : bool
         Flash in Gabor patch in the center or not.
 
+    neuron_id : int
+        ID of measured neuron. Required to pair recordings to stimuli.
+
     num_trials : int
         Number of trials of showing the stimuli.
 
@@ -849,7 +857,7 @@ class RunApparentMotionConfigurations(VisualExperiment):
 
                    .              .  \ | /
                    .     \|/      .
-                   .              .
+         |         .              .
                    .     /|\      .
                    .              .  / | \
 
@@ -913,6 +921,7 @@ class RunApparentMotionConfigurations(VisualExperiment):
             "n_circles": int,
             "random_order": bool,
             "flash_center": bool,
+            "neuron_id" : int,
             "num_trials": int,
         }
     )
@@ -944,6 +953,7 @@ class RunApparentMotionConfigurations(VisualExperiment):
             "flash_center": self.parameters.flash_center,
             "duration": self.parameters.flash_duration
             * (self.parameters.n_circles + 1 + 1), # Center & 1 flash_duration blank
+            "neuron_id": self.parameters.neuron_id,
         }
 
         valid_configs = [
