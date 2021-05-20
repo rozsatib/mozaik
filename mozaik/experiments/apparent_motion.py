@@ -699,9 +699,10 @@ class CompareSlowVersusFastGaborMotion(VisualExperiment):
             for speed in self.parameters.movement_speeds:
                 gabor_diameter = 2.0 * self.parameters.sigma * self.parameters.n_sigmas
                 flash_duration = gabor_diameter / speed * 1000
-                flash_duration_new = np.round(flash_duration / self.frame_duration) * self.frame_duration
+                flash_duration_rounded = np.round(flash_duration / self.frame_duration) * self.frame_duration
                 if trial == 0:
-                    logger.info("CompareSlowVersusFastGaborMotion: Calculated flash duration %.2f ms, must be integer multiple of the frame duration %.2f ms, modifiying it to %.2f" % (flash_duration, self.frame_duration, flash_duration_new))
+                    logger.info("CompareSlowVersusFastGaborMotion: Calculated flash duration %.2f ms, must be integer multiple of the frame duration %.2f ms, modifiying it to %.2f" % (flash_duration, self.frame_duration, flash_duration_rounded))
+                flash_duration = flash_duration_rounded
                 assert (
                     flash_duration >= self.frame_duration
                 ), "Gabor flash duration must be at least as long as the frame duration"
