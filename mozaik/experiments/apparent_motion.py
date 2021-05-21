@@ -507,6 +507,9 @@ class MeasureGaborFlashDuration(VisualExperiment):
     blank_duration : float
         Duration of blank stimulus after Gabor patch presentation.
 
+    neuron_id : int
+        ID of measured neuron. Required to pair recordings to stimuli.
+
     num_trials : int
         Number of trials of showing the stimuli.
     """
@@ -526,6 +529,7 @@ class MeasureGaborFlashDuration(VisualExperiment):
             "step": float,
             "blank_duration": float,
             "num_trials": int,
+            "neuron_id" : int,
         }
     )
 
@@ -547,6 +551,7 @@ class MeasureGaborFlashDuration(VisualExperiment):
             "size": 6 * self.parameters.sigma,
             "relative_luminance": self.parameters.relative_luminance,
             "grid": False,
+            "neuron_id": self.parameters.neuron_id,
         }
         for trial in range(0, self.parameters.num_trials):
             trial_stims = [
