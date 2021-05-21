@@ -1014,6 +1014,7 @@ class RunApparentMotionConfigurations(VisualExperiment):
                     params["random"] = True
                 elif c2 == "CF":
                     params["centrifugal"] = True
+                params["identifier"] = configuration
                 trial_stims.append(
                     topo.RadialGaborApparentMotion(trial=trial, **params)
                 )

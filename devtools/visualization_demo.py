@@ -156,6 +156,7 @@ def CompareSlowVersusFastGaborMotion_default_parameters():
         "angles": list(np.linspace(0, 2 * np.pi, 12, endpoint=False)),
         "moving_gabor_orientation_radial": True,
         "n_circles": 3,
+        "neuron_id" : 0,
     }
     return d
 
@@ -204,7 +205,8 @@ def RunApparentMotionConfigurations_default_parameters():
         "random_order": True,
         "n_circles": 3,
         "flash_center" : True,
-        "flash_duration" : 28
+        "flash_duration" : 28,
+        "neuron_id" : 0,
     }
     return d
 
