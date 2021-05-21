@@ -1242,6 +1242,7 @@ class RadialGaborApparentMotion(GaborStimulus):
     random = SNumber(dimensionless, default=False, doc = "Boolean string - if True, random shuffle the locations and flash times of Gabor patches.")
     flash_center = SNumber(dimensionless, doc = "Boolean string, flash in center or not")
     centrifugal = SNumber(dimensionless, default=False, doc = "Boolean string - if True, patches move out from the center, rather than towards it.")
+    identifier = SString(default="", doc="Stimulus identifier, can be used for grouping stimuli at the analysis stage.")
     neuron_id = SNumber(dimensionless, default=0, doc="ID of measured neuron. Required to pair recordings to stimuli.")
 
     def is_overlapping(self,x0, y0, x1, y1, diameter):
