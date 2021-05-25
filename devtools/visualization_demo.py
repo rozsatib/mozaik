@@ -206,6 +206,7 @@ def RunApparentMotionConfigurations_default_parameters():
         "n_circles": 3,
         "flash_center" : True,
         "flash_duration" : 28,
+        "blank_duration" : 100,
         "neuron_id" : 0,
     }
     return d
@@ -307,7 +308,7 @@ def demo_experiment_4():
     viz.show_experiment(experiment, merge_stimuli=False, frame_delay=100)
 
 def main():
-    demo_experiment_2()
+    demo_experiment_4()
 
     if False:
         # Try out show_stimulus arguments
