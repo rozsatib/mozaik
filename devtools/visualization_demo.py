@@ -157,6 +157,7 @@ def CompareSlowVersusFastGaborMotion_default_parameters():
         "moving_gabor_orientation_radial": True,
         "n_circles": 3,
         "neuron_id" : 0,
+        "blank_duration" : 200,
     }
     return d
 
@@ -308,7 +309,7 @@ def demo_experiment_4():
     viz.show_experiment(experiment, merge_stimuli=False, frame_delay=100)
 
 def main():
-    demo_experiment_4()
+    demo_experiment_2()
 
     if False:
         # Try out show_stimulus arguments

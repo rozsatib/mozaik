@@ -634,6 +634,9 @@ class CompareSlowVersusFastGaborMotion(VisualExperiment):
         Number of eccentricities at which Gabor patches are flashed. The movement range
         of the continuously moving Gabor is set to cover an equivalent distance.
 
+    blank_duration : float
+        Duration of blank stimulus after Gabor patch presentation.
+
     neuron_id : int
         ID of measured neuron. Required to pair recordings to stimuli.
 
@@ -655,6 +658,7 @@ class CompareSlowVersusFastGaborMotion(VisualExperiment):
             "movement_speeds": list,
             "angles": list,
             "moving_gabor_orientation_radial": bool,
+            "blank_duration": float,
             "n_circles": int,
             "neuron_id": int,
             "num_trials": int,
@@ -716,7 +720,7 @@ class CompareSlowVersusFastGaborMotion(VisualExperiment):
                 assert (
                     flash_duration >= self.frame_duration
                 ), "Gabor flash duration must be at least as long as the frame duration"
-                stim_duration = flash_duration * (self.parameters.n_circles + 1)
+                stim_duration = self.parameters.blank_duration + flash_duration * (self.parameters.n_circles + 1)
                 am_params["duration"] = stim_duration
                 cont_mov_params["duration"] = stim_duration
                 for angle in self.parameters.angles:
