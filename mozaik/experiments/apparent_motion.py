@@ -819,6 +819,9 @@ class RunApparentMotionConfigurations(VisualExperiment):
     flash_duration : float
         Apparent motion flash duration
 
+    blank_duration : float
+        Blank duration after each stimulus
+
     configurations : list(string)
         List of configurations to present. The names and shapes of the configurations
         are described above.
@@ -926,6 +929,7 @@ class RunApparentMotionConfigurations(VisualExperiment):
             "n_circles": int,
             "random_order": bool,
             "flash_center": bool,
+            "blank_duration" : float,
             "neuron_id" : int,
             "num_trials": int,
         }
@@ -956,8 +960,8 @@ class RunApparentMotionConfigurations(VisualExperiment):
             "centrifugal": False,
             "symmetric": True,
             "flash_center": self.parameters.flash_center,
-            "duration": self.parameters.flash_duration
-            * (self.parameters.n_circles + 1 + 1), # Center & 1 flash_duration blank
+            "duration": self.parameters.blank_duration + self.parameters.flash_duration
+            * (self.parameters.n_circles + 1), # Center & 1 flash_duration blank
             "neuron_id": self.parameters.neuron_id,
         }
 
