@@ -563,7 +563,7 @@ class MeasureGaborFlashDuration(VisualExperiment):
                 )
                 for flash_duration in np.arange(
                     self.parameters.min_duration,
-                    self.parameters.max_duration,
+                    self.parameters.max_duration+1, # arange does not include final value
                     self.parameters.step,
                 )
             ]
