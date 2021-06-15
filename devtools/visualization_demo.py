@@ -174,9 +174,10 @@ def MeasureGaborFlashDuration_default_parameters():
         "n_sigmas": 3.0,
         "relative_luminance": 1.0,
         "min_duration": 14,
-        "max_duration": 41,
-        "step": 1,
+        "max_duration": 42,
+        "step": 7,
         "blank_duration": 100,
+        "neuron_id" : 0,
     }
     return d
 
@@ -293,7 +294,7 @@ def demo_experiment_3():
     params["y"] = 1
     parameters = ParameterSet(params)
     experiment = am.MeasureGaborFlashDuration(model=model, parameters=parameters)
-    viz.show_experiment(experiment, merge_stimuli=True)
+    viz.show_experiment(experiment, merge_stimuli=False)
 
 
 def demo_experiment_4():
@@ -309,7 +310,7 @@ def demo_experiment_4():
     viz.show_experiment(experiment, merge_stimuli=False, frame_delay=100)
 
 def main():
-    demo_experiment_2()
+    demo_experiment_3()
 
     if False:
         # Try out show_stimulus arguments
