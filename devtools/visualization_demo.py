@@ -213,6 +213,21 @@ def RunApparentMotionConfigurations_default_parameters():
     }
     return d
 
+def MeasureSparseBar_default_parameters():
+    d = {
+        'time_per_image': 21,
+        'blank_time' : 140,
+        'total_number_of_images' : 20,
+        'num_trials' : 1,
+        'orientation' : 0,
+        'bar_length' : 4,
+        'bar_width' : 0.5,
+        'x' : 0,
+        'y' : 0,
+        'n_positions' : 10,
+        'experiment_seed' : 17,
+    }
+    return d
 
 def demo_show_frame():
     params = ContinuousGaborMovementAndJump_default_parameters()
@@ -309,8 +324,18 @@ def demo_experiment_4():
     experiment = am.RunApparentMotionConfigurations(model=model, parameters=parameters)
     viz.show_experiment(experiment, merge_stimuli=False, frame_delay=100)
 
+
+def demo_experiment_5():
+    model_params = visual_stim_default_parameters()
+    model_params["frame_duration"] = 7
+    model = dm.DummyModel(**model_params)
+    params = MeasureSparseBar_default_parameters()
+    parameters = ParameterSet(params)
+    experiment = exp.MeasureSparseBar(model=model, parameters=parameters)
+    viz.show_experiment(experiment, merge_stimuli=True,frame_delay=50)
+
 def main():
-    demo_experiment_3()
+    demo_experiment_5()
 
     if False:
         # Try out show_stimulus arguments
