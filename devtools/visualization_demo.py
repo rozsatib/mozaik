@@ -9,6 +9,7 @@ import dummy_model as dm
 from parameters import ParameterSet
 import numpy as np
 
+
 def experiment_default_parameters():
     return {
         "relative_luminance": 1,
@@ -156,8 +157,8 @@ def CompareSlowVersusFastGaborMotion_default_parameters():
         "angles": list(np.linspace(0, 2 * np.pi, 12, endpoint=False)),
         "moving_gabor_orientation_radial": True,
         "n_circles": 3,
-        "neuron_id" : 0,
-        "blank_duration" : 200,
+        "neuron_id": 0,
+        "blank_duration": 200,
     }
     return d
 
@@ -177,7 +178,7 @@ def MeasureGaborFlashDuration_default_parameters():
         "max_duration": 42,
         "step": 7,
         "blank_duration": 100,
-        "neuron_id" : 0,
+        "neuron_id": 0,
     }
     return d
 
@@ -206,28 +207,30 @@ def RunApparentMotionConfigurations_default_parameters():
         ],
         "random_order": True,
         "n_circles": 3,
-        "flash_center" : True,
-        "flash_duration" : 28,
-        "blank_duration" : 100,
-        "neuron_id" : 0,
+        "flash_center": True,
+        "flash_duration": 28,
+        "blank_duration": 100,
+        "neuron_id": 0,
     }
     return d
 
+
 def MeasureSparseBar_default_parameters():
     d = {
-        'time_per_image': 21,
-        'blank_time' : 140,
-        'total_number_of_images' : 20,
-        'num_trials' : 1,
-        'orientation' : 0,
-        'bar_length' : 4,
-        'bar_width' : 0.5,
-        'x' : 0,
-        'y' : 0,
-        'n_positions' : 10,
-        'experiment_seed' : 17,
+        "time_per_image": 21,
+        "blank_time": 140,
+        "total_number_of_images": 20,
+        "num_trials": 1,
+        "orientation": 0,
+        "bar_length": 4,
+        "bar_width": 0.5,
+        "x": 0,
+        "y": 0,
+        "n_positions": 10,
+        "experiment_seed": 17,
     }
     return d
+
 
 def demo_show_frame():
     params = ContinuousGaborMovementAndJump_default_parameters()
@@ -332,7 +335,8 @@ def demo_experiment_5():
     params = MeasureSparseBar_default_parameters()
     parameters = ParameterSet(params)
     experiment = exp.MeasureSparseBar(model=model, parameters=parameters)
-    viz.show_experiment(experiment, merge_stimuli=True,frame_delay=50)
+    viz.show_experiment(experiment, merge_stimuli=True, frame_delay=50)
+
 
 def main():
     demo_experiment_5()
