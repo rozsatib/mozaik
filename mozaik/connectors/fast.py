@@ -134,7 +134,31 @@ class FixedKConnector(Connector):
                                     receptor_type=self.parameters.target_synapses)
 
 
+class OneToOneConnector(Connector):
+    """
+    Creates One-to-One connections between source and target neurons.
+    """
+    
+    required_parameters = ParameterSet({
+        'weights': float,  # nA, the synapse strength
+        'delay': float,    # ms delay of the connections
+    })
 
+    def _connect(self):
+        # class OneToOneConnector(safe=True, callback=None)
+        # Where the pre- and postsynaptic populations have the same size, connect cell i in the presynaptic population to cell i in the postsynaptic population for all i.
+        # Takes any of the standard Connector optional arguments.
+
+        method = self.sim.OneToOneConnector( safe=True )
+
+        self.proj = self.sim.Projection(
+                                    self.source.pop,
+                                    self.target.pop,
+                                    method,
+                                    synapse_type=self.init_synaptic_mechanisms(weight=self.parameters.weights*self.weight_scaler,delay=self.parameters.delay),
+                                    label=self.name,
+                                    space=space.Space(axes='xy'),
+                                    receptor_type=self.parameters.target_synapses)
 
 
 
