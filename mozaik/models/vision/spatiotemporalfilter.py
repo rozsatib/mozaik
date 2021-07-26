@@ -75,13 +75,13 @@ class SpatioTemporalReceptiveField(object):
         Parameters
         ----------
         dx : float
-           The number of pixels along x axis.
+           Difference between pixel positions along the x axis.
         
         dy : float
-           The number of pixels along y axis.
+           Difference between pixel positions along the y axis.
         
         dy : float
-           The number of time bins along the t axis.
+           Difference between timesteps.
         
         Notes
         -----
@@ -157,8 +157,15 @@ class CellWithReceptiveField(object):
     receptive_field : SpatioTemporalReceptiveField
           The receptive field object containing the RFs data.
           
-    gain_control : float
-         The calculated input current values will be multiplied by the gain parameter.
+    gain_control : ParameterSet
+         The calculated input current values will be multiplied by the gain
+         parameter (gain_control.gain).
+
+         The input current values can be further scaled by a nonlinear gain function
+         according to luminance and contrast - gain_control.non_linear_gain.
+         TODO: Finish why these functions are the way they are and what they mimic!!!!!!!
+         If None, the output is simply the convolution with the receptive field kernel,
+         scaled with gain_control.gain.
     
     visual_space : VisualSpace
                  The object representing the visual space.
@@ -221,11 +228,6 @@ class CellWithReceptiveField(object):
         L = self.receptive_field.kernel_duration
         assert L <= self.response_length
         
-        for i in range(L):
-            self.response[i] += background_luminance * self.receptive_field.kernel[:, :, i+1:L].sum()
-        
-        for i in range(L):
-            self.response[-(i+1)] += background_luminance * self.receptive_field.kernel[:, :,0:L-i].sum()
         self.i = 0
     
 
@@ -243,6 +245,7 @@ class CellWithReceptiveField(object):
         To avoid loading the entire image sequence into memory, we build up the response array one frame at a time.
         """
         view_array = self.visual_space.view(self.visual_region, pixel_size=self.receptive_field.spatial_resolution)
+        view_array = (view_array - self.background_luminance) / self.background_luminance
         self.std[self.i:self.i+self.update_factor] = numpy.std(view_array)
         self.mean[self.i:self.i+self.update_factor] = numpy.mean(view_array)
         time_course = numpy.dot(self.receptive_field.reshaped_kernel,view_array.reshape(-1)[:numpy.newaxis])
