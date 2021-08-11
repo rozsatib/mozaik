@@ -88,6 +88,49 @@ class MeasureFlatLuminanceSensitivity(VisualExperiment):
 
     def do_analysis(self, data_store):
         pass
+
+class Boop(VisualExperiment):
+    """
+    Boops the visual field once, at a given point.
+    
+    Parameters
+    ----------
+    model : Model
+          The model on which to execute the experiment.
+
+    Other parameters
+    ----------------
+    x : float
+    y : float
+    relative luminance : float
+    duration : float
+    """
+    required_parameters = ParameterSet({
+            'x': float,
+            'y': float,
+            'relative_luminance' : float,
+            'duration' : float,
+    })
+    
+    def __init__(self,model,parameters):
+        VisualExperiment.__init__(self, model,parameters)
+        
+        self.stimuli.append( topo.PixelImpulse(
+                    frame_duration = self.frame_duration,
+                    size_x=model.visual_field.size_x,
+                    size_y=model.visual_field.size_y,
+                    location_x=0.0,
+                    location_y=0.0,
+                    density=self.density,
+                    background_luminance=l,
+                    duration=self.parameters.duration,
+                    relative_luminance=self.parameters.relative_luminance,
+                    x=self.parameters.x,
+                    y=self.parameters.y))
+
+    def do_analysis(self, data_store):
+        pass
+
     
 class MeasureSparse(VisualExperiment):
     """
