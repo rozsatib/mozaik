@@ -227,6 +227,10 @@ class CellWithReceptiveField(object):
         L = self.receptive_field.kernel_duration
         self.receptive_field.kernel -= self.receptive_field.kernel.mean(axis=(0,1))
         assert L <= self.response_length
+        # Recover temporal kernel from spatiotemporal kernel
+        kc = self.receptive_field.kernel.shape[0] // 2
+        self.temporal_kernel = self.receptive_field.kernel[kc,kc,:].copy()
+        self.temporal_kernel /= self.temporal_kernel.max() if self.temporal_kernel.sum() > 0 else abs(self.temporal_kernel.min())
         
         self.i = 0
     
@@ -244,18 +248,11 @@ class CellWithReceptiveField(object):
              remainder)
         To avoid loading the entire image sequence into memory, we build up the response array one frame at a time.
         """
-        view_array = self.visual_space.view(self.visual_region, pixel_size=self.receptive_field.spatial_resolution)
-        #view_array = (view_array - self.background_luminance) / self.background_luminance
-        # TODO: Do we need to divide by background luminance?
-        view_array = view_array / self.background_luminance
+        view_array = self.visual_space.view(self.visual_region, pixel_size=self.receptive_field.spatial_resolution) / self.background_luminance
         self.mean[self.i:self.i+self.update_factor] = numpy.mean(view_array)
         contrast_time_course = numpy.dot(self.receptive_field.reshaped_kernel,view_array.reshape(-1)[:numpy.newaxis])
 
-        # Hack to recover temporal kernel
-        kc = self.receptive_field.kernel.shape[0] // 2
-        temporal_kernel = self.receptive_field.kernel[kc,kc,:].copy()
-        temporal_kernel /= temporal_kernel.max()
-        luminance_time_course = temporal_kernel * self.mean[self.i]
+        luminance_time_course = self.temporal_kernel * self.mean[self.i]
         self.va = view_array
 
         if self.update_factor != 1.0:
@@ -286,14 +283,14 @@ class CellWithReceptiveField(object):
 
         time_points = self.receptive_field.temporal_resolution * numpy.arange(0, len(response))
 
-        fig = pylab.figure()
-        pylab.plot(time_points,contrast_response)
-        pylab.plot(time_points,luminance_response)
-        pylab.plot(time_points,response)
-        pylab.legend(["contrast","luminance","response"])
-        ntype = "ON" if self.receptive_field.kernel.sum() > 0 else "OFF"
-        pylab.savefig("lgn_%s_%.2f_%2.f.png" % (ntype,self.x,self.y))
-        pylab.close(fig)
+        #fig = pylab.figure()
+        #pylab.plot(time_points,contrast_response)
+        #pylab.plot(time_points,luminance_response)
+        #pylab.plot(time_points,response)
+        #pylab.legend(["contrast","luminance","response"])
+        #ntype = "ON" if self.receptive_field.kernel.sum() > 0 else "OFF"
+        #pylab.savefig("lgn_%s_%.2f_%2.f.png" % (ntype,self.x,self.y))
+        #pylab.close(fig)
 
         return {'times': time_points, 'amplitudes': response}
 
@@ -623,7 +620,6 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
         times = numpy.array([offset,duration-visual_space.update_interval+offset])#numpy.arange(0, duration, visual_space.update_interval) + offset
         zers = times*0
         ts = self.model.sim.get_time_step()
-        # TODO: FIX NULL RESPONSE IF BACKGROUND LUMINANCE IS NOT NEUTRAL LUMINANCE
         
         input_cells = OrderedDict()
         for rf_type in self.rf_types:
@@ -635,7 +631,8 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
         
 
         for rf_type in self.rf_types:
-                amplitude = 0
+                amplitude = visual_space.background_luminance * input_cells[rf_type].temporal_kernel.sum()
+                amplitude = input_cells[rf_type].gain_control.non_linear_gain.luminance_gain * amplitude / (numpy.abs(amplitude) + input_cells[rf_type].gain_control.non_linear_gain.luminance_scaler)
                 for i, (scs, ncs) in enumerate(zip(self.scs[rf_type],self.ncs[rf_type])):
                     scs.set_parameters(times=times,amplitudes=zers+amplitude,copy=False)
                     if self.parameters.mpi_reproducible_noise:
