@@ -248,11 +248,13 @@ class CellWithReceptiveField(object):
              remainder)
         To avoid loading the entire image sequence into memory, we build up the response array one frame at a time.
         """
-        view_array = self.visual_space.view(self.visual_region, pixel_size=self.receptive_field.spatial_resolution) / self.background_luminance
+        view_array = self.visual_space.view(self.visual_region, pixel_size=self.receptive_field.spatial_resolution)
         self.mean[self.i:self.i+self.update_factor] = numpy.mean(view_array)
-        contrast_time_course = numpy.dot(self.receptive_field.reshaped_kernel,view_array.reshape(-1)[:numpy.newaxis])
 
         luminance_time_course = self.temporal_kernel * self.mean[self.i]
+        self.mean[self.i:self.i+self.update_factor] /= self.background_luminance
+
+        contrast_time_course = numpy.dot(self.receptive_field.reshaped_kernel,view_array.reshape(-1)[:numpy.newaxis])
         self.va = view_array
 
         if self.update_factor != 1.0:
@@ -632,7 +634,7 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
 
         for rf_type in self.rf_types:
                 amplitude = visual_space.background_luminance * input_cells[rf_type].temporal_kernel.sum()
-                amplitude = input_cells[rf_type].gain_control.non_linear_gain.luminance_gain * amplitude / (numpy.abs(amplitude) + input_cells[rf_type].gain_control.non_linear_gain.luminance_scaler)
+                amplitude = self.parameters.linear_scaler * input_cells[rf_type].gain_control.non_linear_gain.luminance_gain * amplitude / (numpy.abs(amplitude) + input_cells[rf_type].gain_control.non_linear_gain.luminance_scaler)
                 for i, (scs, ncs) in enumerate(zip(self.scs[rf_type],self.ncs[rf_type])):
                     scs.set_parameters(times=times,amplitudes=zers+amplitude,copy=False)
                     if self.parameters.mpi_reproducible_noise:
