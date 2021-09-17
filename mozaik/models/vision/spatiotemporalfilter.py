@@ -248,13 +248,11 @@ class CellWithReceptiveField(object):
              remainder)
         To avoid loading the entire image sequence into memory, we build up the response array one frame at a time.
         """
-        view_array = self.visual_space.view(self.visual_region, pixel_size=self.receptive_field.spatial_resolution)
+        view_array = self.visual_space.view(self.visual_region, pixel_size=self.receptive_field.spatial_resolution) / self.background_luminance
         self.mean[self.i:self.i+self.update_factor] = numpy.mean(view_array)
 
-        luminance_time_course = self.temporal_kernel * self.mean[self.i]
-        self.mean[self.i:self.i+self.update_factor] /= self.background_luminance
-
         contrast_time_course = numpy.dot(self.receptive_field.reshaped_kernel,view_array.reshape(-1)[:numpy.newaxis])
+        luminance_time_course = self.temporal_kernel * self.mean[self.i] * self.background_luminance
         self.va = view_array
 
         if self.update_factor != 1.0:
