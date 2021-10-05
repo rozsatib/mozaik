@@ -1,17 +1,28 @@
+import sys
+import os
+import imagen
+import pytest
+import pylab
+import numpy as np
+from pyNN import nest
+
+import mozaik
+from mozaik.models import Model
+from mozaik.space import VisualRegion
+import mozaik.stimuli.vision.topographica_based as topo
+from mozaik.tools.distribution_parametrization import load_parameters
 from mozaik.space import VisualSpace
 from mozaik.models.vision.spatiotemporalfilter import (
     CellWithReceptiveField,
     SpatioTemporalReceptiveField,
+    SpatioTemporalFilterRetinaLGN
 )
 from mozaik.models.vision import cai97
-from parameters import ParameterSet
-import numpy as np
 from mozaik.stimuli.vision.topographica_based import PixelImpulse
 from mozaik.tools.mozaik_parametrized import SNumber
 from quantities import dimensionless
-import imagen
-import pytest
-import pylab
+from parameters import ParameterSet
+
 
 params = {
     "input_space_type": "mozaik.space.VisualSpace",
@@ -112,6 +123,9 @@ base_stim_params = {
 
 
 class TestCellWithReceptiveField:
+    """
+    TODO: Documentation
+    """
 
     receptive_field_on = None
     receptive_field_off = None
@@ -153,13 +167,9 @@ class TestCellWithReceptiveField:
             0, 0, cls.receptive_field_off, gain_params, cls.visual_space
         )
 
-    @pytest.mark.skip
-    # @pytest.mark.parametrize("x", range(30))
-    # @pytest.mark.parametrize("y", range(30))
-    # @pytest.mark.parametrize("on", [True,False])
-    @pytest.mark.parametrize("x", [0])
-    @pytest.mark.parametrize("y", [0])
-    @pytest.mark.parametrize("on", [True])
+    @pytest.mark.parametrize("x", np.random.randint(0,30,size=5))
+    @pytest.mark.parametrize("y", np.random.randint(0,30,size=5))
+    @pytest.mark.parametrize("on", [True,False])
     def test_impulse_response(self, x, y, on):
         stimulus = PixelImpulse(relative_luminance=1.0, x=x, y=y, **self.vs_params)
         self.visual_space.clear()
@@ -179,23 +189,13 @@ class TestCellWithReceptiveField:
         np.testing.assert_allclose(r, rf.kernel[x, y, :])
 
 
-import sys
-from mozaik.tools.distribution_parametrization import load_parameters
-import os
-from pyNN import nest
-import mozaik
-from mozaik.models.vision.spatiotemporalfilter import SpatioTemporalFilterRetinaLGN
-from mozaik.models import Model
-from mozaik.space import VisualRegion
-import mozaik.stimuli.vision.topographica_based as topo
-
-
 class TestSpatioTemporalFilterRetinaLGN:
-    @pytest.mark.parametrize("sim", [nest])
-    @pytest.mark.parametrize("num_threads", [8])
-    @pytest.mark.parametrize("background_luminance", [80])
-    @pytest.mark.parametrize("rf_duration", [200])
-    def test_bla(self, sim, num_threads, background_luminance, rf_duration):
+    """
+    TODO: Documentation
+    """
+    @pytest.mark.parametrize("background_luminance", [10,20,40,80])
+    @pytest.mark.parametrize("rf_duration", [50,100,200])
+    def test_bla(self, background_luminance, rf_duration):
         parameters = load_parameters(params, ParameterSet({}))
         mozaik.setup_mpi(parameters["mpi_seed"], parameters["pynn_seed"])
         parameters["input_space"]["background_luminance"] = background_luminance
@@ -210,18 +210,20 @@ class TestSpatioTemporalFilterRetinaLGN:
             size_y=parameters["visual_field"]["size"][1],
         )
         del parameters["visual_field"]
-        m = Model(sim, num_threads, parameters)
+        m = Model(nest, 2, parameters)
 
         m.visual_field = vf
         sh = SpatioTemporalFilterRetinaLGN(
             m, parameters["sheets"]["retina_lgn"]["params"]
         )
         dur = sh.rf["X_ON"].duration + parameters["input_space"]["update_interval"]
+
         stim_params = base_stim_params.copy()
         stim_params["background_luminance"] = background_luminance
         stim_params["duration"] = dur
         stim = topo.Null(**stim_params)
         m.input_space.add_object("blank_stimulus", stim)
+
         sh.process_input(m.input_space, stim, duration=dur)
         pi_ampl = [n.amplitudes[-1] for sheet in sh.scs for n in sh.scs[sheet]]
 
