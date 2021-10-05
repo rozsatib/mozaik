@@ -257,7 +257,7 @@ class CellWithReceptiveField(object):
 
         if self.update_factor != 1.0:
             for j in range(self.i, self.i+self.update_factor):
-                self.contrast_response[j: j+self.receptive_field.kernel_duration] += time_course[:len(self.contrast_response[j: j+self.receptive_field.kernel_duration])]
+                self.contrast_response[j: j+self.receptive_field.kernel_duration] += contrast_time_course[:len(self.contrast_response[j: j+self.receptive_field.kernel_duration])]
                 self.luminance_response[j: j+self.receptive_field.kernel_duration] += luminance_time_course[:len(self.luminance_response[j: j+self.receptive_field.kernel_duration])]
         else:
             self.contrast_response[self.i: self.i+self.receptive_field.kernel_duration] += contrast_time_course[:len(self.contrast_response[self.i: self.i+self.receptive_field.kernel_duration])]
