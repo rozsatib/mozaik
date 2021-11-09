@@ -11,9 +11,6 @@ from mozaik.models import Model
 from mozaik.space import VisualRegion
 import mozaik.stimuli.vision.topographica_based as topo
 from mozaik.tools.distribution_parametrization import load_parameters
-import matplotlib
-
-matplotlib.use("Agg")
 from mozaik.space import VisualSpace
 from mozaik.models.vision.spatiotemporalfilter import (
     CellWithReceptiveField,
@@ -75,13 +72,8 @@ params = {
                     "non_linear_gain": {
                         "contrast_gain": 0.11,
                         "contrast_scaler": 0.00013,
-                        #"luminance_gain": 0.009,
-                        #"luminance_scaler": 0.4,
-                        "luminance_thresh": 0.01,
-                        "luminance_gain_on": 0.009,
-                        "luminance_scaler_on": 0.4,
-                        "luminance_gain_off": 0.009,
-                        "luminance_scaler_off": 0.4,
+                        "luminance_gain": 0.009,
+                        "luminance_scaler": 0.4,
                     },
                 },
                 "cell": {
@@ -100,7 +92,7 @@ params = {
                     },
                     "initial_values": {"v": -70.0},
                 },
-                "noise": {"mean": 0.0, "stdev_on": 0.0, "stdev_off": 0.0},
+                "noise": {"mean": 0.0, "stdev": 0.0},
             },
         }
     },

@@ -274,14 +274,7 @@ class CellWithReceptiveField(object):
         """
         if self.gain_control.non_linear_gain != None:
             contrast_response = self.gain_control.non_linear_gain.contrast_gain * self.contrast_response / (numpy.abs(self.contrast_response) + self.gain_control.non_linear_gain.contrast_scaler)
-            self.luminance_response -= self.gain_control.non_linear_gain.luminance_thresh
-            if self.temporal_kernel.sum() > 0:
-                print("ON neuron")
-                luminance_response = self.gain_control.non_linear_gain.luminance_gain_on * self.luminance_response / (numpy.abs(self.luminance_response) + self.gain_control.non_linear_gain.luminance_scaler_on)
-            else:
-                print("OFF neuron")
-                luminance_response = self.gain_control.non_linear_gain.luminance_gain_off * self.luminance_response / (numpy.abs(self.luminance_response) + self.gain_control.non_linear_gain.luminance_scaler_off)
-
+            luminance_response = self.gain_control.non_linear_gain.luminance_gain * self.luminance_response / (numpy.abs(self.luminance_response) + self.gain_control.non_linear_gain.luminance_scaler)
             response = (contrast_response+luminance_response)[:-self.receptive_field.kernel_duration] # remove the extra padding at the end
             contrast_response=contrast_response[:-self.receptive_field.kernel_duration]
             luminance_response=luminance_response[:-self.receptive_field.kernel_duration]
@@ -368,18 +361,14 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
         'gain_control' : {
                     'gain' : float,
                     'non_linear_gain' : ParameterSet({
-                        'luminance_thresh' : float,
-                        'luminance_gain_on' : float,
-                        'luminance_scaler_on' : float,
-                        'luminance_gain_off' : float,
-                        'luminance_scaler_off' : float,
+                        'luminance_gain' : float,
+                        'luminance_scaler' : float,
                         'contrast_gain' : float,
                         'contrast_scaler' : float,
                     })
                 },
         'noise': ParameterSet({
-            'mean_on': float,
-            'mean_off': float,
+            'mean': float,
             'stdev': float,  # nA
         }),
     })
@@ -419,13 +408,7 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                 scs = sim.StepCurrentSource(times=[0.0], amplitudes=[0.0])
 
                 if not self.parameters.mpi_reproducible_noise:
-                    #ncs = sim.NoisyCurrentSource(**self.parameters.noise)
-                    p = {'mean' : 0, 'stdev' : self.parameters.noise.stdev}
-                    if rf_type == "X_ON":
-                        p['mean'] = self.parameters.noise.mean_on
-                    else:
-                        p['mean'] = self.parameters.noise.mean_off
-                    ncs = sim.NoisyCurrentSource(**p)
+                    ncs = sim.NoisyCurrentSource(**self.parameters.noise)
                 else:
                     ncs = sim.StepCurrentSource(times=[0.0], amplitudes=[0.0])
                 
@@ -585,12 +568,7 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                 scs.set_parameters(times=t, amplitudes=a,copy=False)
                 if self.parameters.mpi_reproducible_noise:
                     t = numpy.arange(0, duration, ts) + offset
-                    if rf_type == "X_ON":
-                        mean = self.parameters.noise.mean_on
-                    else:
-                        mean = self.parameters.noise.mean_off
-
-                    amplitudes = (mean
+                    amplitudes = (self.parameters.noise.mean
                                    + self.parameters.noise.stdev
                                        * self.ncs_rng[rf_type][i].randn(len(t)))
                     ncs.set_parameters(times=t, amplitudes=amplitudes,copy=False)
@@ -654,24 +632,13 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
 
         for rf_type in self.rf_types:
                 amplitude = visual_space.background_luminance * input_cells[rf_type].temporal_kernel.sum()
-                amplitude -= input_cells[rf_type].gain_control.non_linear_gain.luminance_thresh
-                if rf_type == "X_ON":
-                    amplitude = self.parameters.linear_scaler * input_cells[rf_type].gain_control.non_linear_gain.luminance_gain_on * amplitude / (numpy.abs(amplitude) + input_cells[rf_type].gain_control.non_linear_gain.luminance_scaler_on)
-                else:
-                    amplitude = self.parameters.linear_scaler * input_cells[rf_type].gain_control.non_linear_gain.luminance_gain_off * amplitude / (numpy.abs(amplitude) + input_cells[rf_type].gain_control.non_linear_gain.luminance_scaler_off)
-
+                amplitude = self.parameters.linear_scaler * input_cells[rf_type].gain_control.non_linear_gain.luminance_gain * amplitude / (numpy.abs(amplitude) + input_cells[rf_type].gain_control.non_linear_gain.luminance_scaler)
                 for i, (scs, ncs) in enumerate(zip(self.scs[rf_type],self.ncs[rf_type])):
                     scs.set_parameters(times=times,amplitudes=zers+amplitude,copy=False)
                     if self.parameters.mpi_reproducible_noise:
                         t = numpy.arange(0, duration, ts) + offset
-
-                        if rf_type == "X_ON":
-                            mean = self.parameters.noise.mean_on
-                        else:
-                            mean = self.parameters.noise.mean_off
-
-                        amplitudes = (mean
-                                       + self.parameters.noise.stdev
+                        amplitudes = (self.parameters.noise.mean
+                                        + self.parameters.noise.stdev
                                            * self.ncs_rng[rf_type][i].randn(len(t)))
                         ncs.set_parameters(times=t, amplitudes=amplitudes,copy=False)
 

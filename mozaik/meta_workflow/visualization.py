@@ -209,11 +209,7 @@ def multi_curve_visualzition(simulation_name,master_results_dir,x_axis_parameter
     """
     (parameters,datastores,n) = load_fixed_parameter_set_parameter_search(simulation_name,master_results_dir)
     
-    print(*sorted(enumerate(parameters), key=lambda x: x[1]))
-    print(zip(*sorted(enumerate(parameters), key=lambda x: x[1])))
-    #sorted_parameter_indexes = zip(*sorted(enumerate(parameters), key=lambda x: x[1]))[0]
-    sorted_parameter_indexes = [e[0] for e in sorted(enumerate(parameters), key=lambda x: x[1])]
-    print(sorted_parameter_indexes)
+    sorted_parameter_indexes = zip(*sorted(enumerate(parameters), key=lambda x: x[1]))[0]
 
     # if value_names isNone lets set it to set of value_names in the first datastore
     if value_name == None:
@@ -225,9 +221,7 @@ def multi_curve_visualzition(simulation_name,master_results_dir,x_axis_parameter
     # that they exist in each DataStore.
     for (param_values,datastore) in datastores:
         dsv = query.query(datastore)
-        dsv.print_content(full_ADS=True)
-        print(param_filter_query(datastore,identifier='SingleValue',value_name=value_name).get_analysis_result())
-        assert len(param_filter_query(dsv,identifier='SingleValue',value_name=value_name).get_analysis_result()) == 1, "Error, %d ADS with value_name %s found for parameter combination:" % (len(param_filter_query(dsv,identifier='SingleValue').get_analysis_result()), str([str(a) + ':' + str(b) + ', ' for (a,b) in zip(parameters,param_values)]))
+        assert len(param_filter_query(dsv,identifier='SingleValue',value_name=value_name).get_analysis_result()) == 1, "Error, %d ADS with value_name %s found for parameter combination:" % (len(param_filter_query(datastore,identifier='SingleValue').get_analysis_result()), str([str(a) + ':' + str(b) + ', ' for (a,b) in zip(parameters,param_values)]))
     
     
     x_axis_parameter_index = parameters.index(x_axis_parameter_name)
