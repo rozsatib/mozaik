@@ -234,7 +234,7 @@ class TestLSV1M(TestModel):
     )
     def test_voltages(self, sheet_name):
         self.check_voltages(self.ds, self.ds_ref, sheet_name, max_neurons=25)
-
+        assert False
 
 class TestLSV1MTiny(TestModel):
     """
