@@ -617,6 +617,12 @@ class StandardStyleAnimatedPlot(StandardStyle):
         return a,
 
     def post_plot(self):
+        assert self.l is not None, "Length of animation has to be set before plotting!"
+        if self.plotting_parent.animation_num_frames:
+            assert self.plotting_parent.animation_num_frames == self.l, "The length of all recordings in a single animation must be the same!"
+        else:
+            self.plotting_parent.animation_num_frames = self.l
+
         StandardStyle.post_plot(self)
         self.plotting_parent.register_animation_update_function(StandardStyleAnimatedPlot._plot_next_frame,self)
 
@@ -721,7 +727,7 @@ class ScatterPlotMovie(StandardStyleAnimatedPlot):
                                          alpha=0.4,
                                          cmap='gray')
         pylab.axis('equal')
-        pylab.gca().set_axis_bgcolor('black')
+        pylab.gca().set_facecolor('black')
 
 class ScatterPlot(StandardStyle):
     """
@@ -812,8 +818,6 @@ class ScatterPlot(StandardStyle):
                                vmax=vmax)
         if self.equal_aspect_ratio:
             self.axis.set_aspect(aspect=1.0, adjustable='box')
-        logger.debug(numpy.min(self.x))
-        logger.debug(numpy.max(self.x))
         self.x_lim = (numpy.min(self.x),numpy.max(self.x))
         self.y_lim = (numpy.min(self.y),numpy.max(self.y))
 
@@ -985,8 +989,6 @@ class StandardStyleLinePlot(StandardStyle):
                     ymin = self.y[i] - self.error[i]
                     ymax = self.y[i] + self.error[i]
                     self.axis.fill_between(self.x[i], ymax, ymin, color=p['color'], alpha=0.2)
-            
-            pylab.hold('on')
 
             tmin = min(tmin, self.x[i][0])
             tmax = max(tmax, self.x[i][-1])
@@ -998,7 +1000,6 @@ class StandardStyleLinePlot(StandardStyle):
         if self.legend:
             self.axis.legend()
         self.x_lim = (tmin, tmax)
-        logger.info(str(self.parameters))
 
 class ConductancesPlot(StandardStyle):
     """
@@ -1019,6 +1020,9 @@ class ConductancesPlot(StandardStyle):
 
     legend : bool
            Whether legend should be displayed.
+
+    smooth_means : bool
+           Whether to apply low pass filter to the mean of the conductances.
     """
 
     def __init__(self, exc, inh,**param):
@@ -1026,6 +1030,7 @@ class ConductancesPlot(StandardStyle):
         self.gsyn_es = exc
         self.gsyn_is = inh
         self.parameters["legend"] = False
+        self.parameters["smooth_means"] = False
 
     def plot(self):
         mean_gsyn_e = numpy.zeros(numpy.shape(self.gsyn_es[0]))
@@ -1046,10 +1051,12 @@ class ConductancesPlot(StandardStyle):
         mean_gsyn_i = mean_gsyn_i / len(self.gsyn_is)
         mean_gsyn_e = mean_gsyn_e / len(self.gsyn_es)
         from scipy.signal import savgol_filter
-        #p1, = self.axis.plot(numpy.transpose(time_axis).flatten(), savgol_filter(numpy.transpose(mean_gsyn_e).tolist(),151,2).flatten(), color='r', linewidth=3)
-        #p2, = self.axis.plot(numpy.transpose(time_axis).flatten(), savgol_filter(numpy.transpose(mean_gsyn_i).tolist(),151,2).flatten(), color='b', linewidth=3)
-        p1, = self.axis.plot(time_axis, mean_gsyn_e.tolist(), color='r', linewidth=1)
-        p2, = self.axis.plot(time_axis, mean_gsyn_i.tolist(), color='b', linewidth=1)
+        if self.smooth_means:
+            p1, = self.axis.plot(numpy.transpose(time_axis).flatten(), savgol_filter(numpy.transpose(mean_gsyn_e).tolist(),151,2).flatten(), color='r', linewidth=3)
+            p2, = self.axis.plot(numpy.transpose(time_axis).flatten(), savgol_filter(numpy.transpose(mean_gsyn_i).tolist(),151,2).flatten(), color='b', linewidth=3)
+        else:    
+            p1, = self.axis.plot(time_axis, mean_gsyn_e.tolist(), color='r', linewidth=1)
+            p2, = self.axis.plot(time_axis, mean_gsyn_i.tolist(), color='b', linewidth=1)
         if self.legend:
             self.axis.legend([p1, p2], ['exc', 'inh'])
 
