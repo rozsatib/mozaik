@@ -201,8 +201,8 @@ class OptogeneticArrayStimulusCircles(CorticalStimulationWithOptogeneticArray):
                 *stimulating_signal* and *stimulating_signal_parameters* - those
                 are set by this experiment.
 
-    intensity : float
-                Intensity of the stimulation. Uniform across the circle.
+    intensities : list(float)
+                Intensities of the stimulation. Uniform across the circle.
 
     radii : list(float (μm))
                 List of circle radii (μm) to present
@@ -231,7 +231,7 @@ class OptogeneticArrayStimulusCircles(CorticalStimulationWithOptogeneticArray):
         'sheet_list' : list,
         'num_trials' : int,
         'stimulator_array_parameters' : ParameterSet,
-        'intensity': float,
+        'intensities': list,
         'radii' : list,
         'x_center' : float,
         'y_center' : float,
@@ -246,7 +246,7 @@ class OptogeneticArrayStimulusCircles(CorticalStimulationWithOptogeneticArray):
         self.parameters.stimulator_array_parameters["stimulating_signal"] = "mozaik.sheets.direct_stimulator.stimulating_pattern_flash"
         self.parameters.stimulator_array_parameters["stimulating_signal_parameters"] = ParameterSet({
             "shape": "circle",
-            "intensity": self.parameters.intensity,
+            "intensity": 0,
             "coords": (self.parameters.x_center,self.parameters.y_center),
             "radius": 0,
             "inverted": self.parameters.inverted,
@@ -256,9 +256,11 @@ class OptogeneticArrayStimulusCircles(CorticalStimulationWithOptogeneticArray):
         })
 
         for trial in range(self.parameters.num_trials):
-            for r in self.parameters.radii:
-                self.parameters.stimulator_array_parameters.stimulating_signal_parameters.radius = r
-                self.append_direct_stim(trial,model,self.parameters.stimulator_array_parameters)
+            for intensity in self.parameters.intensities:
+                for r in self.parameters.radii:
+                    self.parameters.stimulator_array_parameters.stimulating_signal_parameters.intensity = intensity
+                    self.parameters.stimulator_array_parameters.stimulating_signal_parameters.radius = r
+                    self.append_direct_stim(trial,model,self.parameters.stimulator_array_parameters)
 
 
 class OptogeneticArrayStimulusHexagonalTiling(CorticalStimulationWithOptogeneticArray):
@@ -297,8 +299,8 @@ class OptogeneticArrayStimulusHexagonalTiling(CorticalStimulationWithOptogenetic
                 *stimulating_signal* and *stimulating_signal_parameters* - those
                 are set by this experiment.
 
-    intensity : float
-                Intensity of the stimulation. Uniform across the hexagon.
+    intensities : list(float)
+                Intensities of the stimulation. Uniform across the circle.
 
     radius : float (μm)
                 Radius (or edge length) of the hexagon to present
@@ -334,7 +336,7 @@ class OptogeneticArrayStimulusHexagonalTiling(CorticalStimulationWithOptogenetic
         'sheet_list' : list,
         'num_trials' : int,
         'stimulator_array_parameters' : ParameterSet,
-        'intensity': float,
+        'intensities': list,
         'radius' : float,
         'x_center' : float,
         'y_center' : float,
@@ -350,7 +352,7 @@ class OptogeneticArrayStimulusHexagonalTiling(CorticalStimulationWithOptogenetic
         self.parameters.stimulator_array_parameters["stimulating_signal"] = "mozaik.sheets.direct_stimulator.stimulating_pattern_flash"
         self.parameters.stimulator_array_parameters["stimulating_signal_parameters"] = ParameterSet({
             "shape": "hexagon",
-            "intensity": self.parameters.intensity,
+            "intensity": 0,
             "angle": self.parameters.angle,
             "coords": (0,0),
             "radius": self.parameters.radius,
@@ -369,9 +371,11 @@ class OptogeneticArrayStimulusHexagonalTiling(CorticalStimulationWithOptogenetic
             self.parameters.shuffle,
         )
         for trial in range(self.parameters.num_trials):
-            for h in hc:
-                self.parameters.stimulator_array_parameters.stimulating_signal_parameters.coords = h
-                self.append_direct_stim(trial,model,self.parameters.stimulator_array_parameters)
+            for intensity in self.parameters.intensities:
+                for h in hc:
+                    self.parameters.stimulator_array_parameters.stimulating_signal_parameters.intensity = intensity
+                    self.parameters.stimulator_array_parameters.stimulating_signal_parameters.coords = h
+                    self.append_direct_stim(trial,model,self.parameters.stimulator_array_parameters)
 
 
     def hexagonal_tiling_centers(self, x_c, y_c, radius, angle, xlen, ylen, shuffle=False):
@@ -517,6 +521,9 @@ class OptogeneticArrayStimulusOrientationTuningProtocol(CorticalStimulationWithO
 class OptogeneticArrayStimulusContrastBasedOrientationTuningProtocol(CorticalStimulationWithOptogeneticArray):
     """
     TODO
+    Basically here we want to simulate fullfueld visual stimuli of a given orientation
+    with optogenetic stimulation.
+
     Parameters
     ----------
     model : Model
