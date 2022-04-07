@@ -5,6 +5,7 @@ from mozaik.stimuli import InternalStimulus
 from mozaik.tools.distribution_parametrization import MozaikExtendedParameterSet
 from collections import OrderedDict
 from mozaik.sheets.direct_stimulator import OpticalStimulatorArrayChR
+import matplotlib
 from copy import deepcopy
 
 
@@ -216,11 +217,14 @@ class OptogeneticArrayStimulusCircles(CorticalStimulationWithOptogeneticArray):
                 If true, everything in the circle has value 0, everything outside has
                 the value *intensity*
 
-    flash_duration: int
-                The duration of a single pattern flash.
+    duration : float (ms)
+            Overall stimulus duration
 
-    blank_duration: int
-                The duration of no stimulation after a pattern flash.
+    onset_time : float (ms)
+            Time point when the stimulation turns on
+
+    offset_time : float(ms)
+            Time point when the stimulation turns off
     """
 
     required_parameters = ParameterSet({
@@ -232,21 +236,23 @@ class OptogeneticArrayStimulusCircles(CorticalStimulationWithOptogeneticArray):
         'x_center' : float,
         'y_center' : float,
         'inverted': bool,
-        'flash_duration': int,
-        'blank_duration': int,
+        'duration': int,
+        'onset_time': int,
+        'offset_time': int,
     })
 
     def __init__(self,model,parameters):
         CorticalStimulationWithOptogeneticArray.__init__(self, model,parameters)
         self.parameters.stimulator_array_parameters["stimulating_signal"] = "mozaik.sheets.direct_stimulator.stimulating_pattern_flash"
         self.parameters.stimulator_array_parameters["stimulating_signal_parameters"] = ParameterSet({
-            "shape": "circle-inverted" if self.parameters.inverted else "circle",
+            "shape": "circle",
             "intensity": self.parameters.intensity,
             "coords": (self.parameters.x_center,self.parameters.y_center),
             "radius": 0,
-            "duration": self.parameters.flash_duration + self.parameters.blank_duration,
-            "onset_time": 0,
-            "offset_time": self.parameters.flash_duration,
+            "inverted": self.parameters.inverted,
+            "duration": self.parameters.duration,
+            "onset_time": self.parameters.onset_time,
+            "offset_time": self.parameters.offset_time,
         })
 
         for trial in range(self.parameters.num_trials):
@@ -314,11 +320,14 @@ class OptogeneticArrayStimulusHexagonalTiling(CorticalStimulationWithOptogenetic
                 If true, shuffle the order of hexagon flashes in a single trial.
                 The order does not change across trials.
 
-    flash_duration: int
-                The duration of a single pattern flash.
+    duration : float (ms)
+            Overall stimulus duration
 
-    blank_duration: int
-                The duration of no stimulation after a pattern flash.
+    onset_time : float (ms)
+            Time point when the stimulation turns on
+
+    offset_time : float(ms)
+            Time point when the stimulation turns off
     """
 
     required_parameters = ParameterSet({
@@ -331,8 +340,9 @@ class OptogeneticArrayStimulusHexagonalTiling(CorticalStimulationWithOptogenetic
         'y_center' : float,
         'angle' : float,
         'shuffle': bool,
-        'flash_duration': int,
-        'blank_duration': int,
+        'duration': int,
+        'onset_time': int,
+        'offset_time': int,
     })
 
     def __init__(self,model,parameters):
@@ -344,9 +354,9 @@ class OptogeneticArrayStimulusHexagonalTiling(CorticalStimulationWithOptogenetic
             "angle": self.parameters.angle,
             "coords": (0,0),
             "radius": self.parameters.radius,
-            "duration": self.parameters.flash_duration + self.parameters.blank_duration,
-            "onset_time": 0,
-            "offset_time": self.parameters.flash_duration,
+            "duration": self.parameters.duration,
+            "onset_time": self.parameters.onset_time,
+            "offset_time": self.parameters.offset_time,
         })
 
         hc = self.hexagonal_tiling_centers(
