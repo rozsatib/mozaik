@@ -442,6 +442,15 @@ class DataStore(DataStoreView):
         """
         self.sensory_stimulus[str(stimulus)] = data
 
+    def add_direct_stimulation(self, direct_stimulators, stimulus):
+        """
+        The DataStore interface function that adds TODO into the datastore.
+        """
+        if self.parameters.store_stimuli:
+            for sheet in direct_stimulators:
+                for d in direct_stimulators[sheet]:
+                    d.save_to_datastore(self,stimulus)
+
     def add_analysis_result(self, result):
         """
         Add analysis results to data store. If there already exists ADS in the data store with the same parametrization this operation will fail.
