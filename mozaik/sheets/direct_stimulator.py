@@ -607,7 +607,6 @@ class OpticalStimulatorArrayChR(OpticalStimulatorArray):
         for i in range(0,len(self.scs)):
             res = odeint(ChRsystem,[0,0,0.8,0.2,0],self.times,args=(self.mixed_signals_photo[i,:].flatten(),self.parameters.update_interval))
             self.mixed_signals_current[i,:] =  60 * (17.2*res[:,0] + 2.9 * res[:,1])  / 2500 ; # the 60 corresponds to the 60mV difference between ChR reverse potential of 0mV and our expected mean Vm of about 60mV. This happens to end up being in nA which is what pyNN expect for current injection.
-        self.debug_plot()
 
     def debug_plot(self):
         pylab.figure(figsize=(15,15))
