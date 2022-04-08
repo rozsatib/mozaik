@@ -67,7 +67,7 @@ class CorticalStimulationWithOptogeneticArray(Experiment):
         }
         assert self.parameters.stimulator_array_parameters.keys() == stimulator_array_keys, "Stimulator array keys must be: %s. Supplied: %s. Difference: %s" % (stimulator_array_keys,self.parameters.stimulator_array_parameters.keys(),set(stimulator_array_keys)^set(self.parameters.stimulator_array_parameters.keys()))
 
-    def append_direct_stim(self, trial, model, stimulator_array_parameters):
+    def append_direct_stim(self, model, stimulator_array_parameters):
         sap = MozaikExtendedParameterSet(deepcopy(stimulator_array_parameters))
         if self.direct_stimulation == None:
             self.direct_stimulation = []
@@ -78,16 +78,17 @@ class CorticalStimulationWithOptogeneticArray(Experiment):
             d[sheet] = [OpticalStimulatorArrayChR(model.sheets[sheet],sap,self.shared_scs)]
             self.shared_scs = d[sheet][0].scs
 
-        self.direct_stimulation.append(d)
-        self.stimuli.append(
-            InternalStimulus(
-                frame_duration=sap.stimulating_signal_parameters.duration,
-                duration=sap.stimulating_signal_parameters.duration,
-                trial=trial,
-                direct_stimulation_name="OpticalStimulatorArrayChR",
-                direct_stimulation_parameters=sap,
+        for trial in range(self.parameters.num_trials):
+            self.direct_stimulation.append(d)
+            self.stimuli.append(
+                InternalStimulus(
+                    frame_duration=sap.stimulating_signal_parameters.duration,
+                    duration=sap.stimulating_signal_parameters.duration,
+                    trial=trial,
+                    direct_stimulation_name="OpticalStimulatorArrayChR",
+                    direct_stimulation_parameters=sap,
+                )
             )
-        )
 
 
 class SingleOptogeneticArrayStimulus(CorticalStimulationWithOptogeneticArray):
@@ -163,8 +164,7 @@ class SingleOptogeneticArrayStimulus(CorticalStimulationWithOptogeneticArray):
         self.parameters.stimulator_array_parameters["stimulating_signal"] = self.parameters.stimulating_signal
         self.parameters.stimulator_array_parameters["stimulating_signal_parameters"] = self.parameters.stimulating_signal_parameters
 
-        for trial in range(self.parameters.num_trials):
-            self.append_direct_stim(trial,model,self.parameters.stimulator_array_parameters)
+        self.append_direct_stim(model,self.parameters.stimulator_array_parameters)
 
 
 class OptogeneticArrayStimulusCircles(CorticalStimulationWithOptogeneticArray):
@@ -255,12 +255,11 @@ class OptogeneticArrayStimulusCircles(CorticalStimulationWithOptogeneticArray):
             "offset_time": self.parameters.offset_time,
         })
 
-        for trial in range(self.parameters.num_trials):
-            for intensity in self.parameters.intensities:
-                for r in self.parameters.radii:
-                    self.parameters.stimulator_array_parameters.stimulating_signal_parameters.intensity = intensity
-                    self.parameters.stimulator_array_parameters.stimulating_signal_parameters.radius = r
-                    self.append_direct_stim(trial,model,self.parameters.stimulator_array_parameters)
+        for intensity in self.parameters.intensities:
+            for r in self.parameters.radii:
+                self.parameters.stimulator_array_parameters.stimulating_signal_parameters.intensity = intensity
+                self.parameters.stimulator_array_parameters.stimulating_signal_parameters.radius = r
+                self.append_direct_stim(model,self.parameters.stimulator_array_parameters)
 
 
 class OptogeneticArrayStimulusHexagonalTiling(CorticalStimulationWithOptogeneticArray):
@@ -370,12 +369,11 @@ class OptogeneticArrayStimulusHexagonalTiling(CorticalStimulationWithOptogenetic
             self.parameters.stimulator_array_parameters.size,
             self.parameters.shuffle,
         )
-        for trial in range(self.parameters.num_trials):
-            for intensity in self.parameters.intensities:
-                for h in hc:
-                    self.parameters.stimulator_array_parameters.stimulating_signal_parameters.intensity = intensity
-                    self.parameters.stimulator_array_parameters.stimulating_signal_parameters.coords = h
-                    self.append_direct_stim(trial,model,self.parameters.stimulator_array_parameters)
+        for intensity in self.parameters.intensities:
+            for h in hc:
+                self.parameters.stimulator_array_parameters.stimulating_signal_parameters.intensity = intensity
+                self.parameters.stimulator_array_parameters.stimulating_signal_parameters.coords = h
+                self.append_direct_stim(model,self.parameters.stimulator_array_parameters)
 
 
     def hexagonal_tiling_centers(self, x_c, y_c, radius, angle, xlen, ylen, shuffle=False):
@@ -509,12 +507,11 @@ class OptogeneticArrayStimulusOrientationTuningProtocol(CorticalStimulationWithO
         })
 
         orientations = np.linspace(0,np.pi,self.parameters.num_orientations,endpoint=False)
-        for trial in range(self.parameters.num_trials):
-            for intensity in self.parameters.intensities:
-                for orientation in orientations:
-                    self.parameters.stimulator_array_parameters.stimulating_signal_parameters.intensity = intensity
-                    self.parameters.stimulator_array_parameters.stimulating_signal_parameters.orientation = orientation
-                    self.append_direct_stim(trial,model,self.parameters.stimulator_array_parameters)
+        for intensity in self.parameters.intensities:
+            for orientation in orientations:
+                self.parameters.stimulator_array_parameters.stimulating_signal_parameters.intensity = intensity
+                self.parameters.stimulator_array_parameters.stimulating_signal_parameters.orientation = orientation
+                self.append_direct_stim(model,self.parameters.stimulator_array_parameters)
 
 
 
@@ -600,9 +597,8 @@ class OptogeneticArrayStimulusContrastBasedOrientationTuningProtocol(CorticalSti
             "offset_time": self.parameters.offset_time,
         })
         orientations = np.linspace(0,np.pi,self.parameters.num_orientations,endpoint=False)
-        for trial in range(self.parameters.num_trials):
-            for contrast in self.parameters.contrasts:
-                for orientation in orientations:
-                    self.parameters.stimulator_array_parameters.stimulating_signal_parameters.orientation = orientation
-                    self.parameters.stimulator_array_parameters.stimulating_signal_parameters.contrast = contrast
-                    self.append_direct_stim(trial,model,self.parameters.stimulator_array_parameters)
+        for contrast in self.parameters.contrasts:
+            for orientation in orientations:
+                self.parameters.stimulator_array_parameters.stimulating_signal_parameters.orientation = orientation
+                self.parameters.stimulator_array_parameters.stimulating_signal_parameters.contrast = contrast
+                self.append_direct_stim(model,self.parameters.stimulator_array_parameters)
