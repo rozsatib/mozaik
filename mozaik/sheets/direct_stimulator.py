@@ -693,7 +693,12 @@ def generate_2d_stim(sheet, coor_x, coor_y, parameters):
                 Y coordinates of all electrodes
 
     parameters : Parameters
-                Extra parameters for the stimulator functions.
+                Extra parameters for the stimulator functions. They must at minimum
+                include the following parameter:
+
+                intensity : float
+                        Stimulation intensity, going from 0 to 1
+
     """
     if parameters.shape == "or_map":
         return or_map_mask(sheet, coor_x, coor_y, parameters)
@@ -709,8 +714,6 @@ def or_map_mask(sheet,coor_x,coor_y,parameters):
 
     Stimulation intensity = intensity * e^(-0.5*d^2/sharpness)
     d = circular_dist(selected_orientation-or_map_orientation)
-
-    TODO Naka-Rushton description
 
     Parameters
     ----------
@@ -730,30 +733,13 @@ def or_map_mask(sheet,coor_x,coor_y,parameters):
                             Variance of the Gaussian falloff
                     orientation : float
                             Selected orientation to stimulate
-
-                    contrast: float
-                        TODO
-                    naka_params : ParameterSet
-                        TODO
-                        nv_r_max
-                        nv_exponent
-                        nv_c50
-                        cs_r_max
-                        cs_exponent
-                        cs_c50
     """
     z = sheet.pop.all_cells.astype(int)
     vals = numpy.array([sheet.get_neuron_annotation(i,'LGNAfferentOrientation') for i in range(0,len(z))])
     px,py = sheet.vf_2_cs(sheet.pop.positions[0],sheet.pop.positions[1])
     ors = scipy.interpolate.griddata(list(zip(px,py)), vals, (coor_x, coor_y), method='nearest')
 
-    if "naka_params" in parameters:
-        rate = parameters.naka_params.nv_r_max * numpy.power(parameters.contrast,parameters.naka_params.nv_exponent) / (numpy.power(parameters.contrast,parameters.naka_params.nv_exponent) + parameters.naka_params.nv_c50)
-        intensity = numpy.power(rate * parameters.naka_params.cs_c50  / (parameters.naka_params.cs_r_max - rate), 1/ parameters.naka_params.cs_exponent)
-    else:
-        intensity = parameters.intensity
-
-    return intensity*np.exp(-0.5*np.power(circular_dist(parameters.orientation,ors,np.pi),2)/parameters.sharpness)
+    return parameters.intensity*np.exp(-0.5*np.power(circular_dist(parameters.orientation,ors,np.pi),2)/parameters.sharpness)
 
 
 def simple_shapes_binary_mask(coor_x, coor_y, shape, parameters):

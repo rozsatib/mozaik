@@ -7,6 +7,7 @@ from collections import OrderedDict
 from mozaik.sheets.direct_stimulator import OpticalStimulatorArrayChR
 import matplotlib
 from copy import deepcopy
+import random
 
 
 class CorticalStimulationWithOptogeneticArray(Experiment):
@@ -160,7 +161,7 @@ class SingleOptogeneticArrayStimulus(CorticalStimulationWithOptogeneticArray):
 
 
     def __init__(self,model,parameters):
-        CorticalStimulationWithOptogeneticArray.__init__(self, model,parameters)
+        CorticalStimulationWithOptogeneticArray.__init__(self, model, parameters)
         self.parameters.stimulator_array_parameters["stimulating_signal"] = self.parameters.stimulating_signal
         self.parameters.stimulator_array_parameters["stimulating_signal_parameters"] = self.parameters.stimulating_signal_parameters
 
@@ -242,7 +243,7 @@ class OptogeneticArrayStimulusCircles(CorticalStimulationWithOptogeneticArray):
     })
 
     def __init__(self,model,parameters):
-        CorticalStimulationWithOptogeneticArray.__init__(self, model,parameters)
+        CorticalStimulationWithOptogeneticArray.__init__(self, model, parameters)
         self.parameters.stimulator_array_parameters["stimulating_signal"] = "mozaik.sheets.direct_stimulator.stimulating_pattern_flash"
         self.parameters.stimulator_array_parameters["stimulating_signal_parameters"] = ParameterSet({
             "shape": "circle",
@@ -347,7 +348,7 @@ class OptogeneticArrayStimulusHexagonalTiling(CorticalStimulationWithOptogenetic
     })
 
     def __init__(self,model,parameters):
-        CorticalStimulationWithOptogeneticArray.__init__(self, model,parameters)
+        CorticalStimulationWithOptogeneticArray.__init__(self, model, parameters)
         self.parameters.stimulator_array_parameters["stimulating_signal"] = "mozaik.sheets.direct_stimulator.stimulating_pattern_flash"
         self.parameters.stimulator_array_parameters["stimulating_signal_parameters"] = ParameterSet({
             "shape": "hexagon",
@@ -494,7 +495,7 @@ class OptogeneticArrayStimulusOrientationTuningProtocol(CorticalStimulationWithO
     })
 
     def __init__(self,model,parameters):
-        CorticalStimulationWithOptogeneticArray.__init__(self, model,parameters)
+        CorticalStimulationWithOptogeneticArray.__init__(self, model, parameters)
         self.parameters.stimulator_array_parameters["stimulating_signal"] = "mozaik.sheets.direct_stimulator.stimulating_pattern_flash"
         self.parameters.stimulator_array_parameters["stimulating_signal_parameters"] = ParameterSet({
             "shape": "or_map",
@@ -517,9 +518,40 @@ class OptogeneticArrayStimulusOrientationTuningProtocol(CorticalStimulationWithO
 
 class OptogeneticArrayStimulusContrastBasedOrientationTuningProtocol(CorticalStimulationWithOptogeneticArray):
     """
-    TODO
-    Basically here we want to simulate fullfueld visual stimuli of a given orientation
-    with optogenetic stimulation.
+    Optogenetic stimulation of cortical sheets with an array of light sources, with a
+    pattern based on the cortical orientation map, simulating homogeneously oriented
+    visual stimuli of some specific contrast.
+
+    Based on the Antolik et al.:
+    Antolik, Jan & Sabatier, Quentin & Galle, Charlie & Frégnac, Yves & Benosman, Ryad. (2019). Cortical visual prosthesis: a detailed large-scale simulation study. 10.1101/610378.
+
+    Both contrast-response curves for visual stimulation and intensity-response curves
+    for optogenetic stimulation can be well fitted with Naka-Rushton functions.
+    Thus, to simulate the effect of some specific contrast, we need to first retrieve
+    the firing rate that would result in visual stimulation with that contrast,
+    and then retrieve the intensity of optogenetic stimulation that would result in
+    that firing rate.
+
+    intensity = IR^-1(CR(contrast))
+
+    Here, IR^-1 is the inverse optogenetic intensity-response function, and
+    CR is the visual contrast-response function. The parameters of these Naka-Rushton
+    functions should be fit separately and provided as a parameter to this experiment.
+
+    After the stimulation intensity has been has been calculated for a specific
+    contrast, the stimulation protocol proceeds in the same way as in
+    OptogeneticArrayStimulusOrientationTuningProtocol:
+
+    At each iteration of the orientation tuning protocol, an orientation
+    is selected as the primary orientation to maximally stimulate (with *intensity*
+    intensity), and the stimulation intensity for the other orientations in the cortical
+    orientation map falls off as a Gaussian with the circular distance from the selected
+    orientation:
+
+    Stimulation intensity = intensity * e^(-0.5*d^2/sharpness)
+    d = circular_dist(selected_orientation-or_map_orientation)
+
+    For this we use 2 Naka-Rushton functions: one for the forward and one for the inverse transformation
 
     Parameters
     ----------
@@ -552,10 +584,20 @@ class OptogeneticArrayStimulusContrastBasedOrientationTuningProtocol(CorticalSti
                 Number of orientations to present
 
     contrasts : list(float)
-                TODO
+                List of contrasts, for which we simulate the visual activity by
+                optogenetic stimulation.
 
-    naka_params: ParameterSet
-                TODO
+    contrast_response_params: ParameterSet
+                Parameters of the Naka-Rushton function of the contrast-response
+                curve for visual stimulus: CR(c) = r_max * c^n / (c^n + c_50)
+
+                Fitting these parameters is not part of this experiment.
+
+    intensity_response_params: ParameterSet
+                Parameters of the Naka-Rushton function of the intensity-response
+                curve for optogenetic stimulation: IR(i) = r_max * i^n / (i^n + c_50)
+
+                Fitting these parameters is not part of this experiment.
 
     sharpness : float
             Variance of the Gaussian falloff
@@ -576,7 +618,8 @@ class OptogeneticArrayStimulusContrastBasedOrientationTuningProtocol(CorticalSti
             'stimulator_array_parameters' : ParameterSet,
             'num_orientations' : int,
             'contrasts' : list,
-            'naka_params' : ParameterSet,
+            'contrast_response_params' : ParameterSet,
+            'intensity_response_params' : ParameterSet,
             'sharpness' : float,
             'duration': int,
             'onset_time': int,
@@ -585,14 +628,13 @@ class OptogeneticArrayStimulusContrastBasedOrientationTuningProtocol(CorticalSti
 
 
     def __init__(self,model,parameters):
-        CorticalStimulationWithOptogeneticArray.__init__(self, model,parameters)
+        CorticalStimulationWithOptogeneticArray.__init__(self, model, parameters)
         self.parameters.stimulator_array_parameters["stimulating_signal"] = "mozaik.sheets.direct_stimulator.stimulating_pattern_flash"
         self.parameters.stimulator_array_parameters["stimulating_signal_parameters"] = ParameterSet({
             "shape": "or_map",
             "orientation": 0,
             "sharpness": self.parameters.sharpness,
             "duration": self.parameters.duration,
-            "naka_params": self.parameters.naka_params,
             "onset_time": self.parameters.onset_time,
             "offset_time": self.parameters.offset_time,
         })
@@ -600,5 +642,12 @@ class OptogeneticArrayStimulusContrastBasedOrientationTuningProtocol(CorticalSti
         for contrast in self.parameters.contrasts:
             for orientation in orientations:
                 self.parameters.stimulator_array_parameters.stimulating_signal_parameters.orientation = orientation
-                self.parameters.stimulator_array_parameters.stimulating_signal_parameters.contrast = contrast
+                self.parameters.stimulator_array_parameters.stimulating_signal_parameters.intensity = self.calculate_optogenetic_stim_scale(contrast, self.parameters.contrast_response_params, self.parameters.intensity_response_params)
                 self.append_direct_stim(model,self.parameters.stimulator_array_parameters)
+
+    def calculate_optogenetic_stim_scale(self, contrast, cr, ir):
+        # Forward transformation - visual stimulus to firing rate
+        rate = cr.r_max * np.power(contrast, cr.n) / (np.power(contrast, cr.n) + cr.c_50)
+        # Inverse transformation - firing rate to intensity of optogenetic stimulation
+        intensity = np.power(rate * ir.c_50  / (ir.r_max - rate), 1 / ir.n)
+        return intensity
