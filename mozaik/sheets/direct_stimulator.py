@@ -478,15 +478,19 @@ class OpticalStimulatorArray(DirectStimulator):
                temp = temp[max(int(cutof-nearest_ix[i]),0):max(int(2*n+1+cutof-nearest_ix[i]),0),max(int(cutof-nearest_iy[i]),0):max(int(2*n+1+cutof-nearest_iy[i]),0)]
                self.mixed_signals_photo[i,:] = K*W*numpy.dot(temp.flatten(),numpy.reshape(ss,(len(temp.flatten()),-1)))
 
-        assert numpy.shape(self.mixed_signals_photo) == (self.sheet.pop.size,numpy.shape(self.stimulator_signals)[2]), "ERROR: mixed_signals_photo doesn't have the desired size:" + str(numpy.shape(self.mixed_signals_photo)) + " vs " +str((self.sheet.pop.size,numpy.shape(self.stimulator_signals)[1]))
-        
         self.stimulation_duration = numpy.shape(self.mixed_signals_photo)[1] * self.parameters.update_interval
+
+        stimulated_cell_indices = self.mixed_signals_photo.sum(axis=1)>0
+        self.stimulated_cells = self.sheet.pop.all_cells[stimulated_cell_indices]
+        self.mixed_signals_photo = self.mixed_signals_photo[stimulated_cell_indices]
+
+        assert numpy.shape(self.mixed_signals_photo) == (len(self.stimulated_cells),numpy.shape(self.stimulator_signals)[2]), "ERROR: mixed_signals_photo doesn't have the desired size:" + str(numpy.shape(self.mixed_signals_photo)) + " vs " +str((len(self.stimulated_cells),numpy.shape(self.stimulator_signals)[2]))
 
         if shared_scs != None:
            self.scs = shared_scs
         else:
-           self.scs = [self.sheet.sim.StepCurrentSource(times=[0.0], amplitudes=[0.0]) for cell in self.sheet.pop.all_cells] 
-           for cell,scs in zip(self.sheet.pop.all_cells,self.scs):
+           self.scs = [self.sheet.sim.StepCurrentSource(times=[0.0], amplitudes=[0.0]) for cell in self.stimulated_cells]
+           for cell,scs in zip(self.stimulated_cells,self.scs):
                cell.inject(scs)
 
     def prepare_stimulation(self,duration,offset):
@@ -505,7 +509,7 @@ class OpticalStimulatorArray(DirectStimulator):
         data_store.full_datastore.add_analysis_result(
             AnalogSignalList(
                 [NeoAnalogSignal(self.mixed_signals_photo[i, :], sampling_period=self.parameters.update_interval*qt.ms, units=qt.dimensionless) for i in range(self.mixed_signals_photo.shape[0])],
-                [int(ID) for ID in self.sheet.pop.all_cells],
+                [int(ID) for ID in self.stimulated_cells],
                 qt.dimensionless,
                 x_axis_name="time",
                 y_axis_name="optical_stimulation_photons",
@@ -516,7 +520,7 @@ class OpticalStimulatorArray(DirectStimulator):
         data_store.full_datastore.add_analysis_result(
             AnalogSignalList(
                 [NeoAnalogSignal(self.mixed_signals_current[i, :], sampling_period=self.parameters.update_interval*qt.ms, units=qt.nA) for i in range(self.mixed_signals_current.shape[0])],
-                [int(ID) for ID in self.sheet.pop.all_cells],
+                [int(ID) for ID in self.stimulated_cells],
                 qt.nA,
                 x_axis_name="time",
                 y_axis_name="optical_stimulation_current",
