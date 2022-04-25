@@ -72,12 +72,12 @@ class CorticalStimulationWithOptogeneticArray(Experiment):
         sap = MozaikExtendedParameterSet(deepcopy(stimulator_array_parameters))
         if self.direct_stimulation == None:
             self.direct_stimulation = []
-            self.shared_scs = OrderedDict((sheet, None) for sheet in self.parameters.sheet_list)
+            self.shared_scs = OrderedDict((sheet, {}) for sheet in self.parameters.sheet_list)
 
         d = OrderedDict()
         for sheet in self.parameters.sheet_list:
             d[sheet] = [OpticalStimulatorArrayChR(model.sheets[sheet],sap,self.shared_scs[sheet])]
-            self.shared_scs[sheet] = d[sheet][0].scs
+            self.shared_scs[sheet].update({d[sheet][0].stimulated_cells[i] : d[sheet][0].scs[i] for i in range(len(d[sheet][0].scs))})
 
         for trial in range(self.parameters.num_trials):
             self.direct_stimulation.append(d)

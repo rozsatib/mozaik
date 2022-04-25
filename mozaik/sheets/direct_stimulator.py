@@ -486,12 +486,14 @@ class OpticalStimulatorArray(DirectStimulator):
 
         assert numpy.shape(self.mixed_signals_photo) == (len(self.stimulated_cells),numpy.shape(self.stimulator_signals)[2]), "ERROR: mixed_signals_photo doesn't have the desired size:" + str(numpy.shape(self.mixed_signals_photo)) + " vs " +str((len(self.stimulated_cells),numpy.shape(self.stimulator_signals)[2]))
 
-        if shared_scs != None:
-           self.scs = shared_scs
-        else:
-           self.scs = [self.sheet.sim.StepCurrentSource(times=[0.0], amplitudes=[0.0]) for cell in self.stimulated_cells]
-           for cell,scs in zip(self.stimulated_cells,self.scs):
-               cell.inject(scs)
+        if shared_scs == None:
+            shared_scs = {}
+
+        self.scs = [self.sheet.sim.StepCurrentSource(times=[0.0], amplitudes=[0.0]) if cell not in shared_scs else shared_scs[cell] for cell in self.stimulated_cells]
+
+        for cell,scs in zip(self.stimulated_cells,self.scs):
+            cell.inject(scs)
+
 
     def prepare_stimulation(self,duration,offset):
         assert self.stimulation_duration == duration, "stimulation_duration != duration :"  + str(self.stimulation_duration) + " " + str(duration)
