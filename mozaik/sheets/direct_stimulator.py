@@ -492,7 +492,8 @@ class OpticalStimulatorArray(DirectStimulator):
         self.scs = [self.sheet.sim.StepCurrentSource(times=[0.0], amplitudes=[0.0]) if cell not in shared_scs else shared_scs[cell] for cell in self.stimulated_cells]
 
         for cell,scs in zip(self.stimulated_cells,self.scs):
-            cell.inject(scs)
+            if cell not in shared_scs:
+                cell.inject(scs)
 
 
     def prepare_stimulation(self,duration,offset):
