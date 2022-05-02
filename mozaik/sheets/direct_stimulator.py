@@ -433,7 +433,7 @@ class OpticalStimulatorArray(DirectStimulator):
         f.close()
 
         #light_flux_lookup =  scipy.interpolate.RegularGridInterpolator((numpy.arange(0,1080,60),numpy.linspace(0,1,354)*149.701*numpy.sqrt(2)), radprofs, method='linear',bounds_error=False,fill_value=0)
-        light_flux_lookup =  scipy.interpolate.RegularGridInterpolator((numpy.arange(0,1080,60),numpy.linspace(0,1,708)*299.7*numpy.sqrt(2)), radprofs, method='linear',bounds_error=False,fill_value=0)
+        light_flux_lookup =  scipy.interpolate.RegularGridInterpolator((np.linspace(0,1080,radprofs.shape[0]),numpy.linspace(0,1,radprofs.shape[1])*299.7*numpy.sqrt(2)), radprofs, method='linear',bounds_error=False,fill_value=0)
 
         # the constant translating the data in radprofs to photons/s/cm^2
         K = 2.97e26
@@ -622,13 +622,14 @@ class OpticalStimulatorArrayChR(OpticalStimulatorArray):
         sc = ax.scatter(self.sheet.pop.positions[0],self.sheet.pop.positions[1],s=10,c=numpy.squeeze(numpy.max(self.mixed_signals_photo,axis=1)),vmin=0)
         pylab.colorbar(sc, ax=ax)
 
+        idx = np.argmax(self.mixed_signals_photo.sum(axis=1))
         ax = pylab.subplot(122)
         ax.set_title('Single neuron current injection profile')
-        ax.plot(self.times,self.mixed_signals_photo[100,:],'k')
+        ax.plot(self.times,self.mixed_signals_photo[idx,:],'k')
         ax.set_ylabel('photons/cm2/s', color='k')
 
         ax2 = ax.twinx()
-        ax2.plot(self.times,self.mixed_signals_current[100,:],'g')
+        ax2.plot(self.times,self.mixed_signals_current[idx,:],'g')
         ax2.set_ylabel('nA', color='g')
         pylab.savefig(Global.root_directory +'OpticalStimulatorArrayTest_' + self.sheet.name.replace('/','_') + '.png')
         pylab.clf()
