@@ -190,7 +190,7 @@ class TestOpticalStimulatorArrayChR:
             shared_scs = ds.scs
             d2 = self.record_and_retrieve_data(ds, self.duration)
 
-            assert np.array_equal(d1,d2)
+            assert np.array_equal(d1, d2)
 
     def plot_max_response(self, d1, d2):
         import matplotlib.pyplot as plt
