@@ -415,7 +415,7 @@ class OpticalStimulatorArray(DirectStimulator):
             'light_source_light_propagation_data' : str,
     })
     
-    def __init__(self, sheet,parameters,shared_scs=None):
+    def __init__(self, sheet,parameters,shared_scs=None,optimized_scs=True):
         DirectStimulator.__init__(self, sheet,parameters)
 
         assert math.fmod(self.parameters.size,self.parameters.spacing) < 0.000000001 , "Error the size has to be multiple of spacing!"
@@ -433,7 +433,7 @@ class OpticalStimulatorArray(DirectStimulator):
         f.close()
 
         #light_flux_lookup =  scipy.interpolate.RegularGridInterpolator((numpy.arange(0,1080,60),numpy.linspace(0,1,354)*149.701*numpy.sqrt(2)), radprofs, method='linear',bounds_error=False,fill_value=0)
-        light_flux_lookup =  scipy.interpolate.RegularGridInterpolator((numpy.arange(0,1080,60),numpy.linspace(0,1,708)*299.7*numpy.sqrt(2)), radprofs, method='linear',bounds_error=False,fill_value=0)
+        light_flux_lookup =  scipy.interpolate.RegularGridInterpolator((np.linspace(0,1080,radprofs.shape[0]),numpy.linspace(0,1,radprofs.shape[1])*299.7*numpy.sqrt(2)), radprofs, method='linear',bounds_error=False,fill_value=0)
 
         # the constant translating the data in radprofs to photons/s/cm^2
         K = 2.97e26
@@ -469,22 +469,27 @@ class OpticalStimulatorArray(DirectStimulator):
         nearest_ix[nearest_ix>2*n] = 2*n
         nearest_iy[nearest_iy>2*n] = 2*n
 
-
         for i in range(0,self.sheet.pop.size):
             temp,cutof = mixing_templates[int(nearest_iz[i])]
 
             ss = self.stimulator_signals[max(int(nearest_ix[i]-cutof),0):int(nearest_ix[i]+cutof+1),max(int(nearest_iy[i]-cutof),0):int(nearest_iy[i]+cutof+1),:]
-            if ss != numpy.array([]):
+            if ss.size != 0:
                temp = temp[max(int(cutof-nearest_ix[i]),0):max(int(2*n+1+cutof-nearest_ix[i]),0),max(int(cutof-nearest_iy[i]),0):max(int(2*n+1+cutof-nearest_iy[i]),0)]
                self.mixed_signals_photo[i,:] = K*W*numpy.dot(temp.flatten(),numpy.reshape(ss,(len(temp.flatten()),-1)))
 
         self.stimulation_duration = numpy.shape(self.mixed_signals_photo)[1] * self.parameters.update_interval
 
+        assert numpy.shape(self.mixed_signals_photo) == (self.sheet.pop.size,self.stimulator_signals.shape[2]), "ERROR: mixed_signals_photo doesn't have the desired size:" + str(self.mixed_signals_photo.shape) + " vs " +str((self.sheet.pop.size,stimulator_signals.shape[2]))
+
+        if optimized_scs:
+            self.setup_scs(shared_scs)
+        else:
+            self.setup_scs_old(shared_scs)
+
+    def setup_scs(self, shared_scs):
         stimulated_cell_indices = self.mixed_signals_photo.sum(axis=1)>0
         self.stimulated_cells = self.sheet.pop.all_cells[stimulated_cell_indices]
         self.mixed_signals_photo = self.mixed_signals_photo[stimulated_cell_indices]
-
-        assert numpy.shape(self.mixed_signals_photo) == (len(self.stimulated_cells),numpy.shape(self.stimulator_signals)[2]), "ERROR: mixed_signals_photo doesn't have the desired size:" + str(numpy.shape(self.mixed_signals_photo)) + " vs " +str((len(self.stimulated_cells),numpy.shape(self.stimulator_signals)[2]))
 
         if shared_scs == None:
             shared_scs = {}
@@ -493,6 +498,14 @@ class OpticalStimulatorArray(DirectStimulator):
 
         for cell,scs in zip(self.stimulated_cells,self.scs):
             if cell not in shared_scs:
+                cell.inject(scs)
+
+    def setup_scs_old(self, shared_scs):
+        if shared_scs != None:
+            self.scs = shared_scs
+        else:
+            self.scs = [self.sheet.sim.StepCurrentSource(times=[0.0], amplitudes=[0.0]) for cell in self.sheet.pop.all_cells]
+            for cell,scs in zip(self.sheet.pop.all_cells,self.scs):
                 cell.inject(scs)
 
 
@@ -606,8 +619,8 @@ class OpticalStimulatorArrayChR(OpticalStimulatorArray):
     Channelrhodopsin has reverse potential of ~0, and we assume that our neurons
     sits on average at -60mV to calculate the current.
     """
-    def __init__(self, sheet, parameters,shared_scs=None):
-        OpticalStimulatorArray.__init__(self, sheet,parameters,shared_scs)
+    def __init__(self, sheet, parameters,shared_scs=None,optimized_scs=True):
+        OpticalStimulatorArray.__init__(self, sheet,parameters,shared_scs,optimized_scs)
         self.times = numpy.arange(0,self.stimulation_duration,self.parameters.update_interval)
         self.mixed_signals_current = np.zeros_like(self.mixed_signals_photo)
 
@@ -623,13 +636,14 @@ class OpticalStimulatorArrayChR(OpticalStimulatorArray):
         sc = ax.scatter(self.sheet.pop.positions[0],self.sheet.pop.positions[1],s=10,c=numpy.squeeze(numpy.max(self.mixed_signals_photo,axis=1)),vmin=0)
         pylab.colorbar(sc, ax=ax)
 
+        idx = np.argmax(self.mixed_signals_photo.sum(axis=1))
         ax = pylab.subplot(122)
         ax.set_title('Single neuron current injection profile')
-        ax.plot(self.times,self.mixed_signals_photo[100,:],'k')
+        ax.plot(self.times,self.mixed_signals_photo[idx,:],'k')
         ax.set_ylabel('photons/cm2/s', color='k')
 
         ax2 = ax.twinx()
-        ax2.plot(self.times,self.mixed_signals_current[100,:],'g')
+        ax2.plot(self.times,self.mixed_signals_current[idx,:],'g')
         ax2.set_ylabel('nA', color='g')
         pylab.savefig(Global.root_directory +'OpticalStimulatorArrayTest_' + self.sheet.name.replace('/','_') + '.png')
         pylab.clf()
@@ -711,6 +725,7 @@ def generate_2d_stim(sheet, coor_x, coor_y, parameters):
         return or_map_mask(sheet, coor_x, coor_y, parameters)
     elif parameters.shape in ["hexagon", "circle","hexagon"]:
         return simple_shapes_binary_mask(coor_x, coor_y, parameters.shape, parameters) * parameters.intensity
+
 
 def or_map_mask(sheet,coor_x,coor_y,parameters):
     """
