@@ -9,68 +9,11 @@ from parameters import ParameterSet
 from mozaik.sheets.vision import VisualCorticalUniformSheet3D
 from mozaik.sheets.direct_stimulator import *
 from mozaik.experiments.optogenetic import *
-from mozaik.tools.distribution_parametrization import PyNNDistribution
-from mozaik.tools.distribution_parametrization import MozaikExtendedParameterSet
-
-model_params = {
-    "input_space_type": "",
-    "input_space": None,
-    "sheets": None,
-    "results_dir": "",
-    "name": "M",
-    "reset": True,
-    "null_stimulus_period": 150.0,
-    "store_stimuli": False,
-    "min_delay": 0.1,
-    "max_delay": 100,
-    "time_step": 0.1,
-    "pynn_seed": 936395,
-    "mpi_seed": 1023,
-}
-
-
-layer_params = {
-    "name": "exc_sheet",
-    "sx": 400,
-    "sy": 400,
-    "density": 1000,
-    "min_depth": 100,
-    "max_depth": 400,
-    "mpi_safe": False,
-    "magnification_factor": 1000,
-    "cell": {
-        "model": "IF_cond_exp",
-        "params": {
-            "v_thresh": -50.0,
-            "v_rest": -60.0,
-            "v_reset": -60.0,
-            "tau_refrac": 5.0,
-            "tau_m": 20.0,
-            "cm": 0.2,
-            "e_rev_E": 0.0,
-            "e_rev_I": -80.0,
-            "tau_syn_E": 5.0,
-            "tau_syn_I": 10.0,
-        },
-        "initial_values": {
-            "v": PyNNDistribution(name="uniform", low=-60, high=-60),
-        },
-    },
-    "artificial_stimulators": {},
-    "recording_interval": 1.0,
-    "recorders": {
-        "2": {
-            "component": "mozaik.sheets.population_selector.RCGrid",
-            "variables": ("v"),
-            "params": {
-                "size": 400.0,
-                "spacing": 20.0,
-                "offset_x": 0.0,
-                "offset_y": 0.0,
-            },
-        },
-    },
-}
+from mozaik.tools.distribution_parametrization import (
+    load_parameters,
+    PyNNDistribution,
+    MozaikExtendedParameterSet,
+)
 
 
 class TestDirectStimulator:
@@ -95,32 +38,10 @@ class TestOpticalStimulatorArray:
 
 class TestOpticalStimulatorArrayChR:
 
-    stim_array_parameters = MozaikExtendedParameterSet(
-        {
-            "size": 400,
-            "spacing": 10,
-            "depth_sampling_step": 10,
-            "light_source_light_propagation_data": "tests/sheets/unity_radprof.pickle",
-            "update_interval": 1,
-            "stimulating_signal": "mozaik.sheets.direct_stimulator.stimulating_pattern_flash",
-            "stimulating_signal_parameters": ParameterSet(
-                {
-                    "shape": "circle",
-                    "coords": [[0, 0]],
-                    "radius": 125,
-                    "intensity": [0.05],
-                    "duration": 1000,
-                    "onset_time": 250,
-                    "offset_time": 750,
-                }
-            ),
-        }
-    )
-
     model = None
     sheet = None
 
-    def create_unity_radprof(self, h=1000, w=1000):
+    def create_unity_radprof(self, h=20, w=100):
         radprof = np.zeros((h, w))
         radprof[:, 0] = 1
         f = open("tests/sheets/unity_radprof.pickle", "wb")
@@ -129,10 +50,27 @@ class TestOpticalStimulatorArrayChR:
 
     @classmethod
     def setup_class(cls):
-        cls.model = Model(nest, 8, ParameterSet(model_params))
-        cls.sheet = VisualCorticalUniformSheet3D(cls.model, ParameterSet(layer_params))
+        model_params = load_parameters("tests/sheets/model_params")
+        cls.sheet_params = load_parameters("tests/sheets/exc_sheet_params")
+        cls.opt_array_params = load_parameters("tests/sheets/opt_array_params")
+        cls.opt_array_params[
+            "stimulating_signal"
+        ] = "mozaik.sheets.direct_stimulator.stimulating_pattern_flash"
+        cls.opt_array_params["stimulating_signal_parameters"] = ParameterSet(
+            {
+                "shape": "circle",
+                "coords": [[0, 0]],
+                "radius": 125,
+                "intensity": [0.05],
+                "duration": 150,
+                "onset_time": 0,
+                "offset_time": 75,
+            }
+        )
+        cls.model = Model(nest, 8, model_params)
+        cls.sheet = VisualCorticalUniformSheet3D(cls.model, ParameterSet(cls.sheet_params))
         cls.sheet.record()
-        cls.duration = cls.stim_array_parameters.stimulating_signal_parameters.duration
+        cls.duration = cls.opt_array_params.stimulating_signal_parameters.duration
 
     def record_and_retrieve_data(self, ds, duration):
         self.model.reset()
@@ -141,15 +79,28 @@ class TestOpticalStimulatorArrayChR:
         ds.inactivate(duration)
         return (
             self.sheet.get_data(duration).analogsignals[0]
-            - layer_params["cell"]["params"]["v_rest"] * qt.mV
+            - self.sheet_params["cell"]["params"]["v_rest"] * qt.mV
         )
+
+    def test_stimulated_cells(self):
+        sap = MozaikExtendedParameterSet(deepcopy(self.opt_array_params))
+        ds = OpticalStimulatorArrayChR(self.sheet, sap)
+        d = self.record_and_retrieve_data(ds, self.duration)
+        d = d.sum(axis=0)
+        recorded_cells = ds.sheet.pop.all_cells[self.sheet.to_record['v']]
+        stim_ids = set(ds.stimulated_cells)
+        for i in range(len(recorded_cells)):
+            if recorded_cells[i] in stim_ids:
+                assert d[i] != 0, "Zero input to neuron in stimulated_cells!"
+            else:
+                assert d[i] == 0, "Nonzero input to neuron not in stimulated_cells!"
 
     def test_scs_sharing(self):
         radii = np.arange(50, 200.1, 50)
         shared_scs = {}
 
         for radius in radii:
-            sap = MozaikExtendedParameterSet(deepcopy(self.stim_array_parameters))
+            sap = MozaikExtendedParameterSet(deepcopy(self.opt_array_params))
             sap.stimulating_signal_parameters.radius = radius
 
             ds = OpticalStimulatorArrayChR(self.sheet, sap, shared_scs)
@@ -169,11 +120,11 @@ class TestOpticalStimulatorArrayChR:
         radii = np.arange(50, 200.1, 50)
 
         for radius in radii:
-            sap = MozaikExtendedParameterSet(deepcopy(self.stim_array_parameters))
+            sap = MozaikExtendedParameterSet(deepcopy(self.opt_array_params))
             sap.stimulating_signal_parameters.radius = radius
 
             ds = OpticalStimulatorArrayChR(
-                self.sheet, self.stim_array_parameters, shared_scs_optimized
+                self.sheet, self.opt_array_params, shared_scs_optimized
             )
 
             shared_scs_optimized.update(
@@ -183,7 +134,7 @@ class TestOpticalStimulatorArrayChR:
 
             ds = OpticalStimulatorArrayChR(
                 self.sheet,
-                self.stim_array_parameters,
+                self.opt_array_params,
                 shared_scs=shared_scs,
                 optimized_scs=False,
             )
