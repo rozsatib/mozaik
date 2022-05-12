@@ -736,6 +736,8 @@ def generate_2d_stim(sheet, coor_x, coor_y, parameters):
 def image_stim(coor_x, coor_y, parameters):
     """
     TODO documentation
+    Input image range must be in 0-1! It will be multiplied by the intensity parameter, and not
+    be normalized beforehand!
     """
     for i in range(coor_x.shape[0]):
         assert np.allclose(coor_x[0, :], coor_x[i, :]), "X coordinates must be in grid!"
@@ -748,9 +750,7 @@ def image_stim(coor_x, coor_y, parameters):
         A,
         fill_value=0,
     )(coor_x[0, :], coor_y[:, 0])
-    Amin, Amax = A_interp.min(), A_interp.max()
-    A_interp = (A_interp - Amin) / (Amax - Amin) * parameters.intensity
-    return A_interp
+    return A_interp * parameters.intensity
 
 
 def or_map_mask(sheet,coor_x,coor_y,parameters):
