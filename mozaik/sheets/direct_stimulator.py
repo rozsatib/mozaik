@@ -727,6 +727,30 @@ def generate_2d_stim(sheet, coor_x, coor_y, parameters):
         return or_map_mask(sheet, coor_x, coor_y, parameters)
     elif parameters.shape in ["hexagon", "circle","hexagon"]:
         return simple_shapes_binary_mask(coor_x, coor_y, parameters.shape, parameters) * parameters.intensity
+    elif parameters.shape == "image":
+        return image_stim(coor_x, coor_y, parameters)
+    else:
+        raise ValueError("Unknown shape %s for cortical stimulation!", parameters.shape)
+
+
+def image_stim(coor_x, coor_y, parameters):
+    """
+    TODO documentation
+    """
+    for i in range(coor_x.shape[0]):
+        assert np.allclose(coor_x[0, :], coor_x[i, :]), "X coordinates must be in grid!"
+    for i in range(coor_y.shape[1]):
+        assert np.allclose(coor_y[:, 0], coor_y[:, i]), "Y coordinates must be in grid!"
+    A = np.load(parameters.image_path)
+    A_interp = scipy.interpolate.interp2d(
+        np.linspace(coor_x[0, :].min(), coor_x[0, :].max(), A.shape[0]),
+        np.linspace(coor_y[:, 0].min(), coor_y[:, 0].max(), A.shape[1]),
+        A,
+        fill_value=0,
+    )(coor_x[0, :], coor_y[:, 0])
+    Amin, Amax = A_interp.min(), A_interp.max()
+    A_interp = (A_interp - Amin) / (Amax - Amin) * parameters.intensity
+    return A_interp
 
 
 def or_map_mask(sheet,coor_x,coor_y,parameters):

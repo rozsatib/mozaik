@@ -13,6 +13,9 @@ from mozaik.tools.distribution_parametrization import (
     PyNNDistribution,
     MozaikExtendedParameterSet,
 )
+from mozaik.connectors.vision import MapDependentModularConnectorFunction
+from mozaik.tools.circ_stat import circular_dist
+import scipy.stats
 
 
 class TestCorticalStimulationWithOptogeneticArray:
@@ -128,18 +131,62 @@ class TestOptogeneticArrayStimulusHexagonalTiling(
             assert self.stimulated_neuron_in_radius(ds)
 
     @pytest.mark.parametrize("radius", [25, 50, 75])
+    @pytest.mark.skip
     def test_hexagon_centers(self, radius):
         # Check that all hexagon centers are at least 2*sqrt(3)/2*r distance
         # and that there is at least one hexagon at precisely that distance
         dss = self.get_experiment_direct_stimulators(center=[0, 0], radius=radius)
-        centers = np.array([ds.parameters.stimulating_signal_parameters.coords for ds in dss]).squeeze()
+        centers = np.array(
+            [ds.parameters.stimulating_signal_parameters.coords for ds in dss]
+        ).squeeze()
         for i in range(centers.shape[0]):
             d = np.sqrt(((centers[i] - centers) ** 2).sum(axis=1))
-            d[i]=np.infty
-            a = np.isclose(d,radius*np.sqrt(3))
+            d[i] = np.infty
+            a = np.isclose(d, radius * np.sqrt(3))
             assert np.any(a)
             d[a] = np.infty
-            assert np.all(d >= radius*np.sqrt(3))
+            assert np.all(d >= radius * np.sqrt(3))
+
+
+class TestOptogeneticArrayImageStimulus(TestCorticalStimulationWithOptogeneticArray):
+    """"""
+
+    def get_experiment(self, im_path):
+        return OptogeneticArrayImageStimulus(
+            self.model,
+            MozaikExtendedParameterSet(
+                {
+                    "sheet_list": ["exc_sheet"],
+                    "num_trials": 1,
+                    "stimulator_array_parameters": deepcopy(self.opt_array_params),
+                    "intensities": [1.0],
+                    "duration": 150,
+                    "onset_time": 0,
+                    "offset_time": 75,
+                    "images_path": im_path,
+                }
+            ),
+        )
+
+    # Test if or_map stimulation checks out with or assignment
+    @pytest.mark.skip
+    def test_or_map_activation(self):
+        MapDependentModularConnectorFunction(
+            self.sheet,
+            self.sheet,
+            ParameterSet(
+                {"map_location": "tests/sheets/or_map", "sigma": 0, "periodic": True}
+            ),
+        )
+        dss = self.get_experiment_direct_stimulators(im_path="tests/sheets/or_map.npy")
+        anns = self.model.neuron_annotations()["exc_sheet"]
+        ids = self.model.neuron_ids()["exc_sheet"]
+        ors = [circular_dist(0, ann["LGNAfferentOrientation"], np.pi) for ann in anns]
+        assert len(dss) == 1
+        msp = dss[0].mixed_signals_photo[:, 0]
+        assert len(msp) == len(ors)
+        corr, _ = scipy.stats.pearsonr(msp, ors)
+        assert corr > 0.9
 
 
 class TestOptogeneticArrayStimulusOrientationTuningProtocol:
