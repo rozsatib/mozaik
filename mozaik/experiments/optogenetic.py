@@ -1,3 +1,4 @@
+import os
 import numpy as np
 from mozaik.experiments import Experiment
 from parameters import ParameterSet
@@ -417,6 +418,46 @@ class OptogeneticArrayStimulusHexagonalTiling(CorticalStimulationWithOptogenetic
         if shuffle == True:
             random.shuffle(hc)
         return hc
+
+class OptogeneticArrayImageStimulus(CorticalStimulationWithOptogeneticArray):
+    """
+    TODO documentation: The image loaded is of numpy format, the dimension order of it is X,Y
+    """
+    required_parameters = ParameterSet({
+            'sheet_list' : list,
+            'num_trials' : int,
+            'stimulator_array_parameters' : ParameterSet,
+            'images_path' : str,
+            'intensities' : list,
+            'duration': int,
+            'onset_time': int,
+            'offset_time': int,
+    })
+
+    def __init__(self,model,parameters):
+        CorticalStimulationWithOptogeneticArray.__init__(self, model, parameters)
+        self.parameters.stimulator_array_parameters["stimulating_signal"] = "mozaik.sheets.direct_stimulator.stimulating_pattern_flash"
+        self.parameters.stimulator_array_parameters["stimulating_signal_parameters"] = ParameterSet({
+            "shape": "image",
+            "intensity": 0,
+            "duration": self.parameters.duration,
+            "onset_time": self.parameters.onset_time,
+            "offset_time": self.parameters.offset_time,
+        })
+
+        if os.path.isfile(self.parameters.images_path):
+            image_paths = [self.parameters.images_path]
+        elif os.path.isdir(self.parameters.images_path):
+            image_paths = []
+            root, files = [(r,f) for r,d,f in os.walk(self.parameters.images_path)][0]
+            image_paths = sorted([os.path.join(root,f) for f in files])
+        else:
+            raise ValueError("images_path %s is not a file or directory!" % self.parameters.images_path)
+        for intensity in self.parameters.intensities:
+            for image_path in image_paths:
+                self.parameters.stimulator_array_parameters.stimulating_signal_parameters.intensity = intensity
+                self.parameters.stimulator_array_parameters.stimulating_signal_parameters.image_path = image_path
+                self.append_direct_stim(model,self.parameters.stimulator_array_parameters)
 
 
 class OptogeneticArrayStimulusOrientationTuningProtocol(CorticalStimulationWithOptogeneticArray):
