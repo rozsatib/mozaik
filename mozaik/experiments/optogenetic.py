@@ -165,6 +165,8 @@ class SingleOptogeneticArrayStimulus(CorticalStimulationWithOptogeneticArray):
 
     required_parameters = ParameterSet({
             'sheet_list': list,
+            'sheet_intensity_scaler': list,
+            'sheet_transfection_proportion': list,
             'num_trials' : int,
             'stimulator_array_parameters' : ParameterSet,
             'stimulating_signal': str,
@@ -242,6 +244,8 @@ class OptogeneticArrayStimulusCircles(CorticalStimulationWithOptogeneticArray):
 
     required_parameters = ParameterSet({
         'sheet_list' : list,
+        'sheet_intensity_scaler': list,
+        'sheet_transfection_proportion': list,
         'num_trials' : int,
         'stimulator_array_parameters' : ParameterSet,
         'intensities': list,
@@ -346,6 +350,8 @@ class OptogeneticArrayStimulusHexagonalTiling(CorticalStimulationWithOptogenetic
 
     required_parameters = ParameterSet({
         'sheet_list' : list,
+        'sheet_intensity_scaler': list,
+        'sheet_transfection_proportion': list,
         'num_trials' : int,
         'stimulator_array_parameters' : ParameterSet,
         'intensities': list,
@@ -550,6 +556,8 @@ class OptogeneticArrayStimulusOrientationTuningProtocol(CorticalStimulationWithO
 
     def __init__(self,model,parameters):
         CorticalStimulationWithOptogeneticArray.__init__(self, model, parameters)
+        self.parameters['sheet_intensity_scaler'] = 1
+        self.parameters['sheet_transfection_proportion'] = 1
         self.parameters.stimulator_array_parameters["stimulating_signal"] = "mozaik.sheets.direct_stimulator.stimulating_pattern_flash"
         self.parameters.stimulator_array_parameters["stimulating_signal_parameters"] = ParameterSet({
             "shape": "or_map",
@@ -683,6 +691,8 @@ class OptogeneticArrayStimulusContrastBasedOrientationTuningProtocol(CorticalSti
 
     def __init__(self,model,parameters):
         CorticalStimulationWithOptogeneticArray.__init__(self, model, parameters)
+        self.parameters['sheet_intensity_scaler'] = 1
+        self.parameters['sheet_transfection_proportion'] = 1
         self.parameters.stimulator_array_parameters["stimulating_signal"] = "mozaik.sheets.direct_stimulator.stimulating_pattern_flash"
         self.parameters.stimulator_array_parameters["stimulating_signal_parameters"] = ParameterSet({
             "shape": "or_map",

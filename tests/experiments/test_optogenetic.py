@@ -75,6 +75,8 @@ class TestOptogeneticArrayStimulusCircles(TestCorticalStimulationWithOptogenetic
             MozaikExtendedParameterSet(
                 {
                     "sheet_list": ["exc_sheet"],
+                    'sheet_intensity_scaler': [1.0],
+                    'sheet_transfection_proportion': [1.0],
                     "num_trials": 1,
                     "stimulator_array_parameters": deepcopy(self.opt_array_params),
                     "x_center": center[0],
@@ -107,6 +109,8 @@ class TestOptogeneticArrayStimulusHexagonalTiling(
             MozaikExtendedParameterSet(
                 {
                     "sheet_list": ["exc_sheet"],
+                    'sheet_intensity_scaler': [1.0],
+                    'sheet_transfection_proportion': [1.0],
                     "num_trials": 1,
                     "stimulator_array_parameters": deepcopy(self.opt_array_params),
                     "x_center": center[0],
