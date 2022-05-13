@@ -82,6 +82,18 @@ class TestOpticalStimulatorArrayChR:
             - self.sheet_params["cell"]["params"]["v_rest"] * qt.mV
         )
 
+    @pytest.mark.parametrize("proportion", [0.25,0.5,0.75,1.0])
+    def test_transfection_proportion(self, proportion):
+        sap = MozaikExtendedParameterSet(deepcopy(self.opt_array_params))
+        sap.transfection_proportion = 1.0
+        ds = OpticalStimulatorArrayChR(self.sheet, sap)
+        stim_1 = ds.stimulated_cells
+        sap.transfection_proportion = proportion
+        ds = OpticalStimulatorArrayChR(self.sheet, sap)
+        stim_p = ds.stimulated_cells
+        assert set(stim_p).issubset(set(stim_1))
+        assert np.isclose(len(stim_p)/len(stim_1),proportion,atol=0.02)
+
     def test_stimulated_cells(self):
         sap = MozaikExtendedParameterSet(deepcopy(self.opt_array_params))
         ds = OpticalStimulatorArrayChR(self.sheet, sap)
