@@ -53,6 +53,8 @@ class CorticalStimulationWithOptogeneticArray(Experiment):
     required_parameters = ParameterSet(
         {
             'sheet_list': list,
+            'sheet_intensity_scaler': list,
+            'sheet_transfection_proportion': list,
             'num_trials': int,
             'stimulator_array_parameters' : ParameterSet,
         }
@@ -66,20 +68,29 @@ class CorticalStimulationWithOptogeneticArray(Experiment):
             "update_interval",
             "depth_sampling_step",
             "light_source_light_propagation_data",
+            "transfection_proportion",
         }
+        # assert sheet list, intensity scaler, transfection proportion lengths equal
         assert self.parameters.stimulator_array_parameters.keys() == stimulator_array_keys, "Stimulator array keys must be: %s. Supplied: %s. Difference: %s" % (stimulator_array_keys,self.parameters.stimulator_array_parameters.keys(),set(stimulator_array_keys)^set(self.parameters.stimulator_array_parameters.keys()))
 
     def append_direct_stim(self, model, stimulator_array_parameters):
-        sap = MozaikExtendedParameterSet(deepcopy(stimulator_array_parameters))
         if self.direct_stimulation == None:
             self.direct_stimulation = []
             self.shared_scs = OrderedDict((sheet, {}) for sheet in self.parameters.sheet_list)
 
         d = OrderedDict()
-        for sheet in self.parameters.sheet_list:
+        for k in range(len(self.parameters.sheet_list)):
+            sheet = self.parameters.sheet_list[k]
+            sap = MozaikExtendedParameterSet(deepcopy(stimulator_array_parameters))
+            sap.stimulating_signal_parameters.intensity *= self.parameters.sheet_intensity_scaler[k]
+            sap.transfection_proportion = self.parameters.sheet_transfection_proportion[k]
             d[sheet] = [OpticalStimulatorArrayChR(model.sheets[sheet],sap,self.shared_scs[sheet])]
             self.shared_scs[sheet].update({d[sheet][0].stimulated_cells[i] : d[sheet][0].scs[i] for i in range(len(d[sheet][0].scs))})
 
+        sap = MozaikExtendedParameterSet(deepcopy(stimulator_array_parameters))
+        sap["sheet_list"] = self.parameters.sheet_list
+        sap["sheet_intensity_scaler"] = self.parameters.sheet_intensity_scaler
+        sap["sheet_transfection_proportion"] = self.parameters.sheet_transfection_proportion
         for trial in range(self.parameters.num_trials):
             self.direct_stimulation.append(d)
             self.stimuli.append(
@@ -425,6 +436,8 @@ class OptogeneticArrayImageStimulus(CorticalStimulationWithOptogeneticArray):
     """
     required_parameters = ParameterSet({
             'sheet_list' : list,
+            'sheet_intensity_scaler': list,
+            'sheet_transfection_proportion': list,
             'num_trials' : int,
             'stimulator_array_parameters' : ParameterSet,
             'images_path' : str,

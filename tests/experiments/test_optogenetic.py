@@ -151,12 +151,14 @@ class TestOptogeneticArrayStimulusHexagonalTiling(
 class TestOptogeneticArrayImageStimulus(TestCorticalStimulationWithOptogeneticArray):
     """"""
 
-    def get_experiment(self, im_path):
+    def get_experiment(self, im_path, intensity_scaler):
         return OptogeneticArrayImageStimulus(
             self.model,
             MozaikExtendedParameterSet(
                 {
                     "sheet_list": ["exc_sheet"],
+                    'sheet_intensity_scaler': [intensity_scaler],
+                    'sheet_transfection_proportion': [1.0],
                     "num_trials": 1,
                     "stimulator_array_parameters": deepcopy(self.opt_array_params),
                     "intensities": [1.0],
@@ -178,7 +180,7 @@ class TestOptogeneticArrayImageStimulus(TestCorticalStimulationWithOptogeneticAr
                 {"map_location": "tests/sheets/or_map", "sigma": 0, "periodic": True}
             ),
         )
-        dss = self.get_experiment_direct_stimulators(im_path="tests/sheets/or_map.npy")
+        dss = self.get_experiment_direct_stimulators(im_path="tests/sheets/or_map.npy", intensity_scaler=1.0)
         anns = self.model.neuron_annotations()["exc_sheet"]
         ids = self.model.neuron_ids()["exc_sheet"]
         ors = [circular_dist(0, ann["LGNAfferentOrientation"], np.pi) for ann in anns]
@@ -187,6 +189,21 @@ class TestOptogeneticArrayImageStimulus(TestCorticalStimulationWithOptogeneticAr
         assert len(msp) == len(ors)
         corr, _ = scipy.stats.pearsonr(msp, ors)
         assert corr > 0.9
+
+    @pytest.mark.parametrize("intensity_scaler", [0.5,1.0,1.5])
+    def test_intensity_scaler(self, intensity_scaler):
+        MapDependentModularConnectorFunction(
+            self.sheet,
+            self.sheet,
+            ParameterSet(
+                {"map_location": "tests/sheets/or_map", "sigma": 0, "periodic": True}
+            ),
+        )
+        dss = self.get_experiment_direct_stimulators(im_path="tests/sheets/or_map.npy", intensity_scaler=1.0)
+        msp_full = dss[0].mixed_signals_photo.sum()
+        dss = self.get_experiment_direct_stimulators(im_path="tests/sheets/or_map.npy", intensity_scaler=intensity_scaler)
+        msp_is = dss[0].mixed_signals_photo.sum()
+        assert np.isclose(msp_is/msp_full, intensity_scaler)
 
 
 class TestOptogeneticArrayStimulusOrientationTuningProtocol:
