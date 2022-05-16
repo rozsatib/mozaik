@@ -400,6 +400,8 @@ class OpticalStimulatorArray(DirectStimulator):
                      The parameters passed to the function specified in
                      `stimulating_signal`
 
+    TODO: transfection_proportion - add documentation
+                                    in range (0,1)
     Notes
     -----
 
@@ -415,6 +417,7 @@ class OpticalStimulatorArray(DirectStimulator):
             'update_interval' : float,
             'depth_sampling_step' : float,
             'light_source_light_propagation_data' : str,
+            'transfection_proportion' : float,
     })
     
     def __init__(self, sheet,parameters,shared_scs=None,optimized_scs=True):
@@ -492,6 +495,11 @@ class OpticalStimulatorArray(DirectStimulator):
         stimulated_cell_indices = self.mixed_signals_photo.sum(axis=1)>0
         self.stimulated_cells = self.sheet.pop.all_cells[stimulated_cell_indices]
         self.mixed_signals_photo = self.mixed_signals_photo[stimulated_cell_indices]
+
+        if self.parameters.transfection_proportion != 1:
+            sel_idx = np.random.choice(range(len(self.stimulated_cells)),size=int(self.parameters.transfection_proportion*len(self.stimulated_cells)))
+            self.stimulated_cells = self.stimulated_cells[sel_idx]
+            self.mixed_signals_photo = self.mixed_signals_photo[sel_idx]
 
         if shared_scs == None:
             shared_scs = {}
