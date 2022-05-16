@@ -68,7 +68,6 @@ class CorticalStimulationWithOptogeneticArray(Experiment):
             "update_interval",
             "depth_sampling_step",
             "light_source_light_propagation_data",
-            "transfection_proportion",
         }
         # assert sheet list, intensity scaler, transfection proportion lengths equal
         assert self.parameters.stimulator_array_parameters.keys() == stimulator_array_keys, "Stimulator array keys must be: %s. Supplied: %s. Difference: %s" % (stimulator_array_keys,self.parameters.stimulator_array_parameters.keys(),set(stimulator_array_keys)^set(self.parameters.stimulator_array_parameters.keys()))
