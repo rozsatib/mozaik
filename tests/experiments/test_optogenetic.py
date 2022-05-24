@@ -175,7 +175,6 @@ class TestOptogeneticArrayImageStimulus(TestCorticalStimulationWithOptogeneticAr
         )
 
     # Test if or_map stimulation checks out with or assignment
-    @pytest.mark.skip
     def test_or_map_activation(self):
         MapDependentModularConnectorFunction(
             self.sheet,
@@ -184,6 +183,12 @@ class TestOptogeneticArrayImageStimulus(TestCorticalStimulationWithOptogeneticAr
                 {"map_location": "tests/sheets/or_map", "sigma": 0, "periodic": True}
             ),
         )
+
+        f = open('tests/sheets/or_map', 'rb')
+        or_map = pickle.load(f, encoding="latin1")
+        f.close()
+        np.save("tests/sheets/or_map.npy",circular_dist(0,or_map,1))
+
         dss = self.get_experiment_direct_stimulators(im_path="tests/sheets/or_map.npy", intensity_scaler=1.0)
         anns = self.model.neuron_annotations()["exc_sheet"]
         ids = self.model.neuron_ids()["exc_sheet"]
@@ -194,6 +199,7 @@ class TestOptogeneticArrayImageStimulus(TestCorticalStimulationWithOptogeneticAr
         corr, _ = scipy.stats.pearsonr(msp, ors)
         assert corr > 0.9
 
+    @pytest.mark.skip
     @pytest.mark.parametrize("intensity_scaler", [0.5,1.0,1.5])
     def test_intensity_scaler(self, intensity_scaler):
         MapDependentModularConnectorFunction(
