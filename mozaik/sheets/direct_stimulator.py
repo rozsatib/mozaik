@@ -465,8 +465,8 @@ class OpticalStimulatorArray(DirectStimulator):
         self.mixed_signals_photo = numpy.zeros((self.sheet.pop.size,numpy.shape(self.stimulator_signals)[2]),dtype=numpy.float64)
         
         # find coordinates given spacing and shift by half the array size
-        nearest_ix = numpy.rint(yy/self.parameters.spacing)+n
-        nearest_iy = numpy.rint(xx/self.parameters.spacing)+n
+        nearest_ix = numpy.rint(xx/self.parameters.spacing)+n
+        nearest_iy = numpy.rint(yy/self.parameters.spacing)+n
         nearest_iz = numpy.rint((numpy.array(self.sheet.pop.positions[2])-sheet.parameters.min_depth)/self.parameters.depth_sampling_step)
 
         nearest_ix[nearest_ix<0] = 0

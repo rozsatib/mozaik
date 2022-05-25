@@ -174,7 +174,6 @@ class TestOptogeneticArrayImageStimulus(TestCorticalStimulationWithOptogeneticAr
             ),
         )
 
-    # Test if or_map stimulation checks out with or assignment
     @pytest.mark.skip
     def test_or_map_activation(self):
         MapDependentModularConnectorFunction(
@@ -184,6 +183,12 @@ class TestOptogeneticArrayImageStimulus(TestCorticalStimulationWithOptogeneticAr
                 {"map_location": "tests/sheets/or_map", "sigma": 0, "periodic": True}
             ),
         )
+
+        f = open('tests/sheets/or_map', 'rb')
+        or_map = pickle.load(f, encoding="latin1")
+        f.close()
+        np.save("tests/sheets/or_map.npy",circular_dist(0,or_map,1))
+
         dss = self.get_experiment_direct_stimulators(im_path="tests/sheets/or_map.npy", intensity_scaler=1.0)
         anns = self.model.neuron_annotations()["exc_sheet"]
         ids = self.model.neuron_ids()["exc_sheet"]
@@ -194,6 +199,7 @@ class TestOptogeneticArrayImageStimulus(TestCorticalStimulationWithOptogeneticAr
         corr, _ = scipy.stats.pearsonr(msp, ors)
         assert corr > 0.9
 
+    @pytest.mark.skip
     @pytest.mark.parametrize("intensity_scaler", [0.5,1.0,1.5])
     def test_intensity_scaler(self, intensity_scaler):
         MapDependentModularConnectorFunction(
@@ -210,9 +216,48 @@ class TestOptogeneticArrayImageStimulus(TestCorticalStimulationWithOptogeneticAr
         assert np.isclose(msp_is/msp_full, intensity_scaler)
 
 
-class TestOptogeneticArrayStimulusOrientationTuningProtocol:
-    # TODO: test activation correlation with orientation map
-    pass
+class TestOptogeneticArrayStimulusOrientationTuningProtocol(TestCorticalStimulationWithOptogeneticArray):
+    def get_experiment(self, n_orientations):
+        return OptogeneticArrayStimulusOrientationTuningProtocol(
+            self.model,
+            MozaikExtendedParameterSet(
+                {
+                    "sheet_list": ["exc_sheet"],
+                    'sheet_intensity_scaler': [1.0],
+                    'sheet_transfection_proportion': [1.0],
+                    "num_trials": 1,
+                    "stimulator_array_parameters": deepcopy(self.opt_array_params),
+                    "num_orientations": n_orientations,
+                    "sharpness":1,
+                    "intensities": [1.0],
+                    "duration": 150,
+                    "onset_time": 0,
+                    "offset_time": 75,
+                }
+            ),
+        )
+
+    @pytest.mark.parametrize("n_orientations", range(1,7))
+    def test_or_map_activation(self, n_orientations):
+        MapDependentModularConnectorFunction(
+            self.sheet,
+            self.sheet,
+            ParameterSet(
+                {"map_location": "tests/sheets/or_map", "sigma": 0, "periodic": True}
+            ),
+        )
+
+        dss = self.get_experiment_direct_stimulators(n_orientations=n_orientations)
+        orientations = np.linspace(0,np.pi,n_orientations,endpoint=False)
+        for i in range(len(orientations)):
+            anns = self.model.neuron_annotations()["exc_sheet"]
+            ids = self.model.neuron_ids()["exc_sheet"]
+            dist = [circular_dist(orientations[i],a["LGNAfferentOrientation"],np.pi) for a in anns]
+            inv_dist = 1 - np.array(dist)/np.pi
+            msp = dss[i].mixed_signals_photo[:, 0]
+            assert len(msp) == len(inv_dist)
+            corr, _ = scipy.stats.pearsonr(msp, inv_dist)
+            assert corr > 0.95
 
 
 class TestOptogeneticArrayStimulusContrastBasedOrientationTuningProtocol:

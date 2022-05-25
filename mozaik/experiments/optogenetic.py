@@ -33,6 +33,8 @@ class CorticalStimulationWithOptogeneticArray(Experiment):
     sheet_list : list
                 The list of sheets in which to do stimulation.
 
+    TODO: Sheet intensity scaler and transfection proportion documentation
+
     num_trials : int
                 Number of trials each stimulus is shown.
 
@@ -555,8 +557,9 @@ class OptogeneticArrayStimulusOrientationTuningProtocol(CorticalStimulationWithO
 
     def __init__(self,model,parameters):
         CorticalStimulationWithOptogeneticArray.__init__(self, model, parameters)
-        self.parameters['sheet_intensity_scaler'] = 1
-        self.parameters['sheet_transfection_proportion'] = 1
+        sl = self.parameters.sheet_list
+        self.parameters['sheet_intensity_scaler'] = [1 for s in sl]
+        self.parameters['sheet_transfection_proportion'] = [1 for s in sl]
         self.parameters.stimulator_array_parameters["stimulating_signal"] = "mozaik.sheets.direct_stimulator.stimulating_pattern_flash"
         self.parameters.stimulator_array_parameters["stimulating_signal_parameters"] = ParameterSet({
             "shape": "or_map",
@@ -676,7 +679,6 @@ class OptogeneticArrayStimulusContrastBasedOrientationTuningProtocol(CorticalSti
     required_parameters = ParameterSet({
             'sheet_list' : list,
             'num_trials' : int,
-            'stimulator_array_parameters' : ParameterSet,
             'num_orientations' : int,
             'contrasts' : list,
             'contrast_response_params' : ParameterSet,
@@ -690,8 +692,9 @@ class OptogeneticArrayStimulusContrastBasedOrientationTuningProtocol(CorticalSti
 
     def __init__(self,model,parameters):
         CorticalStimulationWithOptogeneticArray.__init__(self, model, parameters)
-        self.parameters['sheet_intensity_scaler'] = 1
-        self.parameters['sheet_transfection_proportion'] = 1
+        sl = self.parameters.sheet_list
+        self.parameters['sheet_intensity_scaler'] = [1 for s in sl]
+        self.parameters['sheet_transfection_proportion'] = [1 for s in sl]
         self.parameters.stimulator_array_parameters["stimulating_signal"] = "mozaik.sheets.direct_stimulator.stimulating_pattern_flash"
         self.parameters.stimulator_array_parameters["stimulating_signal_parameters"] = ParameterSet({
             "shape": "or_map",
