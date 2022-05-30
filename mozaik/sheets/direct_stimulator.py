@@ -430,7 +430,7 @@ class OpticalStimulatorArray(DirectStimulator):
         axis_coors = numpy.arange(0,self.parameters.size+self.parameters.spacing,self.parameters.spacing) - self.parameters.size/2.0 
 
         n = int(numpy.floor(len(axis_coors)/2.0))
-        stimulator_coordinates = numpy.meshgrid(axis_coors,axis_coors)
+        stimulator_coords_y, stimulator_coords_x = numpy.meshgrid(axis_coors, axis_coors)
 
         #let's load up disperssion data and setup interpolation
         f = open(self.parameters.light_source_light_propagation_data,'rb')
@@ -446,8 +446,8 @@ class OpticalStimulatorArray(DirectStimulator):
 
         # now let's calculate mixing weights, this will be a matrix nxm where n is 
         # the number of neurons in the population and m is the number of stimulators
-        x =  stimulator_coordinates[0].flatten()
-        y =  stimulator_coordinates[1].flatten()
+        x =  stimulator_coords_x.flatten()
+        y =  stimulator_coords_y.flatten()
         xx,yy = self.sheet.vf_2_cs(self.sheet.pop.positions[0],self.sheet.pop.positions[1])
         zeros = numpy.zeros(len(x))
           
@@ -460,7 +460,7 @@ class OpticalStimulatorArray(DirectStimulator):
             mixing_templates.append((temp[n-cutof:n+cutof+1,n-cutof:n+cutof+1],cutof))
 
         signal_function = load_component(self.parameters.stimulating_signal)
-        self.stimulator_signals = signal_function(sheet,stimulator_coordinates[0],stimulator_coordinates[1],self.parameters.update_interval,self.parameters.stimulating_signal_parameters)
+        self.stimulator_signals = signal_function(sheet,stimulator_coords_x,stimulator_coords_y,self.parameters.update_interval,self.parameters.stimulating_signal_parameters)
 
         self.mixed_signals_photo = numpy.zeros((self.sheet.pop.size,numpy.shape(self.stimulator_signals)[2]),dtype=numpy.float64)
         
@@ -747,17 +747,17 @@ def image_stim(coor_x, coor_y, parameters):
     Input image range must be in 0-1! It will be multiplied by the intensity parameter, and not
     be normalized beforehand!
     """
-    for i in range(coor_x.shape[0]):
-        assert np.allclose(coor_x[0, :], coor_x[i, :]), "X coordinates must be in grid!"
-    for i in range(coor_y.shape[1]):
-        assert np.allclose(coor_y[:, 0], coor_y[:, i]), "Y coordinates must be in grid!"
+    for i in range(coor_x.shape[1]):
+        assert np.allclose(coor_x[:, i], coor_x[:, i]), "X coordinates must be in grid!"
+    for i in range(coor_y.shape[0]):
+        assert np.allclose(coor_y[0, :], coor_y[i, :]), "Y coordinates must be in grid!"
     A = np.load(parameters.image_path)
     A_interp = scipy.interpolate.interp2d(
-        np.linspace(coor_x[0, :].min(), coor_x[0, :].max(), A.shape[0]),
-        np.linspace(coor_y[:, 0].min(), coor_y[:, 0].max(), A.shape[1]),
+        np.linspace(coor_x[:, 0].min(), coor_x[:, 0].max(), A.shape[0]),
+        np.linspace(coor_y[0, :].min(), coor_y[0, :].max(), A.shape[1]),
         A,
         fill_value=0,
-    )(coor_x[0, :], coor_y[:, 0])
+    )(coor_x[:, 0], coor_y[0, :])
     return A_interp * parameters.intensity
 
 
@@ -889,3 +889,20 @@ def simple_shapes_binary_mask(coor_x, coor_y, shape, parameters):
     if parameters.inverted:
         mask = np.logical_not(mask)
     return mask
+
+def single_pixel(sheet, coor_x, coor_y, update_interval, parameters):
+    """
+    TODO: Add documentation
+    Only used in a pytest, is here because module importing is a pain otherwise
+    """
+    x, y = parameters["x"], parameters["y"]
+    assert x in coor_x and y in coor_y
+    signals = np.zeros(
+        (
+            np.shape(coor_x)[0],
+            np.shape(coor_x)[1],
+            int(parameters.duration / update_interval),
+        )
+    )
+    signals[np.where(x == coor_x)[0][0], np.where(y == coor_y)[1][0], :] = 1
+    return signals

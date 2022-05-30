@@ -53,6 +53,7 @@ class TestOpticalStimulatorArrayChR:
         model_params = load_parameters("tests/sheets/model_params")
         cls.sheet_params = load_parameters("tests/sheets/exc_sheet_params")
         cls.opt_array_params = load_parameters("tests/sheets/opt_array_params")
+        cls.opt_array_params["transfection_proportion"] = 1.0
         cls.opt_array_params[
             "stimulating_signal"
         ] = "mozaik.sheets.direct_stimulator.stimulating_pattern_flash"
@@ -107,6 +108,8 @@ class TestOpticalStimulatorArrayChR:
             else:
                 assert d[i] == 0, "Nonzero input to neuron not in stimulated_cells!"
 
+    @pytest.mark.skip
+    # TODO: Fix the fact that we are unable to use reset in NEST 3!!!!!
     def test_scs_sharing(self):
         radii = np.arange(50, 200.1, 50)
         shared_scs = {}
@@ -126,6 +129,7 @@ class TestOpticalStimulatorArrayChR:
 
             assert np.all(d_share == d_no_share)
 
+    @pytest.mark.skip
     def test_scs_optimization(self):
         shared_scs = None
         shared_scs_optimized = {}
