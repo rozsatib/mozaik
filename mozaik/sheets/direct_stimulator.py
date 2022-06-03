@@ -635,7 +635,9 @@ class OpticalStimulatorArrayChR(OpticalStimulatorArray):
         self.mixed_signals_current = np.zeros_like(self.mixed_signals_photo)
 
         for i in range(0,len(self.scs)):
-            res = odeint(ChRsystem,[0,0,0.8,0.2,0],self.times,args=(self.mixed_signals_photo[i,:].flatten(),self.parameters.update_interval))
+            res = odeint(ChRsystem,[0,0,0.2,0.8,0],self.times,args=(self.mixed_signals_photo[i,:].flatten(),self.parameters.update_interval),hmax=self.parameters.update_interval)
+            # Here we assume that we don't calculate the output if the input is zero
+            assert res[:,0:2].sum() != 0, "ODE solving failed!"
             self.mixed_signals_current[i,:] =  60 * (17.2*res[:,0] + 2.9 * res[:,1])  / 2500 ; # the 60 corresponds to the 60mV difference between ChR reverse potential of 0mV and our expected mean Vm of about 60mV. This happens to end up being in nA which is what pyNN expect for current injection.
 
     def debug_plot(self):
@@ -643,8 +645,9 @@ class OpticalStimulatorArrayChR(OpticalStimulatorArray):
         ax = pylab.subplot(121)
         pylab.gca().set_aspect('equal')
         pylab.title('Activation magnitude (neurons)')
-        sc = ax.scatter(self.sheet.pop.positions[0],self.sheet.pop.positions[1],s=10,c=numpy.squeeze(numpy.max(self.mixed_signals_photo,axis=1)),vmin=0)
-        pylab.colorbar(sc, ax=ax)
+        # TODO fix this plot
+        #sc = ax.scatter(self.stimulated_cells.positions[0],self.stimulated_cells.positions[1],s=10,c=numpy.squeeze(numpy.max(self.mixed_signals_photo,axis=1)),vmin=0)
+        #pylab.colorbar(sc, ax=ax)
 
         idx = np.argmax(self.mixed_signals_photo.sum(axis=1))
         ax = pylab.subplot(122)
