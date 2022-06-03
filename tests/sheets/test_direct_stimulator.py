@@ -69,7 +69,9 @@ class TestOpticalStimulatorArrayChR:
             }
         )
         cls.model = Model(nest, 8, model_params)
-        cls.sheet = VisualCorticalUniformSheet3D(cls.model, ParameterSet(cls.sheet_params))
+        cls.sheet = VisualCorticalUniformSheet3D(
+            cls.model, ParameterSet(cls.sheet_params)
+        )
         cls.sheet.record()
         cls.duration = cls.opt_array_params.stimulating_signal_parameters.duration
 
@@ -83,7 +85,7 @@ class TestOpticalStimulatorArrayChR:
             - self.sheet_params["cell"]["params"]["v_rest"] * qt.mV
         )
 
-    @pytest.mark.parametrize("proportion", [0.25,0.5,0.75,1.0])
+    @pytest.mark.parametrize("proportion", [0.25, 0.5, 0.75, 1.0])
     def test_transfection_proportion(self, proportion):
         sap = MozaikExtendedParameterSet(deepcopy(self.opt_array_params))
         sap.transfection_proportion = 1.0
@@ -93,20 +95,34 @@ class TestOpticalStimulatorArrayChR:
         ds = OpticalStimulatorArrayChR(self.sheet, sap)
         stim_p = ds.stimulated_cells
         assert set(stim_p).issubset(set(stim_1))
-        assert np.isclose(len(stim_p)/len(stim_1),proportion,atol=0.02)
+        assert np.isclose(len(stim_p) / len(stim_1), proportion, atol=0.02)
 
     def test_stimulated_cells(self):
         sap = MozaikExtendedParameterSet(deepcopy(self.opt_array_params))
         ds = OpticalStimulatorArrayChR(self.sheet, sap)
         d = self.record_and_retrieve_data(ds, self.duration)
         d = d.sum(axis=0)
-        recorded_cells = ds.sheet.pop.all_cells[self.sheet.to_record['v']]
+        recorded_cells = ds.sheet.pop.all_cells[self.sheet.to_record["v"]]
         stim_ids = set(ds.stimulated_cells)
         for i in range(len(recorded_cells)):
             if recorded_cells[i] in stim_ids:
                 assert d[i] != 0, "Zero input to neuron in stimulated_cells!"
             else:
                 assert d[i] == 0, "Nonzero input to neuron not in stimulated_cells!"
+
+    @pytest.mark.parametrize("onset_time", np.random.randint(0, 250, 4))
+    @pytest.mark.parametrize("stim_duration", np.random.randint(0, 50, 4))
+    @pytest.mark.parametrize("time_after_offset", np.random.randint(0, 250, 4))
+    def test_duration_independence(self, onset_time, stim_duration, time_after_offset):
+        # Ensure that the odeint solver works irrespective of stimulation duration
+        sap = MozaikExtendedParameterSet(deepcopy(self.opt_array_params))
+        sap.stimulating_signal_parameters.onset_time = onset_time
+        sap.stimulating_signal_parameters.offset_time = onset_time + stim_duration
+        sap.stimulating_signal_parameters.duration = (
+            onset_time + stim_duration + time_after_offset
+        )
+        ds = OpticalStimulatorArrayChR(self.sheet, sap)
+        assert ds.mixed_signals_current.sum() != 0
 
     @pytest.mark.skip
     # TODO: Fix the fact that we are unable to use reset in NEST 3!!!!!
