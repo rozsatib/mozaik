@@ -30,6 +30,7 @@ from mozaik.analysis.analysis import SingleValue, AnalogSignalList
 from neo.core.analogsignal import AnalogSignal as NeoAnalogSignal
 import quantities as qt
 from mozaik.tools.units import *
+import io
 
 from builtins import zip
 
@@ -93,7 +94,7 @@ class DirectStimulator(ParametrizedObject):
         """
         raise NotImplemented
 
-    def save_to_datastore(self,data_store):
+    def save_to_datastore(self,data_store,stimulus):
         """
         Save direct stimulation data to the datastore, to be used for analysis and
         visualization.
@@ -491,6 +492,19 @@ class OpticalStimulatorArray(DirectStimulator):
         else:
             self.setup_scs_old(shared_scs)
 
+        self.stimulator_signals = self.compress_array(self.stimulator_signals)
+
+    @staticmethod
+    def compress_array(array):
+        compressed = io.BytesIO()
+        np.savez_compressed(compressed, array)
+        return compressed
+
+    @staticmethod
+    def decompress_array(array):
+        array.seek(0)
+        return np.load(array)['arr_0']
+
     def setup_scs(self, shared_scs):
         stimulated_cell_indices = self.mixed_signals_photo.sum(axis=1)>0
         self.stimulated_cells = self.sheet.pop.all_cells[stimulated_cell_indices]
@@ -532,9 +546,10 @@ class OpticalStimulatorArray(DirectStimulator):
             scs.set_parameters(times=[offset+3*self.sheet.dt], amplitudes=[0.0],copy=False)
 
     def save_to_datastore(self,data_store,stimulus):
+        photo_mixed_signals = self.decompress_array(self.mixed_signals_photo)
         data_store.full_datastore.add_analysis_result(
             AnalogSignalList(
-                [NeoAnalogSignal(self.mixed_signals_photo[i, :], sampling_period=self.parameters.update_interval*qt.ms, units=qt.dimensionless) for i in range(self.mixed_signals_photo.shape[0])],
+                [NeoAnalogSignal(photo_mixed_signals[i, :], sampling_period=self.parameters.update_interval*qt.ms, units=qt.dimensionless) for i in range(len(self.stimulated_cells))],
                 [int(ID) for ID in self.stimulated_cells],
                 qt.dimensionless,
                 x_axis_name="time",
@@ -545,7 +560,7 @@ class OpticalStimulatorArray(DirectStimulator):
         )
         data_store.full_datastore.add_analysis_result(
             AnalogSignalList(
-                [NeoAnalogSignal(self.mixed_signals_current[i, :], sampling_period=self.parameters.update_interval*qt.ms, units=qt.nA) for i in range(self.mixed_signals_current.shape[0])],
+                [NeoAnalogSignal(self.mixed_signals_current[i, :], sampling_period=self.parameters.update_interval*qt.ms, units=qt.nA) for i in range(len(self.stimulated_cells))],
                 [int(ID) for ID in self.stimulated_cells],
                 qt.nA,
                 x_axis_name="time",
@@ -556,7 +571,7 @@ class OpticalStimulatorArray(DirectStimulator):
         )
         data_store.full_datastore.add_analysis_result(
             SingleValue(
-                value_name="optical_stimulation_array",
+                value_name="optical_stimulation_array_compressed",
                 value=self.stimulator_signals,
                 value_units=qt.dimensionless,
                 sheet_name=self.sheet.name,
@@ -639,6 +654,8 @@ class OpticalStimulatorArrayChR(OpticalStimulatorArray):
             # Here we assume that we don't calculate the output if the input is zero
             assert res[:,0:2].sum() != 0, "ODE solving failed!"
             self.mixed_signals_current[i,:] =  60 * (17.2*res[:,0] + 2.9 * res[:,1])  / 2500 ; # the 60 corresponds to the 60mV difference between ChR reverse potential of 0mV and our expected mean Vm of about 60mV. This happens to end up being in nA which is what pyNN expect for current injection.
+
+        self.mixed_signals_photo = self.compress_array(self.mixed_signals_photo)
 
     def debug_plot(self):
         pylab.figure(figsize=(15,15))
