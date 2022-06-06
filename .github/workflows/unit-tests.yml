@@ -27,6 +27,7 @@ jobs:
 
     - name: Install Nest
       run: |
+        cd ..
         pip3 install numpy scipy mpi4py matplotlib quantities lazyarray interval Pillow param==1.5.1 parameters neo cython pynn psutil future requests elephant pytest-xdist pytest-timeout junitparser
         wget https://github.com/nest/nest-simulator/archive/v3.1.tar.gz
         tar xvfz v3.1.tar.gz
@@ -36,9 +37,10 @@ jobs:
         make -j8 install
         cd ..
         python -c 'import nest'
+        cd mozaik
 
     - name: Install mozaik
       run: python setup.py install
 
     - name: Test with pytest
-      run: pytest tests --cov=mozaik -m "not model"
+      run: pytest --cov=mozaik -m "not model"

@@ -85,6 +85,12 @@ class TestOpticalStimulatorArrayChR:
             - self.sheet_params["cell"]["params"]["v_rest"] * qt.mV
         )
 
+    @pytest.mark.parametrize("A", [np.random.rand(50, 50, 10) for i in range(5)])
+    def test_compress_decompress(self, A):
+        A_compressed = OpticalStimulatorArrayChR.compress_array(A)
+        A_decompressed = OpticalStimulatorArrayChR.decompress_array(A_compressed)
+        assert np.all(A == A_decompressed)
+
     @pytest.mark.parametrize("proportion", [0.25, 0.5, 0.75, 1.0])
     def test_transfection_proportion(self, proportion):
         sap = MozaikExtendedParameterSet(deepcopy(self.opt_array_params))
