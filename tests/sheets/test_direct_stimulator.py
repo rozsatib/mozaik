@@ -52,6 +52,8 @@ class TestOpticalStimulatorArrayChR:
     def setup_class(cls):
         model_params = load_parameters("tests/sheets/model_params")
         cls.sheet_params = load_parameters("tests/sheets/exc_sheet_params")
+        cls.sheet_params.min_depth = 100
+        cls.sheet_params.max_depth = 400
         cls.opt_array_params = load_parameters("tests/sheets/opt_array_params")
         cls.opt_array_params["transfection_proportion"] = 1.0
         cls.opt_array_params[

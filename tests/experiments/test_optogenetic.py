@@ -27,6 +27,8 @@ class TestCorticalStimulationWithOptogeneticArray:
     def setup_class(cls):
         model_params = load_parameters("tests/sheets/model_params")
         cls.sheet_params = load_parameters("tests/sheets/exc_sheet_params")
+        cls.sheet_params.min_depth = 100
+        cls.sheet_params.max_depth = 400
         cls.opt_array_params = load_parameters("tests/sheets/opt_array_params")
         cls.set_sheet_size(cls, 400)
         cls.model = Model(nest, 8, model_params)
@@ -51,7 +53,11 @@ class TestCorticalStimulationWithOptogeneticArray:
 
     def get_experiment_direct_stimulators(self, **params):
         dss = self.get_experiment(**params).direct_stimulation
-        return [ds["exc_sheet"][0] for ds in dss]
+        dss = [ds["exc_sheet"][0] for ds in dss]
+        for ds in dss:
+            ds.stimulator_signals = ds.decompress_array(ds.stimulator_signals)
+            ds.mixed_signals_photo = ds.decompress_array(ds.mixed_signals_photo)
+        return dss
 
     def stimulated_neuron_in_radius(self, ds, invert=False):
         ssp = ds.parameters.stimulating_signal_parameters
@@ -94,7 +100,7 @@ class TestSingleOptogeneticArrayStimulus(TestCorticalStimulationWithOptogeneticA
         assert size == 400 and spacing == 10
         dss = self.get_experiment_direct_stimulators(x=x, y=y)
         assert dss[0].stimulator_signals[self.c2a(x), self.c2a(y), 0] == 1
-        if dss[0].mixed_signals_photo.shape[0] > 0:
+        if dss[0].mixed_signals_current.shape[0] > 0:
             coords = self.get_coords(dss[0].stimulated_cells)
             assert np.all(np.isclose(coords[0, :], x, atol=spacing // 2))
             assert np.all(np.isclose(coords[1, :], y, atol=spacing // 2))
