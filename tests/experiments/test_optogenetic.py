@@ -65,9 +65,9 @@ class TestCorticalStimulationWithOptogeneticArray:
         coords = self.get_coords(ds.stimulated_cells)
         d = np.sqrt(((coords - center) ** 2).sum(axis=0))
         if invert:
-            return np.all(d > ssp.radius - ds.parameters.spacing / 2)
+            return np.all(d >= ssp.radius - ds.parameters.spacing / 2)
         else:
-            return np.all(d < ssp.radius + ds.parameters.spacing / 2)
+            return np.all(d <= ssp.radius + ds.parameters.spacing / 2)
 
 
 class TestSingleOptogeneticArrayStimulus(TestCorticalStimulationWithOptogeneticArray):
@@ -119,7 +119,7 @@ class TestOptogeneticArrayStimulusCircles(TestCorticalStimulationWithOptogenetic
                     "stimulator_array_parameters": deepcopy(self.opt_array_params),
                     "x_center": center[0],
                     "y_center": center[1],
-                    "radii": [25, 50, 100, 150, 200],
+                    "radii": [25, 50, 100, 150],
                     "intensities": [0.5, 1.0],
                     "duration": 150,
                     "onset_time": 0,
