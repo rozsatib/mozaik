@@ -244,6 +244,10 @@ class TestOptogeneticArrayImageStimulus(TestCorticalStimulationWithOptogeneticAr
                 {"map_location": "tests/sheets/or_map", "sigma": 0, "periodic": True}
             ),
         )
+        f = open("tests/sheets/or_map", "rb")
+        or_map = pickle.load(f, encoding="latin1")
+        f.close()
+        np.save("tests/sheets/or_map.npy", circular_dist(0, or_map, 1))
         dss = self.get_experiment_direct_stimulators(
             im_path="tests/sheets/or_map.npy", intensity_scaler=1.0
         )
