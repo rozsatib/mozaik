@@ -31,6 +31,7 @@ from neo.core.analogsignal import AnalogSignal as NeoAnalogSignal
 import quantities as qt
 from mozaik.tools.units import *
 import io
+from numba import jit
 
 from builtins import zip
 
@@ -600,6 +601,7 @@ class OpticalStimulatorArray(DirectStimulator):
         pylab.clf()
 
 
+@jit()
 def ChRsystem(y,time,X,sampling_period):
           PhoC1toO1 = 1.0993e-19 * 50
           PhoC2toO2 = 7.1973e-20 * 50

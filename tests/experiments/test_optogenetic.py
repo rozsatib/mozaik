@@ -305,7 +305,7 @@ class TestOptogeneticArrayStimulusOrientationTuningProtocol(
             msp = dss[i].mixed_signals_photo[:, 0]
             assert len(msp) == len(inv_dist)
             corr, _ = scipy.stats.pearsonr(msp, inv_dist)
-            assert corr > 0.95
+            assert corr > 0.9
 
 
 class TestOptogeneticArrayStimulusContrastBasedOrientationTuningProtocol:
