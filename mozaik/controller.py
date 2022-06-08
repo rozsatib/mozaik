@@ -178,6 +178,8 @@ def run_workflow(simulation_name, model_class, create_experiments):
     >>> python userscript simulator_name num_threads parameter_file_path modified_parameter_path_1 modified_parameter_value_1 ... modified_parameter_path_n modified_parameter_value_n simulation_run_name
     """
 
+    import tracemalloc
+    tracemalloc.start(10)
     # Prepare workflow - read parameters, setup logging, etc.
     sim, num_threads, parameters = prepare_workflow(simulation_name, model_class)
     # Prepare model to run experiments on
