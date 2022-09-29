@@ -119,7 +119,6 @@ class SpatioTemporalReceptiveField(object):
         self.kernel = kernel
         self.spatial_resolution = dx
         self.temporal_resolution = dt
-        self.reshaped_kernel = self.kernel.reshape(-1,numpy.shape(self.kernel)[2]).T
 
     @property
     def kernel_duration(self):
@@ -225,13 +224,12 @@ class CellWithReceptiveField(object):
         self.luminance_response = numpy.zeros((self.response_length,))
         self.mean = numpy.zeros((self.response_length,))
         L = self.receptive_field.kernel_duration
-        self.receptive_field.kernel -= self.receptive_field.kernel.mean(axis=(0,1))
+        if not hasattr(self.receptive_field,"luminance_component"):
+            rf = self.receptive_field
+            rf.kernel_luminance_component = rf.kernel.mean(axis=(0,1))
+            rf.kernel_contrast_component = rf.kernel - rf.kernel_luminance_component
+            rf.kernel_contrast_component = rf.kernel_contrast_component.reshape(-1,numpy.shape(rf.kernel_contrast_component)[2]).T
         assert L <= self.response_length
-        # Recover temporal kernel from spatiotemporal kernel
-        kc = self.receptive_field.kernel.shape[0] // 2
-        self.temporal_kernel = self.receptive_field.kernel[kc,kc,:].copy()
-        self.temporal_kernel /= self.temporal_kernel.max() if self.temporal_kernel.sum() > 0 else abs(self.temporal_kernel.min())
-        
         self.i = 0
     
 
@@ -250,9 +248,8 @@ class CellWithReceptiveField(object):
         """
         view_array = self.visual_space.view(self.visual_region, pixel_size=self.receptive_field.spatial_resolution) / self.background_luminance
         self.mean[self.i:self.i+self.update_factor] = numpy.mean(view_array)
-
-        contrast_time_course = numpy.dot(self.receptive_field.reshaped_kernel,view_array.reshape(-1)[:numpy.newaxis])
-        luminance_time_course = self.temporal_kernel * self.mean[self.i] * self.background_luminance
+        contrast_time_course = numpy.dot(self.receptive_field.kernel_contrast_component,view_array.reshape(-1)[:numpy.newaxis])
+        luminance_time_course = self.receptive_field.kernel_luminance_component * self.mean[self.i] * self.background_luminance
         self.va = view_array
 
         if self.update_factor != 1.0:
@@ -631,7 +628,7 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
         
 
         for rf_type in self.rf_types:
-                amplitude = visual_space.background_luminance * input_cells[rf_type].temporal_kernel.sum()
+                amplitude = visual_space.background_luminance * input_cells[rf_type].receptive_field.kernel_luminance_component.sum()
                 amplitude = self.parameters.linear_scaler * input_cells[rf_type].gain_control.non_linear_gain.luminance_gain * amplitude / (numpy.abs(amplitude) + input_cells[rf_type].gain_control.non_linear_gain.luminance_scaler)
                 for i, (scs, ncs) in enumerate(zip(self.scs[rf_type],self.ncs[rf_type])):
                     scs.set_parameters(times=times,amplitudes=zers+amplitude,copy=False)

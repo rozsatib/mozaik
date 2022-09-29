@@ -74,6 +74,8 @@ def G(t, K1, K2, c1, c2, t1, t2, n1, n2):
     p3 = p1 - p2
     ### norm to max == 1.
     ##p3 /= p3.max()
+    p3[p3==numpy.inf] = numpy.nan
+    p3=numpy.nan_to_num(p3)
     return p3
 
 

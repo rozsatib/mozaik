@@ -47,7 +47,7 @@ params = {
                     "func": "cai97.stRF_2d",
                     "func_params": {
                         "Ac": 1.0,
-                        "As": 0.15,
+                        "As": 0.3,
                         "K1": 1.05,
                         "K2": 0.7,
                         "c1": 0.14,
@@ -170,6 +170,7 @@ class TestCellWithReceptiveField:
     @pytest.mark.parametrize("x", np.random.randint(0,30,size=5))
     @pytest.mark.parametrize("y", np.random.randint(0,30,size=5))
     @pytest.mark.parametrize("on", [True,False])
+    # TODO: Find out why this test fails when RF width != height
     def test_impulse_response(self, x, y, on):
         stimulus = PixelImpulse(relative_luminance=1.0, x=x, y=y, **self.vs_params)
         self.visual_space.clear()
@@ -186,7 +187,9 @@ class TestCellWithReceptiveField:
         cell.view()
 
         r = cell.contrast_response[: rf.kernel.shape[2]]
-        np.testing.assert_allclose(r, rf.kernel[x, y, :])
+
+        pos = y + x*rf.kernel.shape[0]
+        np.testing.assert_allclose(r, rf.kernel_contrast_component[:, pos])
 
 
 class TestSpatioTemporalFilterRetinaLGN:
