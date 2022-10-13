@@ -12,7 +12,7 @@
             "v_rest": -60.0,
             "v_reset": -60.0,
             "tau_refrac": 5.0,
-            "tau_m": 20.0,
+            "tau_m": 1.0,
             "cm": 0.2,
             "e_rev_E": 0.0,
             "e_rev_I": -80.0,

@@ -69,6 +69,34 @@ class TestCorticalStimulationWithOptogeneticArray:
         else:
             return np.all(d <= ssp.radius + ds.parameters.spacing / 2)
 
+    def test_initial_asserts(self):
+        p = MozaikExtendedParameterSet(
+            {
+                "sheet_list": ["exc_sheet"],
+                "sheet_intensity_scaler": [1.0],
+                "sheet_transfection_proportion": [1.0],
+                "num_trials": 1,
+                "stimulator_array_parameters": deepcopy(self.opt_array_params),
+            }
+        )
+
+        for param in ["sheet_intensity_scaler", "sheet_transfection_proportion"]:
+            with pytest.raises(AssertionError):
+                p[param].append(1.0)
+                CorticalStimulationWithOptogeneticArray(self.model, p)
+            p[param].pop()
+
+            with pytest.raises(AssertionError):
+                p[param][0] = -1
+                CorticalStimulationWithOptogeneticArray(self.model, p)
+            p[param][0] = 1
+
+            if param == "sheet_transfection_proportion":
+                with pytest.raises(AssertionError):
+                    p[param][0] = 2
+                    CorticalStimulationWithOptogeneticArray(self.model, p)
+                p[param][0] = 1
+
 
 class TestSingleOptogeneticArrayStimulus(TestCorticalStimulationWithOptogeneticArray):
     def get_experiment(self, x, y):
@@ -188,8 +216,6 @@ class TestOptogeneticArrayStimulusHexagonalTiling(
 
 
 class TestOptogeneticArrayImageStimulus(TestCorticalStimulationWithOptogeneticArray):
-    """"""
-
     def get_experiment(self, im_path, intensity_scaler):
         return OptogeneticArrayImageStimulus(
             self.model,
@@ -224,7 +250,7 @@ class TestOptogeneticArrayImageStimulus(TestCorticalStimulationWithOptogeneticAr
         np.save("tests/sheets/or_map.npy", circular_dist(0, or_map, 1))
 
         dss = self.get_experiment_direct_stimulators(
-            im_path="tests/sheets/or_map.npy", intensity_scaler=1.0
+            im_path="tests/sheets/or_map.npy", intensity_scaler=2.0
         )
         anns = self.model.neuron_annotations()["exc_sheet"]
         ids = self.model.neuron_ids()["exc_sheet"]

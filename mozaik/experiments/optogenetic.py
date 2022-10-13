@@ -30,10 +30,18 @@ class CorticalStimulationWithOptogeneticArray(Experiment):
     Other parameters
     ----------------
 
-    sheet_list : list
+    sheet_list : list(str)
                 The list of sheets in which to do stimulation.
 
-    TODO: Sheet intensity scaler and transfection proportion documentation
+    sheet_intensity_scaler : list(float)
+                Scale the stimulation intensity of each sheet in sheet_list by the
+                constants in this list. Must have equal length to sheet_list.
+                The constants must be in the range (0,infinity)
+
+    sheet_transfection_proportion : list(float)
+                Set the proportion of transfected cells in each sheet in sheet_list.
+                Must have equal length to sheet_list. The constants must be in the
+                range (0,1) - 0 means no cells, 1 means all cells.
 
     num_trials : int
                 Number of trials each stimulus is shown.
@@ -71,7 +79,10 @@ class CorticalStimulationWithOptogeneticArray(Experiment):
             "depth_sampling_step",
             "light_source_light_propagation_data",
         }
-        # assert sheet list, intensity scaler, transfection proportion lengths equal
+        assert len(self.parameters.sheet_list) == len(self.parameters.sheet_intensity_scaler), "sheet_list and sheet_intensity_scaler must have equal lengths, not %d and %d" % (len(self.parameters.sheet_list),len(self.parameters.sheet_intensity_scaler))
+        assert len(self.parameters.sheet_list) == len(self.parameters.sheet_transfection_proportion), "sheet_list and sheet_transfection_proportion must have equal lengths, not %d and %d!" % (len(self.parameters.sheet_list),len(self.parameters.sheet_transfection_proportion))
+        assert all([s >= 0 for s in self.parameters.sheet_intensity_scaler]), "Sheet intensity scalers must be larger than 0!"
+        assert all([s >= 0 and s <= 1 for s in self.parameters.sheet_transfection_proportion]), "Sheet transfection proportions must be in the range of (0,1)!"
         assert self.parameters.stimulator_array_parameters.keys() == stimulator_array_keys, "Stimulator array keys must be: %s. Supplied: %s. Difference: %s" % (stimulator_array_keys,self.parameters.stimulator_array_parameters.keys(),set(stimulator_array_keys)^set(self.parameters.stimulator_array_parameters.keys()))
 
     def append_direct_stim(self, model, stimulator_array_parameters):
@@ -125,6 +136,16 @@ class SingleOptogeneticArrayStimulus(CorticalStimulationWithOptogeneticArray):
 
     sheet_list : int
                 The list of sheets in which to do stimulation.
+
+    sheet_intensity_scaler : list(float)
+                Scale the stimulation intensity of each sheet in sheet_list by the
+                constants in this list. Must have equal length to sheet_list.
+                The constants must be in the range (0,infinity)
+
+    sheet_transfection_proportion : list(float)
+                Set the proportion of transfected cells in each sheet in sheet_list.
+                Must have equal length to sheet_list. The constants must be in the
+                range (0,1) - 0 means no cells, 1 means all cells.
 
     num_trials : int
                 Number of trials each stimulus is shown.
@@ -200,6 +221,16 @@ class OptogeneticArrayStimulusCircles(CorticalStimulationWithOptogeneticArray):
 
     sheet_list : int
                 The list of sheets in which to do stimulation.
+
+    sheet_intensity_scaler : list(float)
+                Scale the stimulation intensity of each sheet in sheet_list by the
+                constants in this list. Must have equal length to sheet_list.
+                The constants must be in the range (0,infinity)
+
+    sheet_transfection_proportion : list(float)
+                Set the proportion of transfected cells in each sheet in sheet_list.
+                Must have equal length to sheet_list. The constants must be in the
+                range (0,1) - 0 means no cells, 1 means all cells.
 
     num_trials : int
                 Number of trials each stimulus is shown.
@@ -299,6 +330,16 @@ class OptogeneticArrayStimulusHexagonalTiling(CorticalStimulationWithOptogenetic
 
     sheet_list : int
                 The list of sheets in which to do stimulation.
+
+    sheet_intensity_scaler : list(float)
+                Scale the stimulation intensity of each sheet in sheet_list by the
+                constants in this list. Must have equal length to sheet_list.
+                The constants must be in the range (0,infinity)
+
+    sheet_transfection_proportion : list(float)
+                Set the proportion of transfected cells in each sheet in sheet_list.
+                Must have equal length to sheet_list. The constants must be in the
+                range (0,1) - 0 means no cells, 1 means all cells.
 
     num_trials : int
                 Number of trials each stimulus is shown.
@@ -439,7 +480,73 @@ class OptogeneticArrayStimulusHexagonalTiling(CorticalStimulationWithOptogenetic
 
 class OptogeneticArrayImageStimulus(CorticalStimulationWithOptogeneticArray):
     """
-    TODO documentation: The image loaded is of numpy format, the dimension order of it is X,Y
+    Optogenetic stimulation of cortical sheets with an array of light sources,
+    in the pattern of a grayscale image, stored as a .npy file containing a 2D
+    numpy array, with values between 0 (black) and 1 (white). If the image has a
+    different aspect ratio or number of pixels as the stimulation array, it will
+    be stretched to fit the array.
+
+    The experiment accepts either the path to a single image, or a directory
+    containing images. All .npy files in such a supplied directory have to
+    be 2D and have values in the range of (0,1).
+
+    The mapping between the axes of the numpy array and cortical space
+    is 0->X, 1->Y.
+
+    Does not show any actual visual stimulus.
+
+    Parameters
+    ----------
+    model : Model
+          The model on which to execute the experiment.
+
+    Other parameters
+    ----------------
+
+    sheet_list : int
+                The list of sheets in which to do stimulation.
+
+    sheet_intensity_scaler : list(float)
+                Scale the stimulation intensity of each sheet in sheet_list by the
+                constants in this list. Must have equal length to sheet_list.
+                The constants must be in the range (0,infinity)
+
+    sheet_transfection_proportion : list(float)
+                Set the proportion of transfected cells in each sheet in sheet_list.
+                Must have equal length to sheet_list. The constants must be in the
+                range (0,1) - 0 means no cells, 1 means all cells.
+
+    num_trials : int
+                Number of trials each stimulus is shown.
+
+    stimulator_array_parameters : ParameterSet
+                Parameters for the optical stimulator array:
+                    size : float (μm)
+                    spacing : float (μm)
+                    update_interval : float (ms)
+                    depth_sampling_step : float (μm)
+                    light_source_light_propagation_data : str
+                These parameters are the same as the parameters of
+                mozaik.sheets.direct_stimulator.OpticalStimulatorArrayChR class,
+                except that it must not contain the parameters
+                *stimulating_signal* and *stimulating_signal_parameters* - those
+                are set by this experiment.
+
+    intensities : list(float)
+                Intensities of the stimulation. Uniform across the circle.
+
+    images_path : str
+                Path to either the .npy image array to read for stimulation, or the
+                directory containing the .npy image arrays to read for stimulation.
+
+    duration : float (ms)
+            Overall stimulus duration
+
+    onset_time : float (ms)
+            Time point when the stimulation turns on
+
+    offset_time : float(ms)
+            Time point when the stimulation turns off
     """
     required_parameters = ParameterSet({
             'sheet_list' : list,
@@ -469,7 +576,7 @@ class OptogeneticArrayImageStimulus(CorticalStimulationWithOptogeneticArray):
             image_paths = [self.parameters.images_path]
         elif os.path.isdir(self.parameters.images_path):
             image_paths = []
-            root, files = [(r,f) for r,d,f in os.walk(self.parameters.images_path)][0]
+            root, files = [(r,f) for r,d,f in os.walk(self.parameters.images_path) if f[-4:] == ".npy"][0]
             image_paths = sorted([os.path.join(root,f) for f in files])
         else:
             raise ValueError("images_path %s is not a file or directory!" % self.parameters.images_path)
@@ -542,7 +649,7 @@ class OptogeneticArrayStimulusOrientationTuningProtocol(CorticalStimulationWithO
     offset_time : float(ms)
             Time point when the stimulation turns off
     """
-    
+
     required_parameters = ParameterSet({
             'sheet_list' : list,
             'num_trials' : int,

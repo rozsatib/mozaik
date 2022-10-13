@@ -4,7 +4,7 @@
     "sheets": None,
     "results_dir": "",
     "name": "M",
-    "reset": True,
+    "reset": False,
     "null_stimulus_period": 150.0,
     "store_stimuli": False,
     "min_delay": 0.1,

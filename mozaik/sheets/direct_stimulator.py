@@ -402,8 +402,12 @@ class OpticalStimulatorArray(DirectStimulator):
                      The parameters passed to the function specified in
                      `stimulating_signal`
 
-    TODO: transfection_proportion - add documentation
-                                    in range (0,1)
+    transfection_proportion : float
+                     Set the proportion of transfected cells in each sheet in
+                     sheet_list. Must have equal length to sheet_list. The constants
+                     must be in the range (0,1) - 0 means no cells, 1 means
+                     all cells.
+
     Notes
     -----
 
@@ -654,7 +658,8 @@ class OpticalStimulatorArrayChR(OpticalStimulatorArray):
         for i in range(0,len(self.scs)):
             res = odeint(ChRsystem,[0,0,0.2,0.8,0],self.times,args=(self.mixed_signals_photo[i,:].flatten(),self.parameters.update_interval),hmax=self.parameters.update_interval)
             # Here we assume that we don't calculate the output if the input is zero
-            assert res[:,0:2].sum() != 0, "ODE solving failed!"
+            if optimized_scs:
+                assert res[:,0:2].sum() != 0, "ODE solving failed!"
             self.mixed_signals_current[i,:] =  60 * (17.2*res[:,0] + 2.9 * res[:,1])  / 2500 ; # the 60 corresponds to the 60mV difference between ChR reverse potential of 0mV and our expected mean Vm of about 60mV. This happens to end up being in nA which is what pyNN expect for current injection.
 
         self.mixed_signals_photo = self.compress_array(self.mixed_signals_photo)
@@ -664,9 +669,12 @@ class OpticalStimulatorArrayChR(OpticalStimulatorArray):
         ax = pylab.subplot(121)
         pylab.gca().set_aspect('equal')
         pylab.title('Activation magnitude (neurons)')
-        # TODO fix this plot
-        #sc = ax.scatter(self.stimulated_cells.positions[0],self.stimulated_cells.positions[1],s=10,c=numpy.squeeze(numpy.max(self.mixed_signals_photo,axis=1)),vmin=0)
-        #pylab.colorbar(sc, ax=ax)
+        lum = []
+        for c in self.sheet.pop.all_cells:
+            idx = np.where(self.stimulated_cells == c)[0]
+            lum.append(0 if len(idx) == 0 else np.max(self.mixed_signals_photo[idx[0],:]))
+        sc = ax.scatter(self.sheet.pop.positions[0],self.sheet.pop.positions[1],s=10,c=lum,vmin=0)
+        pylab.colorbar(sc, ax=ax)
 
         idx = np.argmax(self.mixed_signals_photo.sum(axis=1))
         ax = pylab.subplot(122)
@@ -765,15 +773,36 @@ def generate_2d_stim(sheet, coor_x, coor_y, parameters):
 
 def image_stim(coor_x, coor_y, parameters):
     """
-    TODO documentation
-    Input image range must be in 0-1! It will be multiplied by the intensity parameter, and not
-    be normalized beforehand!
+    Generate stimulation in the pattern of a grayscale image, loaded from a .npy
+    file containing a 2D numpy array, with values between 0 (black) and 1 (white).
+
+    The mapping between the axes of the numpy array and cortical space
+    is 0->X, 1->Y.
+
+    If the image has a different aspect ratio or number of pixels as the stimulation
+    array, it will be stretched to fit the array.
+
+    Parameters
+    ----------
+    coor_x : numpy array
+                X coordinates of all electrodes
+
+    coor_y : numpy array
+                Y coordinates of all electrodes
+
+    parameters : ParameterSet
+        intensity : float
+                Stimulation intensity constant
+        image_path : str
+                Path to the .npy file containing the image (2D array).
     """
     for i in range(coor_x.shape[1]):
         assert np.allclose(coor_x[:, i], coor_x[:, i]), "X coordinates must be in grid!"
     for i in range(coor_y.shape[0]):
         assert np.allclose(coor_y[0, :], coor_y[i, :]), "Y coordinates must be in grid!"
     A = np.load(parameters.image_path)
+    assert len(A.shape) == 2, "The image must be 2D! Instead, the image shape is: " % A.shape
+    assert np.all(A >= 0) and np.all(A <= 1), "All values in the image must be in the range of (0,1)!"
     A_interp = scipy.interpolate.interp2d(
         np.linspace(coor_x[:, 0].min(), coor_x[:, 0].max(), A.shape[0]),
         np.linspace(coor_y[0, :].min(), coor_y[0, :].max(), A.shape[1]),
@@ -914,8 +943,31 @@ def simple_shapes_binary_mask(coor_x, coor_y, shape, parameters):
 
 def single_pixel(sheet, coor_x, coor_y, update_interval, parameters):
     """
-    TODO: Add documentation
-    Only used in a pytest, is here because module importing is a pain otherwise
+    A simple stimulation pattern where for the entire duration a single stimulator
+    pixel is active (with an intensity of 1), all others have a value of 0.
+
+    Parameters
+    ----------
+    coor_x : numpy array
+                X coordinates of all electrodes
+
+    coor_y : numpy array
+                Y coordinates of all electrodes
+
+    update_interval : float (ms)
+                Timestep in which the stimulator updates
+
+    parameters : ParameterSet
+        x : int
+            x position of the lit up pixel.
+
+        y : int
+            y position of the lit up pixel.
+
+        duration : float (ms)
+            Overall stimulus duration
+
+    Only used in a for testing.
     """
     x, y = parameters["x"], parameters["y"]
     assert x in coor_x and y in coor_y

@@ -83,22 +83,7 @@ class Experiment(ParametrizedObject):
         to present to the model, some of these might have already been presented. The module `mozaik.controller` filters
         the list of stimuli which to present to prevent repetitions, and lets this function know via the stimuli argument which stimuli to actually present.
         """
-        import tracemalloc
-        snapshot = tracemalloc.take_snapshot()    
-        top_stats = snapshot.statistics('traceback')
-        print("Before experiments:")
-        print('Memory usage: %iMB' % (resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024))
-        for i in range(10):
-            if i == len(top_stats):
-                break
-            stat = top_stats[i]
-            print("%s memory blocks: %.1f KiB" % (stat.count, stat.size / 1024))
-            for line in stat.traceback.format():
-                print(line)
-            print()
-        print()
         srtsum = 0
-
         for i in stimulus_indexes:
             s = self.stimuli[i]
             logger.debug('Presenting stimulus: ' + str(s) + '\n')
@@ -116,18 +101,6 @@ class Experiment(ParametrizedObject):
                data_store.add_null_recording(null_segments,s) 
             
             logger.info('Stimulus %d/%d finished. Memory usage: %iMB' % (i+1,len(stimulus_indexes),resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024))
-
-            snapshot = tracemalloc.take_snapshot()    
-            top_stats = snapshot.statistics('traceback')
-
-            print("After experiment: %d" % i)
-            for i in range(10):
-                stat = top_stats[i]
-                print("%s memory blocks: %.1f KiB" % (stat.count, stat.size / 1024))
-                for line in stat.traceback.format():
-                    print(line)
-                print()
-            print()
         return srtsum
         
     def do_analysis(self):
