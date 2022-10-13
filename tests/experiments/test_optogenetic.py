@@ -16,6 +16,9 @@ from mozaik.tools.distribution_parametrization import (
 from mozaik.connectors.vision import MapDependentModularConnectorFunction
 from mozaik.tools.circ_stat import circular_dist
 import scipy.stats
+import pathlib
+
+test_dir = None
 
 
 class TestCorticalStimulationWithOptogeneticArray:
@@ -25,11 +28,13 @@ class TestCorticalStimulationWithOptogeneticArray:
 
     @classmethod
     def setup_class(cls):
-        model_params = load_parameters("tests/sheets/model_params")
-        cls.sheet_params = load_parameters("tests/sheets/exc_sheet_params")
+        global test_dir
+        test_dir = str(pathlib.Path(__file__).parent.parent)
+        model_params = load_parameters(test_dir + "/sheets/model_params")
+        cls.sheet_params = load_parameters(test_dir + "/sheets/exc_sheet_params")
         cls.sheet_params.min_depth = 100
         cls.sheet_params.max_depth = 400
-        cls.opt_array_params = load_parameters("tests/sheets/opt_array_params")
+        cls.opt_array_params = load_parameters(test_dir + "/sheets/opt_array_params")
         cls.set_sheet_size(cls, 400)
         cls.model = Model(nest, 8, model_params)
         cls.sheet = VisualCorticalUniformSheet3D(
@@ -240,17 +245,21 @@ class TestOptogeneticArrayImageStimulus(TestCorticalStimulationWithOptogeneticAr
             self.sheet,
             self.sheet,
             ParameterSet(
-                {"map_location": "tests/sheets/or_map", "sigma": 0, "periodic": True}
+                {
+                    "map_location": test_dir + "/sheets/or_map",
+                    "sigma": 0,
+                    "periodic": True,
+                }
             ),
         )
 
-        f = open("tests/sheets/or_map", "rb")
+        f = open(test_dir + "/sheets/or_map", "rb")
         or_map = pickle.load(f, encoding="latin1")
         f.close()
-        np.save("tests/sheets/or_map.npy", circular_dist(0, or_map, 1))
+        np.save(test_dir + "/sheets/or_map.npy", circular_dist(0, or_map, 1))
 
         dss = self.get_experiment_direct_stimulators(
-            im_path="tests/sheets/or_map.npy", intensity_scaler=2.0
+            im_path=test_dir + "/sheets/or_map.npy", intensity_scaler=10.0
         )
         anns = self.model.neuron_annotations()["exc_sheet"]
         ids = self.model.neuron_ids()["exc_sheet"]
@@ -267,19 +276,23 @@ class TestOptogeneticArrayImageStimulus(TestCorticalStimulationWithOptogeneticAr
             self.sheet,
             self.sheet,
             ParameterSet(
-                {"map_location": "tests/sheets/or_map", "sigma": 0, "periodic": True}
+                {
+                    "map_location": test_dir + "/sheets/or_map",
+                    "sigma": 0,
+                    "periodic": True,
+                }
             ),
         )
-        f = open("tests/sheets/or_map", "rb")
+        f = open(test_dir + "/sheets/or_map", "rb")
         or_map = pickle.load(f, encoding="latin1")
         f.close()
-        np.save("tests/sheets/or_map.npy", circular_dist(0, or_map, 1))
+        np.save(test_dir + "/sheets/or_map.npy", circular_dist(0, or_map, 1))
         dss = self.get_experiment_direct_stimulators(
-            im_path="tests/sheets/or_map.npy", intensity_scaler=1.0
+            im_path=test_dir + "/sheets/or_map.npy", intensity_scaler=1.0
         )
         msp_full = dss[0].mixed_signals_photo.sum()
         dss = self.get_experiment_direct_stimulators(
-            im_path="tests/sheets/or_map.npy", intensity_scaler=intensity_scaler
+            im_path=test_dir + "/sheets/or_map.npy", intensity_scaler=intensity_scaler
         )
         msp_is = dss[0].mixed_signals_photo.sum()
         assert np.isclose(msp_is / msp_full, intensity_scaler)

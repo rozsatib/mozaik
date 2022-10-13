@@ -14,6 +14,9 @@ from mozaik.tools.distribution_parametrization import (
     PyNNDistribution,
     MozaikExtendedParameterSet,
 )
+import pathlib
+
+test_dir = None
 
 
 class TestDirectStimulator:
@@ -44,18 +47,20 @@ class TestOpticalStimulatorArrayChR:
     def create_unity_radprof(self, h=20, w=100):
         radprof = np.zeros((h, w))
         radprof[:, 0] = 1
-        f = open("tests/sheets/unity_radprof.pickle", "wb")
+        f = open(test_dir + "/sheets/unity_radprof.pickle", "wb")
         pickle.dump(radprof, f)
         f.close()
 
     @classmethod
     def setup_class(cls):
-        model_params = load_parameters("tests/sheets/model_params")
+        global test_dir
+        test_dir = str(pathlib.Path(__file__).parent.parent)
+        model_params = load_parameters(test_dir + "/sheets/model_params")
         model_params.null_stimulus_period = 200
-        cls.sheet_params = load_parameters("tests/sheets/exc_sheet_params")
+        cls.sheet_params = load_parameters(test_dir + "/sheets/exc_sheet_params")
         cls.sheet_params.min_depth = 100
         cls.sheet_params.max_depth = 400
-        cls.opt_array_params = load_parameters("tests/sheets/opt_array_params")
+        cls.opt_array_params = load_parameters(test_dir + "/sheets/opt_array_params")
         cls.opt_array_params["transfection_proportion"] = 1.0
         cls.opt_array_params[
             "stimulating_signal"
@@ -133,7 +138,7 @@ class TestOpticalStimulatorArrayChR:
             if recorded_cells[i] in stim_ids:
                 assert d[i] != 0, "Zero input to neuron in stimulated_cells!"
             else:
-                assert d[i] < 1e-13, "Nonzero input to neuron not in stimulated_cells!"
+                assert d[i] < 1e-11, "Nonzero input to neuron not in stimulated_cells!"
 
     @pytest.mark.parametrize("onset_time", np.random.randint(0, 250, 4))
     @pytest.mark.parametrize("stim_duration", np.random.randint(0, 50, 4))
