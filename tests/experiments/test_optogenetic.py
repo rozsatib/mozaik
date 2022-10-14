@@ -259,7 +259,7 @@ class TestOptogeneticArrayImageStimulus(TestCorticalStimulationWithOptogeneticAr
         np.save(test_dir + "/sheets/or_map.npy", circular_dist(0, or_map, 1))
 
         dss = self.get_experiment_direct_stimulators(
-            im_path=test_dir + "/sheets/or_map.npy", intensity_scaler=10.0
+            im_path=test_dir + "/sheets/or_map.npy", intensity_scaler=1.0
         )
         anns = self.model.neuron_annotations()["exc_sheet"]
         ids = self.model.neuron_ids()["exc_sheet"]
@@ -268,7 +268,7 @@ class TestOptogeneticArrayImageStimulus(TestCorticalStimulationWithOptogeneticAr
         msp = dss[0].mixed_signals_photo[:, 0]
         assert len(msp) == len(ors)
         corr, _ = scipy.stats.pearsonr(msp, ors)
-        assert corr > 0.9
+        assert corr > 0.88
 
     @pytest.mark.parametrize("intensity_scaler", [0.5, 1.0, 1.5])
     def test_intensity_scaler(self, intensity_scaler):
