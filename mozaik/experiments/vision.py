@@ -561,6 +561,84 @@ class MeasureOrientationTuningFullfield(VisualExperiment):
     def do_analysis(self, data_store):
         pass
 
+class MeasureContrastLuminanceTuning(VisualExperiment):
+    """
+    Measure the contrast-luminance relationship of neurons using fullfield
+    drifting sinusoidal gratings.
+
+    This experiment will show a series of full-field sinusoidal gratings that
+    vary in contrast and mean luminance, while other parameters remain constant.
+    Every combination of the supplied luminances and contrasts will be presented,
+    num_trials times.
+
+    Parameters
+    ----------
+    model : Model
+          The model on which to execute the experiment.
+
+    Other parameters
+    ----------------
+
+    num_orientations : int
+          Number of orientation to present.
+
+    spatial_frequency : float
+                      Spatial frequency of the grating.
+
+    temporal_frequency : float
+                      Temporal frequency of the grating.
+
+    grating_duration : float
+                      The duration of single presentation of a grating.
+
+    contrasts : list(float)
+              List of contrasts (expressed as % : 0-100%) to present.
+
+    luminances : list(float)
+              List of mean luminances (expressed as cd/m^2) to present.
+
+    num_trials : int
+               Number of trials each each stimulus is shown.
+    """
+
+    required_parameters = ParameterSet(
+        {
+            "orientation": float,
+            "spatial_frequency": float,
+            "temporal_frequency": float,
+            "grating_duration": float,
+            "contrasts": list,
+            "luminances": list,
+            "num_trials": int,
+        }
+    )
+
+    def __init__(self, model, parameters):
+        VisualExperiment.__init__(self, model, parameters)
+        for c in self.parameters.contrasts:
+            for l in self.parameters.luminances:
+                for k in range(0, self.parameters.num_trials):
+                    self.stimuli.append(
+                        topo.FullfieldDriftingSinusoidalGrating(
+                            frame_duration=self.frame_duration,
+                            size_x=model.visual_field.size_x,
+                            size_y=model.visual_field.size_y,
+                            location_x=0.0,
+                            location_y=0.0,
+                            background_luminance=l,
+                            contrast=c,
+                            duration=self.parameters.grating_duration,
+                            density=self.density,
+                            trial=k,
+                            orientation=self.parameters.orientation,
+                            spatial_frequency=self.parameters.spatial_frequency,
+                            temporal_frequency=self.parameters.temporal_frequency,
+                        )
+                    )
+
+    def do_analysis(self, data_store):
+        pass
+
 
 class MeasureOrientationTuningFullfieldA(VisualExperiment):
     """
