@@ -40,7 +40,6 @@ class TestOpticalStimulatorArray:
 
 
 class TestOpticalStimulatorArrayChR:
-
     model = None
     sheet = None
 

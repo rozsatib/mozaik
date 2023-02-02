@@ -22,7 +22,6 @@ test_dir = None
 
 
 class TestCorticalStimulationWithOptogeneticArray:
-
     model = None
     sheet = None
 
