@@ -28,7 +28,7 @@ jobs:
 
     - name: Install Nest
       run: |
-        pip3 install numpy scipy mpi4py matplotlib quantities lazyarray interval Pillow param==1.5.1 parameters neo cython pynn psutil future requests elephant pytest-xdist pytest-timeout junitparser numba
+        pip3 install numpy==0.23.5 scipy mpi4py matplotlib quantities lazyarray interval Pillow param==1.5.1 parameters neo cython pynn==0.10.0 psutil future requests elephant pytest-xdist pytest-timeout junitparser numba
         wget https://github.com/nest/nest-simulator/archive/v3.1.tar.gz
         tar xvfz v3.1.tar.gz
         cd nest-simulator-3.1
