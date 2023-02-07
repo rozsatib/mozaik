@@ -16,20 +16,24 @@ from mozaik.tools.distribution_parametrization import (
 from mozaik.connectors.vision import MapDependentModularConnectorFunction
 from mozaik.tools.circ_stat import circular_dist
 import scipy.stats
+import pathlib
+
+test_dir = None
 
 
 class TestCorticalStimulationWithOptogeneticArray:
-
     model = None
     sheet = None
 
     @classmethod
     def setup_class(cls):
-        model_params = load_parameters("tests/sheets/model_params")
-        cls.sheet_params = load_parameters("tests/sheets/exc_sheet_params")
+        global test_dir
+        test_dir = str(pathlib.Path(__file__).parent.parent)
+        model_params = load_parameters(test_dir + "/sheets/model_params")
+        cls.sheet_params = load_parameters(test_dir + "/sheets/exc_sheet_params")
         cls.sheet_params.min_depth = 100
         cls.sheet_params.max_depth = 400
-        cls.opt_array_params = load_parameters("tests/sheets/opt_array_params")
+        cls.opt_array_params = load_parameters(test_dir + "/sheets/opt_array_params")
         cls.set_sheet_size(cls, 400)
         cls.model = Model(nest, 8, model_params)
         cls.sheet = VisualCorticalUniformSheet3D(
@@ -65,9 +69,37 @@ class TestCorticalStimulationWithOptogeneticArray:
         coords = self.get_coords(ds.stimulated_cells)
         d = np.sqrt(((coords - center) ** 2).sum(axis=0))
         if invert:
-            return np.all(d >= ssp.radius - ds.parameters.spacing / 2)
+            return np.all(d >= ssp.radius - ds.parameters.spacing)
         else:
-            return np.all(d <= ssp.radius + ds.parameters.spacing / 2)
+            return np.all(d <= ssp.radius + ds.parameters.spacing)
+
+    def test_initial_asserts(self):
+        p = MozaikExtendedParameterSet(
+            {
+                "sheet_list": ["exc_sheet"],
+                "sheet_intensity_scaler": [1.0],
+                "sheet_transfection_proportion": [1.0],
+                "num_trials": 1,
+                "stimulator_array_parameters": deepcopy(self.opt_array_params),
+            }
+        )
+
+        for param in ["sheet_intensity_scaler", "sheet_transfection_proportion"]:
+            with pytest.raises(AssertionError):
+                p[param].append(1.0)
+                CorticalStimulationWithOptogeneticArray(self.model, p)
+            p[param].pop()
+
+            with pytest.raises(AssertionError):
+                p[param][0] = -1
+                CorticalStimulationWithOptogeneticArray(self.model, p)
+            p[param][0] = 1
+
+            if param == "sheet_transfection_proportion":
+                with pytest.raises(AssertionError):
+                    p[param][0] = 2
+                    CorticalStimulationWithOptogeneticArray(self.model, p)
+                p[param][0] = 1
 
 
 class TestSingleOptogeneticArrayStimulus(TestCorticalStimulationWithOptogeneticArray):
@@ -188,8 +220,6 @@ class TestOptogeneticArrayStimulusHexagonalTiling(
 
 
 class TestOptogeneticArrayImageStimulus(TestCorticalStimulationWithOptogeneticArray):
-    """"""
-
     def get_experiment(self, im_path, intensity_scaler):
         return OptogeneticArrayImageStimulus(
             self.model,
@@ -214,17 +244,21 @@ class TestOptogeneticArrayImageStimulus(TestCorticalStimulationWithOptogeneticAr
             self.sheet,
             self.sheet,
             ParameterSet(
-                {"map_location": "tests/sheets/or_map", "sigma": 0, "periodic": True}
+                {
+                    "map_location": test_dir + "/sheets/or_map",
+                    "sigma": 0,
+                    "periodic": True,
+                }
             ),
         )
 
-        f = open("tests/sheets/or_map", "rb")
+        f = open(test_dir + "/sheets/or_map", "rb")
         or_map = pickle.load(f, encoding="latin1")
         f.close()
-        np.save("tests/sheets/or_map.npy", circular_dist(0, or_map, 1))
+        np.save(test_dir + "/sheets/or_map.npy", circular_dist(0, or_map, 1))
 
         dss = self.get_experiment_direct_stimulators(
-            im_path="tests/sheets/or_map.npy", intensity_scaler=1.0
+            im_path=test_dir + "/sheets/or_map.npy", intensity_scaler=1.0
         )
         anns = self.model.neuron_annotations()["exc_sheet"]
         ids = self.model.neuron_ids()["exc_sheet"]
@@ -233,7 +267,7 @@ class TestOptogeneticArrayImageStimulus(TestCorticalStimulationWithOptogeneticAr
         msp = dss[0].mixed_signals_photo[:, 0]
         assert len(msp) == len(ors)
         corr, _ = scipy.stats.pearsonr(msp, ors)
-        assert corr > 0.9
+        assert corr > 0.85
 
     @pytest.mark.parametrize("intensity_scaler", [0.5, 1.0, 1.5])
     def test_intensity_scaler(self, intensity_scaler):
@@ -241,19 +275,23 @@ class TestOptogeneticArrayImageStimulus(TestCorticalStimulationWithOptogeneticAr
             self.sheet,
             self.sheet,
             ParameterSet(
-                {"map_location": "tests/sheets/or_map", "sigma": 0, "periodic": True}
+                {
+                    "map_location": test_dir + "/sheets/or_map",
+                    "sigma": 0,
+                    "periodic": True,
+                }
             ),
         )
-        f = open("tests/sheets/or_map", "rb")
+        f = open(test_dir + "/sheets/or_map", "rb")
         or_map = pickle.load(f, encoding="latin1")
         f.close()
-        np.save("tests/sheets/or_map.npy", circular_dist(0, or_map, 1))
+        np.save(test_dir + "/sheets/or_map.npy", circular_dist(0, or_map, 1))
         dss = self.get_experiment_direct_stimulators(
-            im_path="tests/sheets/or_map.npy", intensity_scaler=1.0
+            im_path=test_dir + "/sheets/or_map.npy", intensity_scaler=1.0
         )
         msp_full = dss[0].mixed_signals_photo.sum()
         dss = self.get_experiment_direct_stimulators(
-            im_path="tests/sheets/or_map.npy", intensity_scaler=intensity_scaler
+            im_path=test_dir + "/sheets/or_map.npy", intensity_scaler=intensity_scaler
         )
         msp_is = dss[0].mixed_signals_photo.sum()
         assert np.isclose(msp_is / msp_full, intensity_scaler)

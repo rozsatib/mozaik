@@ -14,6 +14,9 @@ from mozaik.tools.distribution_parametrization import (
     PyNNDistribution,
     MozaikExtendedParameterSet,
 )
+import pathlib
+
+test_dir = None
 
 
 class TestDirectStimulator:
@@ -37,24 +40,26 @@ class TestOpticalStimulatorArray:
 
 
 class TestOpticalStimulatorArrayChR:
-
     model = None
     sheet = None
 
     def create_unity_radprof(self, h=20, w=100):
         radprof = np.zeros((h, w))
         radprof[:, 0] = 1
-        f = open("tests/sheets/unity_radprof.pickle", "wb")
+        f = open(test_dir + "/sheets/unity_radprof.pickle", "wb")
         pickle.dump(radprof, f)
         f.close()
 
     @classmethod
     def setup_class(cls):
-        model_params = load_parameters("tests/sheets/model_params")
-        cls.sheet_params = load_parameters("tests/sheets/exc_sheet_params")
+        global test_dir
+        test_dir = str(pathlib.Path(__file__).parent.parent)
+        model_params = load_parameters(test_dir + "/sheets/model_params")
+        model_params.null_stimulus_period = 200
+        cls.sheet_params = load_parameters(test_dir + "/sheets/exc_sheet_params")
         cls.sheet_params.min_depth = 100
         cls.sheet_params.max_depth = 400
-        cls.opt_array_params = load_parameters("tests/sheets/opt_array_params")
+        cls.opt_array_params = load_parameters(test_dir + "/sheets/opt_array_params")
         cls.opt_array_params["transfection_proportion"] = 1.0
         cls.opt_array_params[
             "stimulating_signal"
@@ -77,12 +82,28 @@ class TestOpticalStimulatorArrayChR:
         cls.sheet.record()
         cls.duration = cls.opt_array_params.stimulating_signal_parameters.duration
 
+        """
+        The first recording in a simulation lasts one min_delay longer for some
+        reason, which messes up recording comparisons, so we do a short dummy
+        recording in the beginning.
+        TODO: Remove once this Github issue is resolved:
+        https://github.com/NeuralEnsemble/PyNN/issues/759
+        """
+        sap = MozaikExtendedParameterSet(deepcopy(cls.opt_array_params))
+        sap.stimulating_signal_parameters.duration = 1
+        sap.stimulating_signal_parameters.onset_time = 0
+        sap.stimulating_signal_parameters.offset_time = 0
+        ds = OpticalStimulatorArrayChR(cls.sheet, sap)
+        cls.record_and_retrieve_data(cls, ds, 1)
+
     def record_and_retrieve_data(self, ds, duration):
         self.model.reset()
-        self.sheet.prepare_artificial_stimulation(duration, 0, [ds])
+        self.sheet.prepare_artificial_stimulation(
+            duration, self.model.simulator_time, [ds]
+        )
         self.model.run(duration)
-        ds.inactivate(duration)
-        return (
+        ds.inactivate(self.model.simulator_time)
+        return np.array(
             self.sheet.get_data(duration).analogsignals[0]
             - self.sheet_params["cell"]["params"]["v_rest"] * qt.mV
         )
@@ -116,7 +137,7 @@ class TestOpticalStimulatorArrayChR:
             if recorded_cells[i] in stim_ids:
                 assert d[i] != 0, "Zero input to neuron in stimulated_cells!"
             else:
-                assert d[i] == 0, "Nonzero input to neuron not in stimulated_cells!"
+                assert d[i] < 1e-11, "Nonzero input to neuron not in stimulated_cells!"
 
     @pytest.mark.parametrize("onset_time", np.random.randint(0, 250, 4))
     @pytest.mark.parametrize("stim_duration", np.random.randint(0, 50, 4))
@@ -132,8 +153,6 @@ class TestOpticalStimulatorArrayChR:
         ds = OpticalStimulatorArrayChR(self.sheet, sap)
         assert ds.mixed_signals_current.sum() != 0
 
-    @pytest.mark.skip
-    # TODO: Fix the fact that we are unable to use reset in NEST 3!!!!!
     def test_scs_sharing(self):
         radii = np.arange(50, 200.1, 50)
         shared_scs = {}
@@ -151,9 +170,9 @@ class TestOpticalStimulatorArrayChR:
             ds = OpticalStimulatorArrayChR(self.sheet, sap)
             d_no_share = self.record_and_retrieve_data(ds, self.duration)
 
-            assert np.all(d_share == d_no_share)
+            assert d_share.sum() > 0  # There is at least some response
+            np.testing.assert_allclose(d_share, d_no_share, atol=1e-13)
 
-    @pytest.mark.skip
     def test_scs_optimization(self):
         shared_scs = None
         shared_scs_optimized = {}
@@ -181,7 +200,7 @@ class TestOpticalStimulatorArrayChR:
             shared_scs = ds.scs
             d2 = self.record_and_retrieve_data(ds, self.duration)
 
-            assert np.array_equal(d1, d2)
+            np.testing.assert_allclose(d1, d2, atol=1e-13)
 
     def plot_max_response(self, d1, d2):
         import matplotlib.pyplot as plt

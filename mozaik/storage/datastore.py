@@ -445,7 +445,8 @@ class DataStore(DataStoreView):
 
     def add_direct_stimulation(self, direct_stimulators, stimulus):
         """
-        The DataStore interface function that adds TODO into the datastore.
+        The DataStore interface function that adds direct stimulation stimuli into
+        the datastore.
         """
         if self.parameters.store_stimuli and not self.stimulus_presented(stimulus):
             for sheet in direct_stimulators:
