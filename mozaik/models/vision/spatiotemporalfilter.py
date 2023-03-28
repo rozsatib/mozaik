@@ -113,7 +113,8 @@ class SpatioTemporalReceptiveField(object):
         #                 (width, height, duration, kernel.shape))
         #logger.debug("before normalization: min=%g, max=%g" %
         #                 (kernel.min(), kernel.max()))
-        kernel = kernel/(nx * ny * nt)  # normalize to make the kernel sum quasi-independent of the quantization
+        #kernel = kernel/(nx * ny * nt)  # normalize to make the kernel sum quasi-independent of the quantization
+        kernel *= dx * dy * dt  # the integral of the kernel should be independent of quantization
         #logger.debug("  after normalization: min=%g, max=%g, sum=%g" %
         #                 (kernel.min(), kernel.max(), kernel.sum()))
         self.kernel = kernel
@@ -270,8 +271,12 @@ class CellWithReceptiveField(object):
         nA. Returns a dictionary containing 'times' and 'amplitudes'.
         """
         if self.gain_control.non_linear_gain != None:
+            #print("Contrast response sum before scaling:",self.contrast_response.sum())
+            #print("Luminance response sum before scaling:",self.luminance_response.sum())
             contrast_response = self.gain_control.non_linear_gain.contrast_gain * self.contrast_response / (numpy.abs(self.contrast_response) + self.gain_control.non_linear_gain.contrast_scaler)
             luminance_response = self.gain_control.non_linear_gain.luminance_gain * self.luminance_response / (numpy.abs(self.luminance_response) + self.gain_control.non_linear_gain.luminance_scaler)
+            #print("Contrast response sum after scaling:",contrast_response.sum())
+            #print("Luminance response sum after scaling:",luminance_response.sum())
             response = (contrast_response+luminance_response)[:-self.receptive_field.kernel_duration] # remove the extra padding at the end
             contrast_response=contrast_response[:-self.receptive_field.kernel_duration]
             luminance_response=luminance_response[:-self.receptive_field.kernel_duration]
