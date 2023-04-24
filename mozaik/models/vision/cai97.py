@@ -72,6 +72,8 @@ def stRF_2d(x, y, t, p):
         for i in range(0,numpy.shape(rf)[2]): # lets normalize each time slice separately
             rf[:,:,i] = rf[:,:,i] - rf[:,:,i].mean()
         #rf = rf - rf.mean()
+    if hasattr(p,'normalize_abs_sum') and p.normalize_abs_sum:
+        rf /= numpy.abs(rf).sum()
     return rf
 
 
