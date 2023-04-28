@@ -187,8 +187,8 @@ class CellWithReceptiveField(object):
         #logger.debug("receptive_field.kernel.shape = %s" % str(self.receptive_field.kernel.shape))
         #logger.debug("response.shape = %s" % str(self.response.shape))
         if visual_space.update_interval % self.receptive_field.temporal_resolution != 0:
-            errmsg = "The receptive field temporal resolution (%g ms) must be an integer multiple of the visual space update interval (%g ms)" % \
-                (self.receptive_field.temporal_resolution, visual_space.update_interval)
+            errmsg = "The visual space update interval (%g ms) must be an integer multiple of the receptive field temporal resolution (%g ms)" % \
+                (visual_space.update_interval, self.receptive_field.temporal_resolution)
             raise Exception(errmsg)
         self.update_factor = int(visual_space.update_interval / self.receptive_field.temporal_resolution)
         
