@@ -133,7 +133,7 @@ def prepare_workflow(simulation_name, model_class):
         Global.root_directory = parameters.results_dir + ddir + '/'
 
 
-    os.makedirs(Global.root_directory)
+    os.makedirs(Global.root_directory, exist_ok=True)
     if mozaik.mpi_comm and mozaik.mpi_comm.rank == 0:
         mozaik.mpi_comm.barrier()
 
