@@ -18,6 +18,7 @@ from mozaik.tools.pyNN import *
 from parameters import ParameterSet
 from builtins import zip
 from collections import OrderedDict
+import copy
 
 logger = mozaik.getMozaikLogger()
 
@@ -376,15 +377,23 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
         'gain_control' : {
                     'gain' : float,
                     'non_linear_gain' : ParameterSet({
-                        'luminance_gain' : float,
-                        'luminance_scaler' : float,
+                        'luminance_gain_ON' : float,
+                        'luminance_scaler_ON' : float,
+                        'luminance_gain_OFF' : float,
+                        'luminance_scaler_OFF' : float,
                         'contrast_gain' : float,
                         'contrast_scaler' : float,
                     })
                 },
         'noise': ParameterSet({
-            'mean': float,
-            'stdev': float,  # nA
+            'X_ON': ParameterSet({
+                'mean': float,
+                'stdev': float,  # nA
+            }),
+            'X_OFF': ParameterSet({
+                'mean': float,
+                'stdev': float,  # nA
+            }),
         }),
     })
 
@@ -398,10 +407,28 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
         sim = self.model.sim
         self.pops = OrderedDict()
 
+        # Create separate gain control ParameterSets for ON and OFF neurons
+        # It is a bit ugly here, but seems like the cleanest solution if only the
+        # luminance scaling parameters are specific for ON/OFF cells
+        self.gain_control = {}
+        self.gain_control['X_ON'] = copy.deepcopy(self.parameters.gain_control)
+        self.gain_control['X_OFF'] = copy.deepcopy(self.parameters.gain_control)
+        nlg = self.gain_control['X_ON'].non_linear_gain
+        nlg['luminance_gain'] = nlg.pop('luminance_gain_ON')
+        nlg['luminance_scaler'] = nlg.pop('luminance_scaler_ON')
+        del nlg['luminance_gain_OFF']
+        del nlg['luminance_scaler_OFF']
+        nlg = self.gain_control['X_OFF'].non_linear_gain
+        nlg['luminance_gain'] = nlg.pop('luminance_gain_OFF')
+        nlg['luminance_scaler'] = nlg.pop('luminance_scaler_OFF')
+        del nlg['luminance_gain_ON']
+        del nlg['luminance_scaler_ON']
+
+        print(self.gain_control)
         if self.parameters.cell.model[-6:] == '_sc_nc':
             self.integrated_cs = True
-            import copy
             cell = copy.deepcopy(self.parameters.cell)
+            raise Exception("Fix the different ON/OFF noise situation")
             cell.params.update([('mean', self.parameters.noise.mean*1000), ('std', self.parameters.noise.stdev*1000), ('dt', self.model.sim.get_time_step())])
         else:
             self.integrated_cs = False
@@ -440,7 +467,7 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                     scs = sim.StepCurrentSource(times=[0.0], amplitudes=[0.0])
 
                     if not self.parameters.mpi_reproducible_noise:
-                        ncs = sim.NoisyCurrentSource(**self.parameters.noise)
+                        ncs = sim.NoisyCurrentSource(**self.parameters.noise[rf_type])
                     else:
                         ncs = sim.StepCurrentSource(times=[0.0], amplitudes=[0.0])
 
@@ -611,8 +638,8 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                     scs.set_parameters(times=t, amplitudes=a,copy=False)
                     if self.parameters.mpi_reproducible_noise:
                         t = numpy.arange(0, duration, ts) + offset
-                        amplitudes = (self.parameters.noise.mean
-                                       + self.parameters.noise.stdev
+                        amplitudes = (self.parameters.noise[rf_type].mean
+                                       + self.parameters.noise[rf_type].stdev
                                            * self.ncs_rng[rf_type][i].randn(len(t)))
                         ncs.set_parameters(times=t, amplitudes=amplitudes,copy=False)
 
@@ -678,7 +705,7 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
             input_cells[rf_type] = CellWithReceptiveField(self.sheets[rf_type].pop.positions[0][0],
                                               self.sheets[rf_type].pop.positions[1][0],
                                               self.rf[rf_type],
-                                              self.parameters.gain_control,visual_space)
+                                              self.gain_control[rf_type],visual_space)
             input_cells[rf_type].initialize(visual_space.background_luminance, duration)
         
 
@@ -699,8 +726,8 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                     scs.set_parameters(times=times,amplitudes=zers+amplitude,copy=False)
                     if self.parameters.mpi_reproducible_noise:
                         t = numpy.arange(0, duration, ts) + offset
-                        amplitudes = (self.parameters.noise.mean
-                                        + self.parameters.noise.stdev
+                        amplitudes = (self.parameters.noise[rf_type].mean
+                                        + self.parameters.noise[rf_type].stdev
                                            * self.ncs_rng[rf_type][i].randn(len(t)))
                         ncs.set_parameters(times=t, amplitudes=amplitudes,copy=False)
 
@@ -728,7 +755,7 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                 cell = CellWithReceptiveField(self.sheets[rf_type].pop.positions[0][i],
                                               self.sheets[rf_type].pop.positions[1][i],
                                               self.rf[rf_type],
-                                              self.parameters.gain_control,visual_space)
+                                              self.gain_control[rf_type],visual_space)
                 cell.initialize(visual_space.background_luminance, duration)
                 input_cells[rf_type].append(cell)
 
