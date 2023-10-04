@@ -186,11 +186,12 @@ class CellWithReceptiveField(object):
         #logger.debug("view_array.shape = %s" % str(view_array.shape))
         #logger.debug("receptive_field.kernel.shape = %s" % str(self.receptive_field.kernel.shape))
         #logger.debug("response.shape = %s" % str(self.response.shape))
-        if visual_space.update_interval % self.receptive_field.temporal_resolution != 0:
+        self.update_factor = visual_space.update_interval / self.receptive_field.temporal_resolution
+        if not numpy.isclose(self.update_factor, int(numpy.round(self.update_factor))):
             errmsg = "The visual space update interval (%g ms) must be an integer multiple of the receptive field temporal resolution (%g ms)" % \
                 (visual_space.update_interval, self.receptive_field.temporal_resolution)
             raise Exception(errmsg)
-        self.update_factor = int(visual_space.update_interval / self.receptive_field.temporal_resolution)
+        self.update_factor = int(numpy.round(self.update_factor))
         
         #logger.debug("Created cell with receptive field centred at %gº,%gº" % (x,y))
         #logger.debug("  " + str(receptive_field))
