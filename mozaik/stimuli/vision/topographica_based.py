@@ -369,12 +369,12 @@ class NaturalImageWithEyeMovement(TopographicaBasedVisualStimulus):
     size = SNumber(degrees, doc="The length of the longer axis of the image in visual degrees")
     eye_movement_period = SNumber(ms, doc="The time between two consequitve eye movements recorded in the eye_path file")
     image_location = SString(doc="Location of the image")
-    eye_path_location = SString(doc="Location of file containing the eye path (two columns of numbers)")
+    eye_path = SParameterSet(doc="Location of file containing the eye path (two columns of numbers)")
+    # POZN: eye_path = list of numpy arrays -> pouzit SParameterSet (funguje ako dictionary)
+    
 
     def frames(self):
         self.time = 0
-        f = open(self.eye_path_location, 'rb')
-        self.eye_path = pickle.load(f, encoding="latin1")
         self.pattern_sampler = imagen.image.PatternSampler(
                                     size_normalization='fit_longest',
                                     whole_pattern_output_fns=[MaximumDynamicRange()])
@@ -393,9 +393,18 @@ class NaturalImageWithEyeMovement(TopographicaBasedVisualStimulus):
                                     pattern_sampler=self.pattern_sampler)
 
         while True:
-            location = self.eye_path[int(numpy.floor(self.frame_duration * self.time / self.eye_movement_period))]
-            image.x = location[0]
-            image.y = location[1]
+            x = self.eye_path["x"]
+            y = self.eye_path["y"]
+
+        
+            print(self.frame_duration, self.time, self.eye_movement_period)
+            print("EYE PATH, ", x)
+            index = int(numpy.floor(self.frame_duration * self.time / self.eye_movement_period))
+            
+            if index > len(x)-1:
+                index = len(x)-1
+            image.x = x[index]
+            image.y = y[index]
             yield (image(), [self.time])
             self.time += 1
 
