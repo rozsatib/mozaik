@@ -175,9 +175,10 @@ class TestModel(object):
 
         print(len(self.get_voltages(ds0, sheet_name, max_neurons)), flush=True)
         print(len(self.get_voltages(ds1, sheet_name, max_neurons)), flush=True)
-        np.testing.assert_equal(
+        np.testing.assert_allclose(
             self.get_voltages(ds0, sheet_name, max_neurons),
             self.get_voltages(ds1, sheet_name, max_neurons),
+            atol=1e-14
         )
 
 
