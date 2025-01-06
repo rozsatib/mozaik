@@ -270,6 +270,36 @@ class TestLSV1MTiny(TestModel):
         self.check_voltages(self.ds, self.ds_ref, sheet_name, max_neurons=25)
 
 
+class TestLSV1MTinyOpto(TestModel):
+    """
+    Class that runs the a tiny version of the LSV0M model on construction from the mozaik-models
+    repository. Its testing methods compare the membrane potentials of a few neurons and the
+    spike times of all neurons to a saved reference.
+    """
+
+    model_run_command = "cd tests/full_model/models/LSV1M_tiny_opto && python run.py nest 2 param/defaults 'pytest' && cd ../../../.."
+    result_path = "tests/full_model/models/LSV1M_tiny_opto/LSV1M_pytest_____"
+    ref_path = "tests/full_model/reference_data/LSV1M_tiny_opto"
+
+    ds = None  # Model run datastore
+    ds_ref = None  # Reference datastore
+
+    @pytest.mark.model
+    @pytest.mark.LSV1M_tiny
+    @pytest.mark.parametrize(
+        "sheet_name", ["V1_Exc_L2/3"]
+    )
+    def test_spikes(self, sheet_name):
+        self.check_spikes(self.ds, self.ds_ref, sheet_name)
+
+    @pytest.mark.model
+    @pytest.mark.LSV1M_tiny
+    @pytest.mark.parametrize(
+        "sheet_name", ["V1_Exc_L2/3"]
+    )
+    def test_voltages(self, sheet_name):
+        self.check_voltages(self.ds, self.ds_ref, sheet_name, max_neurons=25)
+
 class TestModelExplosionMonitoring(TestModel):
     """
     Tests whether the explosion monitoring works as expected
