@@ -6,3 +6,5 @@ build
 *.komodoproject
 cover
 .coverage
+mozaik.egg-info
+dist

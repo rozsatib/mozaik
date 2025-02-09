@@ -42,6 +42,7 @@ class BaseStimulus(MozaikParametrized):
         self.input = None
         self._frames = self.frames()
         self.n_frames = numpy.inf  # possibly very dangerous. Don't do 'for i in range(stim.n_frames)'!
+        self.direct_stimulation_signals = []
         
     def __eq__(self, other):
         """

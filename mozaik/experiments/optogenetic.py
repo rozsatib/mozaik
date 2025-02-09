@@ -5,10 +5,9 @@ from parameters import ParameterSet
 from mozaik.stimuli import InternalStimulus
 from mozaik.tools.distribution_parametrization import MozaikExtendedParameterSet
 from collections import OrderedDict
-from mozaik.sheets.direct_stimulator import OpticalStimulatorArrayChR
 import matplotlib
-from copy import deepcopy
 import random
+from mozaik import load_component
 
 
 class CorticalStimulationWithOptogeneticArray(Experiment):
@@ -45,108 +44,51 @@ class CorticalStimulationWithOptogeneticArray(Experiment):
 
     num_trials : int
                 Number of trials each stimulus is shown.
-
-    stimulator_array_parameters : ParameterSet
-                Parameters for the optical stimulator array:
-                    size : float (μm)
-                    spacing : float (μm)
-                    update_interval : float (ms)
-                    depth_sampling_step : float (μm)
-                    light_source_light_propagation_data : str
-                These parameters are the same as the parameters of
-                mozaik.sheets.direct_stimulator.OpticalStimulatorArrayChR class,
-                except that it must not contain the parameters
-                *stimulating_signal* and *stimulating_signal_parameters* - those
-                must be set by the specific experiments.
     """
 
     required_parameters = ParameterSet(
         {
-            "sheet_list": list,
-            "sheet_intensity_scaler": list,
-            "sheet_transfection_proportion": list,
             "num_trials": int,
-            "stimulator_array_parameters": ParameterSet,
+            "stimulator_array_list": list,
         }
     )
 
     def __init__(self, model, parameters):
         Experiment.__init__(self, model, parameters)
-        stimulator_array_keys = {
-            "size",
-            "spacing",
-            "update_interval",
-            "depth_sampling_step",
-            "light_source_light_propagation_data",
-        }
-        p = self.parameters
-        assert len(p.sheet_list) == len(p.sheet_intensity_scaler), (
-            "sheet_list and sheet_intensity_scaler must have equal lengths, not %d and %d"
-            % (
-                len(p.sheet_list),
-                len(p.sheet_intensity_scaler),
+        stimulator_array_keys = {"sheet", "name", "intensity_scaler"}
+        for stimulator_param in self.parameters.stimulator_array_list:
+            assert (
+                stimulator_param.keys() == stimulator_array_keys
+            ), "Stimulator array keys must be: %s. Supplied: %s. Difference: %s" % (
+                stimulator_array_keys,
+                stimulator_param.keys(),
+                set(stimulator_array_keys) ^ set(stimulator_param.keys()),
             )
-        )
-        assert len(p.sheet_list) == len(p.sheet_transfection_proportion), (
-            "sheet_list and sheet_transfection_proportion must have equal lengths, not %d and %d!"
-            % (
-                len(p.sheet_list),
-                len(p.sheet_transfection_proportion),
-            )
-        )
-        assert all(
-            [s >= 0 for s in p.sheet_intensity_scaler]
-        ), "Sheet intensity scalers must be larger than 0!"
-        assert all(
-            [s >= 0 and s <= 1 for s in p.sheet_transfection_proportion]
-        ), "Sheet transfection proportions must be in the range of (0,1)!"
-        assert (
-            p.stimulator_array_parameters.keys() == stimulator_array_keys
-        ), "Stimulator array keys must be: %s. Supplied: %s. Difference: %s" % (
-            stimulator_array_keys,
-            p.stimulator_array_parameters.keys(),
-            set(stimulator_array_keys) ^ set(p.stimulator_array_parameters.keys()),
-        )
+            assert stimulator_param["intensity_scaler"] >= 0, "Sheet intensity scalers for stimulator %s must be larger than 0!" % stimulator_param["name"]
 
-    def append_direct_stim(self, model, stimulator_array_parameters):
-        p = self.parameters
-        if self.direct_stimulation == None:
-            self.direct_stimulation = []
-            self.shared_scs = OrderedDict((sheet, {}) for sheet in p.sheet_list)
+    def append_direct_stim(self, model, signal_function, signal_function_parameters):
+        signal_function = load_component(signal_function)
+        stimulators, signals = OrderedDict(), []
+        self.direct_stimulation = []
+        for i in range(len(self.parameters.stimulator_array_list)):
+            p = self.parameters.stimulator_array_list[i]
+            stimulator = model.sheets[p["sheet"]].artificial_stimulators[p["name"]]
+            x, y, dt = stimulator.stimulator_coords_x, stimulator.stimulator_coords_y, stimulator.parameters.update_interval
+            signal_function_parameters["intensity"] *= p["intensity_scaler"]
+            stimulators[p["sheet"]] = [stimulator] # In this experiment we only have a single stimulator per sheet
+            signals.append(signal_function(p["sheet"],x,y,dt,signal_function_parameters))
 
-        d = OrderedDict()
-        for k in range(len(p.sheet_list)):
-            sheet = p.sheet_list[k]
-            sap = MozaikExtendedParameterSet(deepcopy(stimulator_array_parameters))
-            sap.stimulating_signal_parameters.intensity *= p.sheet_intensity_scaler[k]
-            sap.transfection_proportion = p.sheet_transfection_proportion[k]
-            d[sheet] = [
-                OpticalStimulatorArrayChR(
-                    model.sheets[sheet], sap, self.shared_scs[sheet]
-                )
-            ]
-            self.shared_scs[sheet].update(
-                {
-                    d[sheet][0].stimulated_cells[i]: d[sheet][0].scs[i]
-                    for i in range(len(d[sheet][0].scs))
-                }
-            )
-
-        sap = MozaikExtendedParameterSet(deepcopy(stimulator_array_parameters))
-        sap["sheet_list"] = p.sheet_list
-        sap["sheet_intensity_scaler"] = p.sheet_intensity_scaler
-        sap["sheet_transfection_proportion"] = p.sheet_transfection_proportion
-        for trial in range(p.num_trials):
-            self.direct_stimulation.append(d)
-            self.stimuli.append(
-                InternalStimulus(
-                    frame_duration=sap.stimulating_signal_parameters.duration,
-                    duration=sap.stimulating_signal_parameters.duration,
+        for trial in range(self.parameters.num_trials):
+            self.direct_stimulation.append(stimulators)
+            stimulus = InternalStimulus(
+                    frame_duration=signal_function_parameters.duration,
+                    duration=signal_function_parameters.duration,
                     trial=trial,
-                    direct_stimulation_name="OpticalStimulatorArrayChR",
-                    direct_stimulation_parameters=sap,
+                    direct_stimulation_name=type(next(iter(stimulators.values()))).__name__,
+                    direct_stimulation_parameters=MozaikExtendedParameterSet({"La":signal_function_parameters}), # TODO remove this ugly hack somehow!!
                 )
-            )
+            stimulus.direct_stimulation_signals = signals
+            self.stimuli.append(stimulus)
 
 
 class SingleOptogeneticArrayStimulus(CorticalStimulationWithOptogeneticArray):
@@ -220,26 +162,16 @@ class SingleOptogeneticArrayStimulus(CorticalStimulationWithOptogeneticArray):
 
     required_parameters = ParameterSet(
         {
-            "sheet_list": list,
-            "sheet_intensity_scaler": list,
-            "sheet_transfection_proportion": list,
             "num_trials": int,
-            "stimulator_array_parameters": ParameterSet,
-            "stimulating_signal": str,
-            "stimulating_signal_parameters": ParameterSet,
+            "stimulator_array_list": ParameterSet,
+            "stimulating_signal_function": str,
+            "stimulating_signal_function_parameters": ParameterSet,
         }
     )
 
     def __init__(self, model, parameters):
         CorticalStimulationWithOptogeneticArray.__init__(self, model, parameters)
-        self.parameters.stimulator_array_parameters["stimulating_signal"] = (
-            self.parameters.stimulating_signal
-        )
-        self.parameters.stimulator_array_parameters["stimulating_signal_parameters"] = (
-            self.parameters.stimulating_signal_parameters
-        )
-
-        self.append_direct_stim(model, self.parameters.stimulator_array_parameters)
+        self.append_direct_stim(model, self.parameters.stimulating_signal_function, self.parameters.stimulating_signal_function_parameters)
 
 
 class OptogeneticArrayStimulusCircles(CorticalStimulationWithOptogeneticArray):

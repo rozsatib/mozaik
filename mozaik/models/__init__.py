@@ -140,7 +140,7 @@ class Model(BaseComponent):
         null_segments,sim_run_time = self.reset()
         
         for sheet in self.sheets.values():
-            sheet.prepare_artificial_stimulation(stimulus.duration,self.simulator_time,artificial_stimulators.get(sheet.name,[]))
+            sheet.prepare_artificial_stimulation(stimulus,stimulus.duration,self.simulator_time,artificial_stimulators.get(sheet.name,[]))
         if self.input_space:
             self.input_space.clear()
             if not isinstance(stimulus,InternalStimulus):
@@ -152,7 +152,19 @@ class Model(BaseComponent):
         else:
             sensory_input = None
 
-        sim_run_time += self.run(stimulus.duration)
+        active_closed_loop_stimulators = [ds for sheet in artificial_stimulators.keys() for ds in artificial_stimulators[sheet] if hasattr(ds, 'update_state' ) and callable(ds.update_state) and ds.is_active]
+        if len(active_closed_loop_stimulators) > 0:
+            dt = active_closed_loop_stimulators[0].parameters.state_update_interval
+            assert all([ds.parameters.state_update_interval == dt for ds in active_closed_loop_stimulators]), "All co-active closed loop stimulators must have the same update interval!"
+            runtime_left = stimulus.duration
+            while runtime_left > 0:
+                sim_run_time += self.run(min(dt,runtime_left))
+                runtime_left -= dt                    
+                for cl_stim in active_closed_loop_stimulators:
+                    cl_stim.update_state()
+            raise ValueError
+        else:
+            sim_run_time += self.run(stimulus.duration)
         segments = []
         
         for sheet in self.sheets.values():    
@@ -226,7 +238,7 @@ class Model(BaseComponent):
         else:
             if self.parameters.null_stimulus_period != 0:
                 for sheet in self.sheets.values():
-                    sheet.prepare_artificial_stimulation(self.parameters.null_stimulus_period,self.simulator_time,[])
+                    sheet.prepare_artificial_stimulation(None,self.parameters.null_stimulus_period,self.simulator_time,[])
                 
                 if self.input_space:
                     self.input_layer.provide_null_input(self.input_space,

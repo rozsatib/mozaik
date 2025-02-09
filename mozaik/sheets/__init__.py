@@ -100,6 +100,7 @@ class Sheet(BaseComponent):
         self.size_x = size_x
         self.size_y = size_y
         self.msc=0
+        self.last_recording = None
         # We want to be able to define in cell.params the cell parameters as also PyNNDistributions so we can get variably parametrized populations
         # The problem is that the pyNN.Population can accept only scalar parameters. There fore we will remove from cell.params all parameters
         # that are PyNNDistributions, and will initialize them later just after the population is initialized (in property pop())
@@ -149,10 +150,9 @@ class Sheet(BaseComponent):
             self._pop = value
             l = value.all_cells.astype(int)
             self._neuron_annotations = [OrderedDict() for i in range(0, len(value))]
-            self.setup_artificial_stimulation()
+
             self.setup_initial_values()
-
-
+            self.setup_artificial_stimulation()
 
         return locals()
     
@@ -240,7 +240,7 @@ class Sheet(BaseComponent):
                 else:
                     self.pop.record(variable,sampling_interval=self.parameters.recording_interval)
 
-    def get_data(self, stimulus_duration=None):
+    def get_data(self, stimulus_duration=None, clear=True):
         """
         Retrieve data recorded in this sheet from pyNN in response to the last presented stimulus.
         
@@ -256,20 +256,12 @@ class Sheet(BaseComponent):
         """
         
         block = None
-        steps = self.model.parameters.steps_get_data 
+        steps = self.model.parameters.steps_get_data
+        nest_names = ['spikes', 'V_m', 'g_ex', 'g_in'] if self.parameters.cell.native_nest else ['spikes', 'v', 'gsyn_exc', 'gsyn_inh']
         if steps:
             for i in range(0,len(self.pop),steps):
                 try:
-                    if self.parameters.cell.native_nest:
-                        if i + steps < len(self.pop):
-                            b = self.pop[i:i+steps].get_data(['spikes', 'V_m', 'g_ex', 'g_in'],clear=False)
-                        else:
-                            b = self.pop[i:i+steps].get_data(['spikes', 'V_m', 'g_ex', 'g_in'],clear=True)
-                    else:
-                        if i + steps < len(self.pop):
-                            b = self.pop[i:i+steps].get_data(['spikes', 'v', 'gsyn_exc', 'gsyn_inh'],clear=False)
-                        else:
-                            b = self.pop[i:i+steps].get_data(['spikes', 'v', 'gsyn_exc', 'gsyn_inh'],clear=True)
+                    b = self.pop[i:i+steps].get_data(nest_names,clear=clear & (i+steps >= len(self.pop)))
                 except (NothingToWriteError, errmsg):
                     logger.debug(errmsg)
                 if (mozaik.mpi_comm) and (mozaik.mpi_comm.rank == mozaik.MPI_ROOT):
@@ -288,10 +280,7 @@ class Sheet(BaseComponent):
                 mozaik.mpi_comm.barrier()
         else:
             try:
-                if self.parameters.cell.native_nest:
-                    block = self.pop.get_data(['spikes', 'V_m', 'g_ex', 'g_in'],clear=True)
-                else:
-                    block = self.pop.get_data(['spikes', 'v', 'gsyn_exc', 'gsyn_inh'],clear=True)
+                block = self.pop.get_data(nest_names,clear=clear)
             except (NothingToWriteError, errmsg):
                 logger.debug(errmsg)
 
@@ -309,20 +298,21 @@ class Sheet(BaseComponent):
         s.spiketrains = sorted(s.spiketrains, key=key)
 
         if stimulus_duration != None:
-           for st in s.spiketrains:
-               tstart = st.t_start
-               st -= tstart
-               st.t_stop -= tstart
-               st.t_start = 0 * pq.ms
-           for i in range(0, len(s.analogsignals)):
-               s.analogsignals[i].t_start = 0 * pq.ms
+            for st in s.spiketrains:
+                tstart = st.t_start
+                st -= tstart
+                st.t_stop -= tstart
+                st.t_start = 0 * pq.ms
+            for i in range(0, len(s.analogsignals)):
+                s.analogsignals[i].t_start = 0 * pq.ms
 
+        self.last_recording = s
         return s
 
     def mean_spike_count(self):
         return self.msc
 
-    def prepare_artificial_stimulation(self, duration, offset,additional_stimulators):
+    def prepare_artificial_stimulation(self, stimulus, duration, offset,additional_stimulators):
         """
         Prepares the background noise and artificial stimulation for the population for the stimulus that is 
         about to be presented. 
@@ -339,7 +329,23 @@ class Sheet(BaseComponent):
         offset : float (ms)
                The current time of the simulation.
         """
-        for ds in self.artificial_stimulators + additional_stimulators:
+        def requires_input(ds):
+            return hasattr(ds, 'set_input' ) and callable(ds.set_input)
+
+        sheet_stimulators = list(self.artificial_stimulators.values())
+        # Direct stimulators that require input will have a method to set their input
+        # When active during the experiment they will be present in the additional
+        # stimulus-specific stimulators
+        active_ds_with_input = [ds for ds in additional_stimulators if requires_input(ds) and ds in sheet_stimulators]
+        # Remove duplicate stimulators
+        ds_no_input = [ds for ds in sheet_stimulators + additional_stimulators if not requires_input(ds)]
+
+        if stimulus is not None and len(active_ds_with_input) > 0:
+            assert len(stimulus.direct_stimulation_signals) == len(active_ds_with_input), "The number of stimulators requiring input (%d) and the number of stimulator inputs stored in the stimulus (%d) needs to be equal!" % (len(active_ds_with_input),len(stimulus.direct_stimulation_signals))
+            for i in range(len(active_ds_with_input)):
+                active_ds_with_input[i].set_input(stimulus.direct_stimulation_signals[i])
+
+        for ds in active_ds_with_input + ds_no_input:
             ds.prepare_stimulation(duration,offset)
         
 
@@ -347,10 +353,11 @@ class Sheet(BaseComponent):
         """
         Called once population is created. Sets up the background noise.
         """
-        self.artificial_stimulators = []
+        self.artificial_stimulators = {}
         for k in  self.parameters.artificial_stimulators.keys():
             direct_stimulator = load_component(self.parameters.artificial_stimulators[k].component)
-            self.artificial_stimulators.append(direct_stimulator(self,self.parameters.artificial_stimulators[k].params))
+            self.artificial_stimulators[k] = direct_stimulator(self,self.parameters.artificial_stimulators[k].params)
+
 
         
     def setup_initial_values(self):

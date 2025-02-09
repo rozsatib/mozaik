@@ -7,6 +7,7 @@ of spikes/currents etc into cells. In mozaik this happens at population level - 
 each direct stimulator specifies how the given population is stimulated. In general each population can have several
 stimultors.
 """
+import pylab
 from mozaik.core import ParametrizedObject
 from parameters import ParameterSet
 import numpy
@@ -702,6 +703,240 @@ class OpticalStimulatorArrayChR(OpticalStimulatorArray):
         pylab.savefig(Global.root_directory +'OpticalStimulatorArrayTest_' + self.sheet.name.replace('/','_') + '.png')
         pylab.clf()
 
+class PluginOpticalStimulatorArray(DirectStimulator):   
+    
+    required_parameters = ParameterSet({
+        'size': float,
+        'spacing' : float,
+        'update_interval' : float,
+        'depth_sampling_step' : float,
+        'light_source_light_propagation_data' : str,
+        'transfection_proportion' : float,
+    })
+
+    def __init__(self, sheet, parameters):
+        DirectStimulator.__init__(self, sheet,parameters)
+        self.is_active = False
+        assert self.parameters.transfection_proportion >= 0 and self.parameters.transfection_proportion <= 1, "Transfection proportions must be in the range of (0,1)!"
+
+        assert math.fmod(self.parameters.size,self.parameters.spacing) < 0.000000001 , "Error the size has to be multiple of spacing!"
+        assert math.fmod(self.parameters.size / self.parameters.spacing /2,2) < 0.000000001 , "Error the size and spacing have to be such that they give odd number of elements!"
+        
+        axis_coors = numpy.arange(0,self.parameters.size+self.parameters.spacing,self.parameters.spacing) - self.parameters.size/2.0 
+
+        self.n = int(numpy.floor(len(axis_coors)/2.0))
+        self.stimulator_coords_y, self.stimulator_coords_x = numpy.meshgrid(axis_coors, axis_coors)
+
+        #let's load up disperssion data and setup interpolation
+        f = open(self.parameters.light_source_light_propagation_data,'rb')
+        radprofs = pickle.load(f,encoding='latin1')
+        f.close()
+
+        light_flux_lookup =  scipy.interpolate.RegularGridInterpolator((np.linspace(0,1080,radprofs.shape[0]),numpy.linspace(0,1,radprofs.shape[1])*299.7*numpy.sqrt(2)), radprofs, method='linear',bounds_error=False,fill_value=0)
+
+        # the constant translating the data in radprofs to photons/s/cm^2
+        self.K = 2.97e26
+        self.W = 3.9e-10
+
+        # now let's calculate mixing weights, this will be a matrix nxm where n is 
+        # the number of neurons in the population and m is the number of stimulators
+        x =  self.stimulator_coords_x.flatten()
+        y =  self.stimulator_coords_y.flatten()
+        xx,yy = self.sheet.vf_2_cs(self.sheet.pop.positions[0],self.sheet.pop.positions[1])
+        zeros = numpy.zeros(len(x))
+        self.mixing_templates=[]
+        for depth in numpy.arange(sheet.parameters.min_depth,sheet.parameters.max_depth+self.parameters.depth_sampling_step,self.parameters.depth_sampling_step):
+            temp = numpy.reshape(light_flux_lookup(numpy.transpose([zeros+depth,numpy.sqrt(numpy.power(x,2)  + numpy.power(y,2))])),(2*self.n+1,2*self.n+1))
+            a  = temp[self.n,self.n:]
+            cutof = numpy.argmax((numpy.sum(a)-numpy.cumsum(a))/numpy.sum(a) < 0.01)
+            assert numpy.shape(temp[self.n-cutof:self.n+cutof+1,self.n-cutof:self.n+cutof+1]) == (2*cutof+1,2*cutof+1), str(numpy.shape(temp[self.n-cutof:self.n+cutof,self.n-cutof:self.n+cutof])) + 'vs' + str((2*cutof+1,2*cutof+1))
+            self.mixing_templates.append((temp[self.n-cutof:self.n+cutof+1,self.n-cutof:self.n+cutof+1],cutof))
+
+        self.nearest_ix = numpy.rint(xx/self.parameters.spacing)+self.n
+        self.nearest_iy = numpy.rint(yy/self.parameters.spacing)+self.n
+        self.nearest_iz = numpy.rint((numpy.array(self.sheet.pop.positions[2])-sheet.parameters.min_depth)/self.parameters.depth_sampling_step)
+
+        self.nearest_ix[self.nearest_ix<0] = 0
+        self.nearest_iy[self.nearest_iy<0] = 0
+        self.nearest_ix[self.nearest_ix>2*self.n] = 2*self.n
+        self.nearest_iy[self.nearest_iy>2*self.n] = 2*self.n
+
+        self.mixed_signals_photo = numpy.zeros((self.sheet.pop.size,2),dtype=numpy.float64)
+
+        self.scs = [self.sheet.sim.StepCurrentSource(times=[0.0], amplitudes=[0.0]) for cell in self.sheet.pop.all_cells]
+        for cell,scs in zip(self.sheet.pop.all_cells,self.scs):
+            cell.inject(scs)
+        
+    def calculate_photo(self, input_signal):
+        # input_signal needs to be of dimensions space x space x time
+        assert input_signal.shape[:2] == self.stimulator_coords_x.shape, "Spatial dimensions of input signal (%s) and stimulation array (%s) are not equal!" % (input_signal.shape[1:],(self.stimulator_coords_x.shape))
+        photo = numpy.zeros((self.sheet.pop.size,input_signal.shape[2]),dtype=numpy.float64)
+        # Tibor note: For sure this can be better separated, look into it!
+        # find coordinates given spacing and shift by half the array size
+        for i in range(0,self.sheet.pop.size):
+            temp,cutof = self.mixing_templates[int(self.nearest_iz[i])]
+            ss = input_signal[max(int(self.nearest_ix[i]-cutof),0):int(self.nearest_ix[i]+cutof+1),max(int(self.nearest_iy[i]-cutof),0):int(self.nearest_iy[i]+cutof+1),:]
+            if ss.size != 0:
+               temp = temp[max(int(cutof-self.nearest_ix[i]),0):max(int(2*self.n+1+cutof-self.nearest_ix[i]),0),max(int(cutof-self.nearest_iy[i]),0):max(int(2*self.n+1+cutof-self.nearest_iy[i]),0)]
+               photo[i,:] = self.K*self.W*numpy.dot(temp.flatten(),numpy.reshape(ss,(len(temp.flatten()),-1)))
+        return photo
+
+    def set_input(self, input_signal):
+        self.stimulation_duration = input_signal.shape[2] * self.parameters.update_interval
+        self.mixed_signals_photo = self.calculate_photo(input_signal)
+
+    @staticmethod
+    def compress_array(array):
+        compressed = io.BytesIO()
+        np.savez_compressed(compressed, array)
+        return compressed
+
+    @staticmethod
+    def decompress_array(array):
+        array.seek(0)
+        return np.load(array)['arr_0']
+
+    def prepare_stimulation(self,duration,offset):
+        self.is_active = True
+        assert self.stimulation_duration == duration, "stimulation_duration != duration :"  + str(self.stimulation_duration) + " " + str(duration)
+        assert hasattr(self,"mixed_signals_current"), "Child class has to implement conversion of optical stimulation to current!"
+        self.times = numpy.arange(0,self.stimulation_duration,self.parameters.update_interval) + offset
+        self.times[0] = self.times[0] + 3*self.sheet.dt
+        for i in range(0,len(self.scs)):
+            self.scs[i].set_parameters(times=Sequence(self.times), amplitudes=Sequence(self.mixed_signals_current[i,:].flatten()),copy=False)
+
+    def inactivate(self,offset):
+        self.is_active = False
+        for scs in self.scs:
+            scs.set_parameters(times=[offset+3*self.sheet.dt], amplitudes=[0.0],copy=False)
+
+class PluginOpticalStimulatorArrayChR(PluginOpticalStimulatorArray):
+    """
+    Like *OpticalStimulatorArray*, but the light (photons/s/cm^2) impinging on the
+    neuron is transformed via a model of Channelrhodopsin (courtesy of Quentin Sabatier)
+    to give the final injected current.
+
+    Note that we approximate the current by ignoring the voltage dependence of the
+    channels, as it is very expensive to inject conductance in PyNN. The
+    Channelrhodopsin has reverse potential of ~0, and we assume that our neurons
+    sits on average at -60mV to calculate the current.
+    """
+    def __init__(self, sheet, parameters):
+        PluginOpticalStimulatorArray.__init__(self, sheet,parameters)
+        self.mixed_signals_current = np.zeros_like(self.mixed_signals_photo)
+        self.ChR_default_state = np.array([0,0,0.2,0.8,0])
+        self.ChR_state = np.tile(self.ChR_default_state,(self.mixed_signals_photo.shape[0],1))
+        
+    def calculate_ChR(self, photo_input):
+        current = np.zeros_like(photo_input)
+        times = numpy.arange(0,photo_input.shape[1] * self.parameters.update_interval,self.parameters.update_interval)
+        for i in range(photo_input.shape[0]):
+            res = odeint(ChRsystem,self.ChR_state[i,:],times,args=(photo_input[i,:].flatten(),self.parameters.update_interval),hmax=self.parameters.update_interval)
+            current[i,:] =  60 * (17.2*res[:,0] + 2.9 * res[:,1])  / 2500 ; # the 60 corresponds to the 60mV difference between ChR reverse potential of 0mV and our expected mean Vm of about 60mV. This happens to end up being in nA which is what pyNN expect for current injection.
+            self.ChR_state[i,:] = res[-1,:]
+        return current
+
+    def set_input(self, input_signal):
+        PluginOpticalStimulatorArray.set_input(self,input_signal)
+        self.mixed_signals_current = self.calculate_ChR(self.mixed_signals_photo)
+
+    def inactivate(self,offset):
+        PluginOpticalStimulatorArray.inactivate(self, offset)
+        self.ChR_state[:] = self.ChR_default_state # Reset channelrhodopsin state
+
+class ClosedLoopOpticalStimulatorArray(PluginOpticalStimulatorArrayChR):
+    """
+    Like *OpticalStimulatorArray*, but the light (photons/s/cm^2) impinging on the
+    neuron is transformed via a model of Channelrhodopsin (courtesy of Quentin Sabatier)
+    to give the final injected current.
+
+    Note that we approximate the current by ignoring the voltage dependence of the
+    channels, as it is very expensive to inject conductance in PyNN. The
+    Channelrhodopsin has reverse potential of ~0, and we assume that our neurons
+    sits on average at -60mV to calculate the current.
+    """
+    required_parameters = ParameterSet({
+        'size': float,
+        'spacing' : float,
+        'update_interval' : float,
+        'depth_sampling_step' : float,
+        'light_source_light_propagation_data' : str,
+        'transfection_proportion' : float,
+        'state_update_interval': float,
+    })
+
+    def __init__(self, sheet, parameters):
+        PluginOpticalStimulatorArrayChR.__init__(self, sheet,parameters)
+        self.start_time = None
+        assert self.parameters.state_update_interval % self.parameters.update_interval == 0
+        self.calculate_input_function, self.update_state_function, self.state = None, None, None
+        self.input_signal = None
+
+    # Maybe add calculate input function setter to assert its parameters, etc.?
+    def current_time(self): #Maybe make this an attribute and automatically calculate it upon state update?
+        if self.start_time is None:
+            self.start_time = self.sheet.sim.get_current_time()
+        return self.sheet.sim.get_current_time() - self.start_time
+
+    def set_input(self, input_signal):
+        # Only called before the experiment
+        self.stimulation_duration = input_signal.shape[2] * self.parameters.update_interval
+        self.mixed_signals_photo = np.zeros((self.sheet.pop.size,input_signal.shape[2]))
+        self.mixed_signals_current = np.zeros_like(self.mixed_signals_photo)
+        self.set_input_segment()
+
+    def set_target_signal(self, target_signal):
+        self.target_signal = target_signal
+
+    def get_recording(self, name, t_start=None, t_stop=None):
+        allowed_names = ["v","gsyn_exc","gsyn_inh","spikes"]
+        assert name in allowed_names, "Reqested recording must be one of %s" % (str(allowed_names))
+        t_start, t_stop = t_start and t_start * qt.ms, t_stop and t_stop * qt.ms
+        if name == "spikes":
+            return [st.time_slice(t_start + st.t_start,t_stop + st.t_start) for st in self.sheet.last_recording.spiketrains]
+        else:
+            analogsignal = [s for s in self.sheet.last_recording.analogsignals if s.name == name]
+            assert len(analogsignal) == 1, "The analogsignal %s is not being recorded!" % name
+            return analogsignal[0].time_slice(t_start,t_stop)
+
+    def recorded_neuron_indices(self,recording_type=None):
+        if recording_type is None:
+            assert np.all(np.all([v == list(self.sheet.to_record.values())[0] for v in self.sheet.to_record.values()])), "If recording_type is None, all recorders must record from the same neurons!"
+            recording_type = list(self.sheet.to_record.keys())[0]
+        return self.sheet.to_record[recording_type]
+
+    def recorded_neuron_orientations(self,recording_type=None):
+        idx = self.recorded_neuron_indices(recording_type)
+        return np.array([a['LGNAfferentOrientation'] for a in self.sheet.get_neuron_annotations()])[idx]
+
+    def recorded_neuron_positions(self,recording_type=None):
+        idx = self.recorded_neuron_indices(recording_type)
+        return self.sheet.vf_2_cs(self.sheet.pop.positions[0][idx],self.sheet.pop.positions[1][idx])
+
+    def calculate_input_signal(self):
+        assert self.calculate_input_function is not None, "Calculate input function not set!"
+        input_signal = self.calculate_input_function(self)
+        return input_signal
+    
+    def set_input_segment(self):
+        # Called at each closed loop iteration
+        dt = int(self.parameters.state_update_interval // self.parameters.update_interval)
+        offset = int(self.current_time() // self.parameters.update_interval)
+        if offset == self.stimulation_duration // self.parameters.update_interval:
+            return
+        self.input_signal = self.calculate_input_signal()
+        self.mixed_signals_photo[:,offset:offset+dt] = self.calculate_photo(self.input_signal)
+        self.mixed_signals_current[:,offset:offset+dt] = self.calculate_ChR(self.mixed_signals_photo[:,offset:offset+dt])
+
+    # Interface functions
+    def update_state(self):
+        assert self.update_state_function is not None, "Update state function not set!"
+        self.sheet.get_data(clear=False)
+        self.update_state_function(self)
+        self.set_input_segment()
+        # Set the scs amplitudes for the next iteration
+        for i in range(0,len(self.scs)):
+            self.scs[i].set_parameters(times=Sequence(self.times),amplitudes=Sequence(self.mixed_signals_current[i,:].flatten()))
 
 def stimulating_pattern_flash(sheet, coor_x, coor_y, update_interval, parameters):
     """
