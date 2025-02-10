@@ -162,7 +162,6 @@ class Model(BaseComponent):
                 runtime_left -= dt                    
                 for cl_stim in active_closed_loop_stimulators:
                     cl_stim.update_state()
-            raise ValueError
         else:
             sim_run_time += self.run(stimulus.duration)
         segments = []
