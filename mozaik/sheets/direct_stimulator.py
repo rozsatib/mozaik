@@ -891,13 +891,16 @@ class ClosedLoopOpticalStimulatorArray(PluginOpticalStimulatorArrayChR):
     def get_recording(self, name, t_start=None, t_stop=None):
         allowed_names = ["v","gsyn_exc","gsyn_inh","spikes"]
         assert name in allowed_names, "Reqested recording must be one of %s" % (str(allowed_names))
-        t_start, t_stop = t_start and t_start * qt.ms, t_stop and t_stop * qt.ms
+        if t_start is not None:
+            t_start *= qt.ms
+        if t_stop is not None:
+            t_stop *= qt.ms
         if name == "spikes":
             return [st.time_slice(t_start + st.t_start,t_stop + st.t_start) for st in self.sheet.last_recording.spiketrains]
         else:
             analogsignal = [s for s in self.sheet.last_recording.analogsignals if s.name == name]
             assert len(analogsignal) == 1, "The analogsignal %s is not being recorded!" % name
-            return analogsignal[0].time_slice(t_start,t_stop)
+            return np.array(analogsignal[0].time_slice(t_start + analogsignal[0].t_start,t_stop + analogsignal[0].t_start))
 
     def recorded_neuron_indices(self,recording_type=None):
         if recording_type is None:
