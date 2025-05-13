@@ -629,7 +629,7 @@ def ChRsystem(y,time,X,sampling_period):
 
           O1toC1 = 0.125
           O2toC2 = 0.015
-          O2toS  = 0.0001
+          O2toS  = 0.0001 / 20
           C2toC1 = 1e-7
           StoC1  = 3e-6
 
