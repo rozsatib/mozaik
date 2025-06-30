@@ -914,7 +914,7 @@ class ClosedLoopOpticalStimulatorArray(PluginOpticalStimulatorArrayChR):
 
     def recorded_neuron_positions(self,recording_type=None):
         idx = self.recorded_neuron_indices(recording_type)
-        return self.sheet.vf_2_cs(self.sheet.pop.positions[0][idx],self.sheet.pop.positions[1][idx])
+        return self.sheet.vf_2_cs(self.sheet.pop[idx].positions[0],self.sheet.pop[idx].positions[1])
 
     def calculate_input_signal(self):
         assert self.calculate_input_function is not None, "Calculate input function not set!"
