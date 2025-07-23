@@ -798,7 +798,6 @@ class PluginOpticalStimulatorArray(DirectStimulator):
 
     def prepare_stimulation(self,duration,offset):
         self.is_active = True
-        assert self.stimulation_duration == duration, "stimulation_duration != duration :"  + str(self.stimulation_duration) + " " + str(duration)
         assert hasattr(self,"mixed_signals_current"), "Child class has to implement conversion of optical stimulation to current!"
         self.times = numpy.arange(0,self.stimulation_duration,self.parameters.update_interval) + offset
         self.times[0] = self.times[0] + 3*self.sheet.dt
@@ -880,8 +879,8 @@ class ClosedLoopOpticalStimulatorArray(PluginOpticalStimulatorArrayChR):
 
     def set_input(self, input_signal):
         # Only called before the experiment
-        self.stimulation_duration = input_signal.shape[2] * self.parameters.update_interval
-        self.mixed_signals_photo = np.zeros((self.sheet.pop.size,input_signal.shape[2]))
+        self.stimulation_duration = self.parameters.state_update_interval
+        self.mixed_signals_photo = np.zeros((self.sheet.pop.size,self.parameters.state_update_interval // self.parameters.update_interval ))
         self.mixed_signals_current = np.zeros_like(self.mixed_signals_photo)
         self.set_input_segment()
 
@@ -923,13 +922,9 @@ class ClosedLoopOpticalStimulatorArray(PluginOpticalStimulatorArrayChR):
     
     def set_input_segment(self):
         # Called at each closed loop iteration
-        dt = int(self.parameters.state_update_interval // self.parameters.update_interval)
-        offset = int(self.current_time() // self.parameters.update_interval)
-        if offset == self.stimulation_duration // self.parameters.update_interval:
-            return
         self.input_signal = self.calculate_input_signal()
-        self.mixed_signals_photo[:,offset:offset+dt] = self.calculate_photo(self.input_signal)
-        self.mixed_signals_current[:,offset:offset+dt] = self.calculate_ChR(self.mixed_signals_photo[:,offset:offset+dt])
+        self.mixed_signals_photo = self.calculate_photo(self.input_signal)
+        self.mixed_signals_current = self.calculate_ChR(self.mixed_signals_photo)
 
     # Interface functions
     def update_state(self):
