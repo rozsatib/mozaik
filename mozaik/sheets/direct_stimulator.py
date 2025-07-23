@@ -906,7 +906,7 @@ class ClosedLoopOpticalStimulatorArray(PluginOpticalStimulatorArrayChR):
         if recording_type is None:
             assert np.all(np.all([v == list(self.sheet.to_record.values())[0] for v in self.sheet.to_record.values()])), "If recording_type is None, all recorders must record from the same neurons!"
             recording_type = list(self.sheet.to_record.keys())[0]
-        return self.sheet.to_record[recording_type]
+        return sorted(self.sheet.to_record[recording_type])
 
     def recorded_neuron_orientations(self,recording_type=None):
         idx = self.recorded_neuron_indices(recording_type)
