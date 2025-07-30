@@ -932,6 +932,7 @@ class ClosedLoopOpticalStimulatorArray(PluginOpticalStimulatorArrayChR):
         self.sheet.get_data(clear=False)
         self.update_state_function(self)
         self.set_input_segment()
+        self.times += self.parameters.state_update_interval
         # Set the scs amplitudes for the next iteration
         for i in range(0,len(self.scs)):
             self.scs[i].set_parameters(times=Sequence(self.times),amplitudes=Sequence(self.mixed_signals_current[i,:].flatten()))
