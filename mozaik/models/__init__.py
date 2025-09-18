@@ -158,10 +158,11 @@ class Model(BaseComponent):
             assert all([ds.parameters.state_update_interval == dt for ds in active_closed_loop_stimulators]), "All co-active closed loop stimulators must have the same update interval!"
             runtime_left = stimulus.duration
             while runtime_left > 0:
-                sim_run_time += self.run(min(dt,runtime_left))
-                runtime_left -= dt                    
+                sim_run_time += self.run(min(dt,runtime_left),stimulus.duration-runtime_left,stimulus.duration)
+                runtime_left -= dt
                 for cl_stim in active_closed_loop_stimulators:
                     cl_stim.update_state()
+
         else:
             sim_run_time += self.run(stimulus.duration)
         segments = []
@@ -200,7 +201,7 @@ class Model(BaseComponent):
 
         return (segments, null_segments,sensory_input,sim_run_time,exploded)
         
-    def run(self, tstop):
+    def run(self, tstop, offset=0, duration=0):
         """
         Run's the simulation for tstop time.
         
@@ -215,7 +216,10 @@ class Model(BaseComponent):
              The wall clock time for which the simulator ran.
         """
         t0 = time.time()
-        logger.info("Simulating the network for %s ms" % tstop)
+        if offset > 0:
+            logger.info("Simulating the network for %d ms (%d / %d ms)" % (tstop,offset,duration))
+        else:
+            logger.info("Simulating the network for %s ms" % tstop)
         self.sim.run(tstop)
         logger.info("Finished simulating the network for %s ms" % tstop)
         self.simulator_time += tstop
