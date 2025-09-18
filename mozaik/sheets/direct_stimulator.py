@@ -33,6 +33,7 @@ import quantities as qt
 from mozaik.tools.units import *
 import io
 from numba import jit
+import nest
 
 from builtins import zip
 
@@ -883,6 +884,7 @@ class ClosedLoopOpticalStimulatorArray(PluginOpticalStimulatorArrayChR):
         self.mixed_signals_photo = np.zeros((self.sheet.pop.size,self.parameters.state_update_interval // self.parameters.update_interval ))
         self.mixed_signals_current = np.zeros_like(self.mixed_signals_photo)
         self.set_input_segment()
+        self.set_data_recording()
 
     def set_target_signal(self, target_signal):
         self.target_signal = target_signal
@@ -926,10 +928,36 @@ class ClosedLoopOpticalStimulatorArray(PluginOpticalStimulatorArrayChR):
         self.mixed_signals_photo = self.calculate_photo(self.input_signal)
         self.mixed_signals_current = self.calculate_ChR(self.mixed_signals_photo)
 
+    def set_data_recording(self):
+        self.nest_ids = self.sheet.pop.all_cells.tolist()
+        self.nest_ids_order = np.argsort(self.nest_ids)
+        self.spike_recorder = nest.Create("spike_recorder")
+        nest.Connect(self.nest_ids, self.spike_recorder)
+        self.spike_counts = np.zeros(len(self.nest_ids))
+        self.last_spike_counts = np.zeros(len(self.nest_ids))
+        self.last_n_events = 0
+
+    def get_data(self):
+        events = nest.GetStatus(self.spike_recorder, "events")[0]
+        kernel_status = nest.GetKernelStatus()
+        senders, times = events["senders"], events["times"]
+        if kernel_status["local_num_threads"] > 1 or kernel_status["num_processes"] > 1:
+             # spikes from each thread are concatenated in a single array,
+             # so they need to be sorted if there's more than 1 thread
+            order = np.argsort(times, kind="mergesort")
+            senders, times = senders[order], times[order]
+
+        senders = senders[self.last_n_events:]
+        times = times[self.last_n_events:] - self.start_time
+
+        self.last_spike_counts = (np.unique(np.hstack([senders,self.nest_ids]),return_counts=True)[1] - 1)[self.nest_ids_order]
+        self.spike_counts += self.last_spike_counts
+        self.last_n_events += len(times)
+
     # Interface functions
     def update_state(self):
         assert self.update_state_function is not None, "Update state function not set!"
-        self.sheet.get_data(clear=False)
+        self.get_data()
         self.update_state_function(self)
         self.set_input_segment()
         self.times += self.parameters.state_update_interval
