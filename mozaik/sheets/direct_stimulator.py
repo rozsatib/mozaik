@@ -880,6 +880,7 @@ class ClosedLoopOpticalStimulatorArray(PluginOpticalStimulatorArrayChR):
 
     def set_input(self, input_signal):
         # Only called before the experiment
+        self.experiment_duration = input_signal.shape[2]
         self.stimulation_duration = self.parameters.state_update_interval
         self.mixed_signals_photo = np.zeros((self.sheet.pop.size,self.parameters.state_update_interval // self.parameters.update_interval ))
         self.mixed_signals_current = np.zeros_like(self.mixed_signals_photo)
