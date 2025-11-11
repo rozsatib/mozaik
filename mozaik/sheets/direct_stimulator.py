@@ -958,7 +958,10 @@ class ClosedLoopOpticalStimulatorArray(PluginOpticalStimulatorArrayChR):
     # Interface functions
     def update_state(self):
         assert self.update_state_function is not None, "Update state function not set!"
-        self.get_data()
+        if len(self.sheet.to_record.keys()) == 1 and list(self.sheet.to_record.keys())[0] == "spikes":
+            self.get_data()
+        else:
+            self.sheet.get_data(clear=False)
         self.update_state_function(self)
         self.set_input_segment()
         self.times += self.parameters.state_update_interval
