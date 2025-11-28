@@ -930,7 +930,7 @@ class ClosedLoopOpticalStimulatorArray(PluginOpticalStimulatorArrayChR):
         self.mixed_signals_current = self.calculate_ChR(self.mixed_signals_photo)
 
     def set_data_recording(self):
-        self.nest_ids = self.sheet.pop.all_cells.tolist()
+        self.nest_ids = self.sheet.pop.all_cells[self.recorded_neuron_indices()].tolist()
         self.nest_ids_order = np.argsort(self.nest_ids)
         self.spike_recorder = nest.Create("spike_recorder")
         nest.Connect(self.nest_ids, self.spike_recorder)
