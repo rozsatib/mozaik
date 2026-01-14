@@ -762,11 +762,27 @@ class PluginOpticalStimulatorArray(DirectStimulator):
         self.nearest_ix[self.nearest_ix>2*self.n] = 2*self.n
         self.nearest_iy[self.nearest_iy>2*self.n] = 2*self.n
 
+        # Mask coding which neurons are transfected. We only calculate the
+        # ChR ODEs for these neurons.
+        self.transfection_mask = np.zeros(self.sheet.pop.size, dtype=bool)
+        if self.parameters.transfection_proportion == 1:
+            self.transfection_mask[:] = True
+        else:
+            n = int(self.parameters.transfection_proportion * self.sheet.pop.size)
+            # TODO: This random choice is not MPI safe!
+            idx = np.random.choice(self.sheet.pop.size, size=n, replace=False)
+            self.transfection_mask[idx] = True
+
+        self.active_cells = np.where(self.transfection_mask)[0]
+        self.scs = []
+
+        for i in self.active_cells:
+            scs = self.sheet.sim.StepCurrentSource(times=[0.0], amplitudes=[0.0])
+            self.sheet.pop.all_cells[i].inject(scs)
+            self.scs.append(scs)
+
         self.mixed_signals_photo = numpy.zeros((self.sheet.pop.size,2),dtype=numpy.float64)
 
-        self.scs = [self.sheet.sim.StepCurrentSource(times=[0.0], amplitudes=[0.0]) for cell in self.sheet.pop.all_cells]
-        for cell,scs in zip(self.sheet.pop.all_cells,self.scs):
-            cell.inject(scs)
         
     def calculate_photo(self, input_signal):
         # input_signal needs to be of dimensions space x space x time
@@ -780,6 +796,7 @@ class PluginOpticalStimulatorArray(DirectStimulator):
             if ss.size != 0:
                temp = temp[max(int(cutof-self.nearest_ix[i]),0):max(int(2*self.n+1+cutof-self.nearest_ix[i]),0),max(int(cutof-self.nearest_iy[i]),0):max(int(2*self.n+1+cutof-self.nearest_iy[i]),0)]
                photo[i,:] = self.K*self.W*numpy.dot(temp.flatten(),numpy.reshape(ss,(len(temp.flatten()),-1)))
+        photo *= self.transfection_mask[:, None] # photo input is zero for non-transfected cells
         return photo
 
     def set_input(self, input_signal):
@@ -802,8 +819,13 @@ class PluginOpticalStimulatorArray(DirectStimulator):
         assert hasattr(self,"mixed_signals_current"), "Child class has to implement conversion of optical stimulation to current!"
         self.times = numpy.arange(0,self.stimulation_duration,self.parameters.update_interval) + offset
         self.times[0] = self.times[0] + 3*self.sheet.dt
-        for i in range(0,len(self.scs)):
-            self.scs[i].set_parameters(times=Sequence(self.times), amplitudes=Sequence(self.mixed_signals_current[i,:].flatten()),copy=False)
+
+        for scs_idx, cell_idx in enumerate(self.active_cells):
+            self.scs[scs_idx].set_parameters(
+                times=Sequence(self.times),
+                amplitudes=Sequence(self.mixed_signals_current[cell_idx, :].flatten()),
+                copy=False
+            )
 
     def inactivate(self,offset):
         self.is_active = False
@@ -830,7 +852,7 @@ class PluginOpticalStimulatorArrayChR(PluginOpticalStimulatorArray):
     def calculate_ChR(self, photo_input):
         current = np.zeros_like(photo_input)
         times = numpy.arange(0,photo_input.shape[1] * self.parameters.update_interval,self.parameters.update_interval)
-        for i in range(photo_input.shape[0]):
+        for i in self.active_cells:
             res = odeint(ChRsystem,self.ChR_state[i,:],times,args=(photo_input[i,:].flatten(),self.parameters.update_interval),hmax=self.parameters.update_interval)
             current[i,:] =  60 * (17.2*res[:,0] + 2.9 * res[:,1])  / 2500 ; # the 60 corresponds to the 60mV difference between ChR reverse potential of 0mV and our expected mean Vm of about 60mV. This happens to end up being in nA which is what pyNN expect for current injection.
             self.ChR_state[i,:] = res[-1,:]
@@ -966,8 +988,12 @@ class ClosedLoopOpticalStimulatorArray(PluginOpticalStimulatorArrayChR):
         self.set_input_segment()
         self.times += self.parameters.state_update_interval
         # Set the scs amplitudes for the next iteration
-        for i in range(0,len(self.scs)):
-            self.scs[i].set_parameters(times=Sequence(self.times),amplitudes=Sequence(self.mixed_signals_current[i,:].flatten()))
+        for scs_idx, cell_idx in enumerate(self.active_cells):
+            self.scs[scs_idx].set_parameters(
+                times=Sequence(self.times),
+                amplitudes=Sequence(self.mixed_signals_current[cell_idx, :].flatten()),
+                copy=False
+            )
 
 def stimulating_pattern_flash(sheet, coor_x, coor_y, update_interval, parameters):
     """
