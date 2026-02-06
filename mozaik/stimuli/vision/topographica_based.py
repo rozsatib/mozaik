@@ -1550,3 +1550,45 @@ class PixelMovieFromFile(TopographicaBasedVisualStimulus):
 
             yield (image(), [frame])
             self.time += self.frame_duration
+
+class GaussianSinusoid(VisualStimulus):
+    """
+    """
+    x = SNumber(degrees, doc="x coordinate of the center Gabor patch")
+    y = SNumber(degrees, doc="y coordinate of the center Gabor patch")
+    sigma = SNumber(degrees, doc="Standard deviation of the Gaussian")
+    relative_luminance_amplitude = SNumber(dimensionless, doc="Ratio of the gaussian luminance amplitude to the background luminance")
+    temporal_frequency = SNumber(dimensionless, doc="Temporal frequency of luminance change")
+
+    def frames(self):
+        blank = imagen.Constant(
+            scale=self.background_luminance,
+            bounds=BoundingBox(radius=self.size_x / 2),
+            xdensity=self.density,
+            ydensity=self.density,
+        )()
+
+        for i in range(int(self.duration / self.frame_duration)):
+            if self.temporal_frequency == 0:
+                relative_luminance = self.relative_luminance_amplitude
+            else:
+                t = i * self.frame_duration / 1000
+                relative_luminance = (
+                    self.relative_luminance_amplitude
+                    * np.sin(2 * np.pi * self.temporal_frequency * t)
+                ) / 2 + 0.5
+            frame = imagen.Gaussian(
+                scale=self.background_luminance * relative_luminance,
+                size=self.sigma * 2,
+                aspect_ratio=1,
+                x=self.x,
+                y=self.y,
+                bounds=BoundingBox(radius=self.size_x / 2),
+                xdensity=self.density,
+                ydensity=self.density,
+            )()
+            frame += blank
+            yield (frame, [1])
+
+        while True:
+            yield (blank, [0])

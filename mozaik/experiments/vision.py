@@ -2253,3 +2253,44 @@ class MeasurePixelMovieFromFile(VisualExperiment):
 
     def do_analysis(self, data_store):
         pass
+
+
+class TemporallyModulatedGaussian(VisualExperiment):
+    required_parameters = ParameterSet(
+        {
+            "duration": float,
+            "num_trials": int,
+            "positions": list,
+            "sigmas": list,
+            "relative_luminance_amplitudes": list,
+            "temporal_frequencies": list,
+        }
+    )
+
+    def generate_stimuli(self):
+        for xy in self.parameters.positions:
+            for sigma in self.parameters.sigmas:
+                for relative_luminance_amplitude in self.parameters.relative_luminance_amplitudes:
+                    for temporal_frequency in self.parameters.temporal_frequencies:
+                        for k in range(0, self.parameters.num_trials):
+                            self.stimuli.append(
+                                topo.GaussianSinusoid(
+                                    frame_duration=self.frame_duration,
+                                    x=xy[0],
+                                    y=xy[1],
+                                    sigma=sigma,
+                                    relative_luminance_amplitude=relative_luminance_amplitude,
+                                    duration=self.parameters.duration,
+                                    size_x=self.model.visual_field.size_x,
+                                    size_y=self.model.visual_field.size_y,
+                                    location_x=0.0,
+                                    location_y=0.0,
+                                    background_luminance=self.background_luminance,
+                                    density=self.density,
+                                    temporal_frequency=temporal_frequency,
+                                    trial=k,
+                                )
+                            )
+
+    def do_analysis(self, data_store):
+        pass
