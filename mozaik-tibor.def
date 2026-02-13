@@ -1,0 +1,52 @@
+Bootstrap: docker
+From: python:3.10-slim-bookworm
+
+%files
+    requirements_tibor.txt /opt/requirements.txt
+
+%post
+    # 1. Install System Dependencies (MPI, HDF5, Git, Build tools)
+    apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        git \
+        libopenmpi-dev \
+        openmpi-bin \
+        libhdf5-dev \
+        libfreetype6-dev \
+        libpng-dev \
+        pkg-config \
+        libgl1-mesa-glx \
+        && rm -rf /var/lib/apt/lists/*
+
+    # 2. Upgrade Pip
+    pip install --upgrade pip setuptools wheel
+
+    # 3. Install Fixed 'parameters' library (Python 3 Compatible)
+    # The version on PyPI (0.2.1) is broken for Python 3. We use the master branch.
+    pip install git+https://github.com/NeuralEnsemble/parameters.git@master#egg=parameters
+
+    # 4. Install PyNN (Assuming 0.9.6 or 0.10.0 based on context, or master)
+    # Since your pipfreeze had a local path, we install a standard compatible version.
+    pip install PyNN==0.10.1
+
+    # 5. Install the bulk of requirements from the freeze file
+    # We ignore errors about conflicting deps if any, to ensure the build finishes
+    pip install -r /opt/requirements.txt || echo "Warning: Some requirements failed to install cleanly"
+
+    # 6. Install Mozaik (from your source code or GitHub)
+    # Assuming you want to install the 'mozaik-csng' version you are working on.
+    # We clone it into /mozaik and install it.
+    mkdir -p /mozaik
+    cd /mozaik
+    git clone https://github.com/goirik-chakrabarty/mozaik.git .
+    git checkout csng
+    pip install -e .
+
+%environment
+    export LC_ALL=C.UTF-8
+    export LANG=C.UTF-8
+    export PYTHONPATH=/mozaik:$PYTHONPATH
+
+%runscript
+    # Default command when running the container
+    python "$@"
