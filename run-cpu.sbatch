@@ -2,8 +2,8 @@
 
 #SBATCH --account=nix00014
 #SBATCH --job-name=96sim-cpu             # Name of the job
-#SBATCH --ntasks=1                                  # Number of tasks
-#SBATCH -c 96                                       # Number of CPU cores per task
+#SBATCH --ntasks=96                                  # Number of tasks
+#SBATCH --cpus-per-task=1                                       # Number of CPU cores per task
 #SBATCH --nodes 1                                   # Ensure that all cores are on one machine
 #SBATCH --time=0-48:00                              # Runtime in D-HH:MM
 #SBATCH --mem 128G                                  # Memory pool for all cores (see also --mem-per-cpu)

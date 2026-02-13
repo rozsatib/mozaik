@@ -4,10 +4,10 @@
 
 # PROJECT_ROOT="/mnt/vast-nhr/projects/nix00014/goirik/mozaik-models/Rozsa_Cagnol2024" 
 PROJECT_ROOT="$PWD/../mozaik-models/experanto" 
-SIF_IMAGE="$PWD/mozaik-opt.sif"
+SIF_IMAGE="$PWD/../mozaik-sif/mozaik-opt.sif"
 ENV_FILE=".env"
 MOZAIK_ROOT="$PWD"
-EXPERANTO_ROOT="$PWD/../experanto"
+EXPERANTO_ROOT="$PWD/../../experanto"
 DATA_ROOT="$PWD/../data"
 # DATA_ROOT="/mnt/vast-react/projects/neural_foundation_model"
 

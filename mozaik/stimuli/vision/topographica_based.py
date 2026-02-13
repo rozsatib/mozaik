@@ -1151,7 +1151,7 @@ class GaborStimulus(TopographicaBasedVisualStimulus):
         loc = locals()
         params = loc
         for var_name in loc:
-            if var_name is "self":
+            if var_name == "self":
                 continue
             if loc[var_name] is None and hasattr(self,var_name):
                 params[var_name] = getattr(self,var_name)
