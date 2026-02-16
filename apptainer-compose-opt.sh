@@ -18,14 +18,14 @@ echo MOZAIK_ROOT: $MOZAIK_ROOT
 
 # Inherit the thread counts populated by your SLURM script
 # Fallback to 8 if not running under SLURM
-export OMP_NUM_THREADS=${OMP_NUM_THREADS:-8}
-export MKL_NUM_THREADS=${MKL_NUM_THREADS:-8}
-export OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-8}
-export NUMEXPR_NUM_THREADS=${OMP_NUM_THREADS:-8}
-export VECLIB_MAXIMUM_THREADS=${OMP_NUM_THREADS:-8}
+export OMP_NUM_THREADS=${OMP_NUM_THREADS:-4}
+export MKL_NUM_THREADS=${MKL_NUM_THREADS:-4}
+export OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-4}
+export NUMEXPR_NUM_THREADS=${OMP_NUM_THREADS:-4}
+export VECLIB_MAXIMUM_THREADS=${OMP_NUM_THREADS:-4}
 
 # Capture SLURM tasks, default to 4
-export NTASKS=${SLURM_NTASKS:-4}
+export NTASKS=${SLURM_NTASKS:-12}
 
 echo "Starting Mozaik Container..."
 apptainer exec \
