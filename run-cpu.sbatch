@@ -1,9 +1,9 @@
 #!/bin/bash
 
 #SBATCH --account=nix00014
-#SBATCH --job-name=96sim-cpu             # Name of the job
-#SBATCH --ntasks=96                                  # Number of tasks
-#SBATCH --cpus-per-task=1                                       # Number of CPU cores per task
+#SBATCH --job-name=compare             # Name of the job
+#SBATCH --ntasks=12                                  # Number of tasks
+#SBATCH --cpus-per-task=4                                       # Number of CPU cores per task
 #SBATCH --nodes 1                                   # Ensure that all cores are on one machine
 #SBATCH --time=0-48:00                              # Runtime in D-HH:MM
 #SBATCH --mem 128G                                  # Memory pool for all cores (see also --mem-per-cpu)
@@ -20,7 +20,7 @@ export FTP_PROXY="http://www-cache.gwdg.de:3128"
 
 module load apptainer
 
-cd /mnt/vast-nhr/projects/nix00014/goirik/mozaik
+cd /mnt/vast-nhr/projects/nix00014/goirik/MOZAIK-new/mozaik
 
 # Printing out some info.
 echo "Submitting job with sbatch from directory: ${SLURM_SUBMIT_DIR}"

@@ -2357,7 +2357,7 @@ class MeasurePixelMovieExperanto(VisualExperiment):
                             movie_frame_duration = self.frame_duration * \
                                 (meta['presentation_time']*1000 //  self.frame_duration)
                             blank_duration = self.frame_duration * \
-                                ((meta['pre_blank_period']*1000 - 35) // self.frame_duration)
+                                ((meta['pre_blank_period']*1000 - 150) // self.frame_duration)
                        # 35 comes from the default null stimulus from the experiment config
                         elif meta['modality'] == 'video':
                             movie_frame_duration = self.parameters.movie_frame_duration
@@ -2365,6 +2365,7 @@ class MeasurePixelMovieExperanto(VisualExperiment):
                         # blank stimulus does not have a npy file so they are skipped
                         if meta['modality'] != 'blank':    
                             stimulus_name = meta_name.replace('.yml', '.npy')
+                            condition_hash = meta['condition_hash']
 
                         print("Duration:", self.parameters.images_per_trial * movie_frame_duration)
                         print("Images per trial:", self.parameters.images_per_trial)
@@ -2385,6 +2386,7 @@ class MeasurePixelMovieExperanto(VisualExperiment):
                                 frame_duration=self.frame_duration,
                                 movie_path=movie_path,
                                 movie_name=stimulus_name,
+                                condition_hash=condition_hash,
                                 duration=self.parameters.images_per_trial * movie_frame_duration,
                                 size_x=self.model.visual_field.size_x,
                                 size_y=self.model.visual_field.size_y,

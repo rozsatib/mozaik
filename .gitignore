@@ -15,3 +15,4 @@ data/
 *.avi
 slurm_files/*
 slurm*
+copilot_summary/*

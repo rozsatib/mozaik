@@ -1563,6 +1563,7 @@ class PixelMovieExperanto(TopographicaBasedVisualStimulus):
     size = SNumber(degrees, doc="The length of the longer axis of the image in visual degrees")
     movie_path = SString(doc="Path to the image file.")
     movie_name = SString(doc="Name of the image file.")
+    condition_hash = SString(doc="Condition hash of stimulus")
     movie_frame_duration = SNumber(ms, doc="Image + blank screen display duration.")
     frame_offset = SNumber(ms, doc="The offset at which to start presenting frames.")
     x_location = SNumber(degrees, default=0., doc="The x location of the center of the movie stimulus.")
