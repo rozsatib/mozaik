@@ -160,6 +160,14 @@ class Model(BaseComponent):
 
         sim_run_time += self.run(stimulus.duration)
         segments = []
+
+        # Log the stimulus presentation (Can be commented out if too attribute not present)
+        current_stim_name = getattr(stimulus, 'movie_name', stimulus.__class__.__name__)
+        if current_stim_name == 'InternalStimulus':
+            current_stim_name = 'Blank / InternalStimulus'
+
+        logger.info("Presenting Stimulus: %s" % current_stim_name)
+        # Comment till here
         
         for sheet in self.sheets.values():    
             if sheet.to_record != None:

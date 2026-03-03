@@ -1,0 +1,193 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+%help
+    Apptainer definition file for the Mozaik repository.
+
+    This file is based on the installation instructions in the README.rst
+    and the .github/workflows/mozaik-setup.yml workflow.
+    It builds mozaik with Python 3.10, Nest 3.4, and all required modules.
+    
+    To build:
+    apptainer build mozaik.sif mozaik.def
+    
+    To run an example (from the README):
+    apptainer exec mozaik.sif python examples/VogelsAbbott2005/run.py nest 2 param/defaults 'test'
+
+%environment
+    # Setup the runtime environment
+    export MOZAIK_HOME=/opt/mozaik
+    export PATH="$MOZAIK_HOME/bin:$PATH"
+    # Using Python 3.10 as it's the default for Ubuntu 22.04
+    export PYTHONPATH="$MOZAIK_HOME/lib/python3.10/site-packages:$PYTHONPATH"
+    export DEBIAN_FRONTEND=noninteractive
+    export NEST_INSTALL_DIR=$MOZAIK_HOME
+
+%files
+    # Copy the entire repo context into the /app directory in the container
+    # This assumes you run `apptainer build` from the repo root.
+    . /app
+
+%post
+    # Set environment for the build
+    export MOZAIK_HOME=/opt/mozaik
+    export PATH="$MOZAIK_HOME/bin:$PATH"
+    export PYTHONPATH="$MOZAIK_HOME/lib/python3.10/site-packages:$PYTHONPATH"
+    export DEBIAN_FRONTEND=noninteractive
+    export NEST_INSTALL_DIR=$MOZAIK_HOME
+
+    # 1. Install System Dependencies
+    # Based on README.rst and .github/workflows/mozaik-setup.yml
+    apt-get update -y
+    # Note: libgsl0-dev -> libgsl-dev, libncurses6-dev -> libncurses-dev on 22.04
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        cmake \
+        git \
+        subversion \
+        wget \
+        python3 \
+        python3-dev \
+        python3-pip \
+        python3-setuptools \
+        python3-tk \
+        python3-nose \
+        python3-venv \
+        libopenmpi-dev \
+        openmpi-bin \
+        libjpeg8-dev \
+        libfreetype6-dev \
+        zlib1g-dev \
+        libpng++-dev \
+        libncurses-dev \
+        libreadline-dev \
+        liblapack-dev \
+        libblas-dev \
+        libgsl-dev \
+        libboost-all-dev \
+        ffmpeg
+    
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+
+    # 2. Create and activate virtual environment
+    python3 -m venv $MOZAIK_HOME
+    . $MOZAIK_HOME/bin/activate
+
+    # 3. Install Python (pip) dependencies
+    # This list is from README.rst and .github/workflows/mozaik-setup.yml
+    pip install --upgrade pip
+    pip install \
+        numpy \
+        scipy \
+        mpi4py \
+        matplotlib \
+        quantities \
+        lazyarray \
+        interval \
+        Pillow \
+        param==1.5.1 \
+        parameters \
+        neo==0.12.0 \
+        cython==3.0.10 \
+        psutil \
+        future \
+        requests \
+        elephant \
+        pytest-xdist \
+        pytest-timeout \
+        junitparser \
+        numba \
+        numpyencoder \
+        sphinx \
+        imageio \
+        scikit-image \
+        som-pbc \
+        pandas \
+        seaborn \
+        jupyterlab \
+        tk
+
+    # 4. Download and install imagen
+    # (Using antolikjan version from Dockerfile/workflow)
+    cd /tmp
+    git clone https://github.com/antolikjan/imagen.git
+    cd imagen
+    pip install .
+    cd /tmp && rm -rf /tmp/imagen
+
+    # 5. Download and install PyNN
+    # (Using custom branch from README/workflow)
+    cd /tmp
+    git clone https://github.com/CSNG-MFF/PyNN.git
+    cd PyNN
+    git checkout PyNNStepCurrentModule
+    pip install .
+    cd /tmp && rm -rf /tmp/PyNN
+
+    # 6. Install Nest (v3.4 from README/workflow)
+    cd /tmp
+    wget https://github.com/nest/nest-simulator/archive/v3.4.tar.gz
+    tar xvfz v3.4.tar.gz
+    cd nest-simulator-3.4
+    cmake -Dwith-mpi=ON -Dwith-boost=ON -DCMAKE_INSTALL_PREFIX:PATH=$MOZAIK_HOME -Dwith-optimize='-O3' ./
+    make -j$(nproc)
+    make -j$(nproc) install
+    cd /tmp && rm -rf /tmp/nest-simulator-3.4 /tmp/v3.4.tar.gz
+    # Check install
+    python -c 'import nest'
+
+    # 7. Install nest-step-current-module
+    cd /tmp
+    git clone https://github.com/CSNG-MFF/nest-step-current-module.git
+    cd nest-step-current-module
+    cmake -Dwith-mpi=ON -Dwith-boost=ON -Dwith-optimize='-O3' -Dwith-nest=$MOZAIK_HOME/bin/nest-config ./
+    make -j$(nproc)
+    make -j$(nproc) install
+    cd /tmp && rm -rf /tmp/nest-step-current-module
+    # Check install
+    python -c 'import nest; nest.Install("stepcurrentmodule")'
+    
+    ## 8. Install mozaik itself
+    ## The repo files were copied to /app by the %files section
+    # cd /app
+    # pip install .
+
+    # 9. Pre-compile pyNN extensions
+    # This forces pyNN to build its extensions now, while the FS is writable.
+    echo "Pre-compiling pyNN extensions..."
+    python -c 'import pyNN.nest'
+
+%runscript
+    # This allows running commands like the example in the README
+    # apptainer exec mozaik.sif python examples/VogelsAbbott2005/run.py nest 2 param/defaults 'test'
+
+    # Activate the environment
+    . $MOZAIK_HOME/bin/activate
+    
+    # Make sure the nest module is loaded
+    python -c 'import nest; nest.Install("stepcurrentmodule")' > /dev/null 2>&1
+    
+    echo "Executing command: python $@"
+    exec python "$@"
+
+%test
+    # Test section to verify the installation
+    . $MOZAIK_HOME/bin/activate
+
+    echo "Testing python import..."
+    python -c 'import mozaik'
+    
+    echo "Testing NEST import..."
+    python -c 'import nest'
+    
+    echo "Testing NEST module import..."
+    python -c 'import nest; nest.Install("stepcurrentmodule")'
+
+    echo "Testing PyNN import..."
+    python -c 'import pyNN.nest'
+
+    echo "Testing imagen import..."
+    python -c 'import imagen'
+    
+    echo "All tests passed!"

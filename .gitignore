@@ -6,3 +6,13 @@ build
 *.komodoproject
 cover
 .coverage
+*.sif
+*.bak
+*.out
+data/
+*.npy
+*.mp4
+*.avi
+slurm_files/*
+slurm*
+copilot_summary/*

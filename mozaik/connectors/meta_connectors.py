@@ -129,7 +129,7 @@ class GaborConnector(BaseComponent):
         t_size = target.size_in_degrees()
         or_map = None
         if self.parameters.or_map:
-
+            print(">>>>>>>>>>>>>>>>>>>",self.parameters.or_map_location)
             f = open(self.parameters.or_map_location, 'rb')
             or_map = pickle.load(f, encoding="latin1")*numpy.pi
             #or_map = pickle.load(f)*numpy.pi*2

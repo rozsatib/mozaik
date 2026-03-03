@@ -1,0 +1,133 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+%help
+    Apptainer definition file for Mozaik (Source Build + Intel MKL).
+    Compiles Python from source to prevent Host hijacking.
+    Links against Intel MKL for maximum performance.
+
+%environment
+    # Runtime variables
+    export MOZAIK_PYTHON=/usr/local/mozaik-python
+    export PATH="$MOZAIK_PYTHON/bin:$PATH"
+    export MOZAIK_HOME=/usr/local/mozaik
+    
+    # PYTHONPATH must include both the custom Python site-packages and Mozaik's install location
+    export PYTHONPATH="$MOZAIK_HOME/lib/python3.10/site-packages:$MOZAIK_PYTHON/lib/python3.10/site-packages:$PYTHONPATH"
+    
+    # Force single-threaded math (MPI manages parallelism)
+    export OMP_NUM_THREADS=1
+    export MKL_NUM_THREADS=1
+    export OPENBLAS_NUM_THREADS=1
+
+%post
+    # Stop on error
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+
+    # --- 1. DEFINE BUILD VARIABLES (CRITICAL FIX) ---
+    export MOZAIK_PYTHON=/usr/local/mozaik-python
+    export MOZAIK_HOME=/usr/local/mozaik
+
+    # --- 2. Install Build Dependencies ---
+    apt-get update -y
+    apt-get install -y \
+        wget git build-essential cmake libssl-dev zlib1g-dev \
+        libbz2-dev libreadline-dev libsqlite3-dev curl \
+        libncursesw5-dev xz-utils tk-dev libxml2-dev libxmlsec1-dev \
+        libffi-dev liblzma-dev \
+        libopenmpi-dev openmpi-bin \
+        libgsl-dev libboost-all-dev
+    
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+    # --- 3. Compile Python 3.10 FROM SOURCE ---
+    echo "Compiling Python 3.10 from source..."
+    cd /tmp
+    wget https://www.python.org/ftp/python/3.10.13/Python-3.10.13.tgz
+    tar xvf Python-3.10.13.tgz
+    cd Python-3.10.13
+    
+    ./configure \
+        --prefix=$MOZAIK_PYTHON \
+        --enable-optimizations \
+        --with-lto \
+        --with-ensurepip=install
+
+    make -j$(nproc)
+    make install
+    
+    # Symlink for convenience
+    ln -s $MOZAIK_PYTHON/bin/python3 $MOZAIK_PYTHON/bin/python
+    
+    # Add to PATH for the rest of this script
+    export PATH="$MOZAIK_PYTHON/bin:$PATH"
+
+    # --- 4. Install MKL-Optimized NumPy (INTEL FIX) ---
+    # We upgrade pip first
+    python -m pip install --upgrade pip
+
+    # We install numpy/scipy from Intel's Anaconda channel to get MKL binaries
+    # Note: Package is named 'numpy', but the index URL gives us the Intel version
+    python -m pip install -i https://pypi.anaconda.org/intel/simple numpy scipy
+
+    # Install remaining stack from standard PyPI
+    python -m pip install \
+        mpi4py matplotlib pandas seaborn cython==0.29.36 \
+        numba scikit-image jupyterlab ipython requests psutil \
+        quantities lazyarray interval Pillow param==1.5.1 \
+        parameters neo==0.12.0 future elephant pytest-xdist \
+        pytest-timeout junitparser numpyencoder sphinx imageio tk
+
+    # --- 5. Install Imagen & PyNN ---
+    cd /tmp
+    rm -rf imagen
+    git clone https://github.com/antolikjan/imagen.git
+    cd imagen && python -m pip install .
+
+    cd /tmp
+    rm -rf PyNN
+    git clone https://github.com/CSNG-MFF/PyNN.git
+    cd PyNN && git checkout PyNNStepCurrentModule && python -m pip install .
+
+    # --- 6. Install NEST (Linked to Custom Python) ---
+    cd /tmp
+    rm -rf nest-simulator-3.4 v3.4.tar.gz
+    wget https://github.com/nest/nest-simulator/archive/v3.4.tar.gz
+    tar xvfz v3.4.tar.gz
+    cd nest-simulator-3.4
+    
+    cmake \
+        -Dwith-mpi=ON \
+        -Dwith-boost=ON \
+        -DCMAKE_INSTALL_PREFIX:PATH=$MOZAIK_HOME \
+        -Dwith-optimize='-O3 -march=native -mtune=native' \
+        -Dwith-gsl=ON \
+        -Dwith-python=ON \
+        -DPYTHON_EXECUTABLE=$MOZAIK_PYTHON/bin/python3.10 \
+        -DPYTHON_INCLUDE_DIR=$MOZAIK_PYTHON/include/python3.10 \
+        -DPYTHON_LIBRARY=$MOZAIK_PYTHON/lib/libpython3.10.a \
+        ./
+
+    make -j$(nproc) && make install
+
+    # --- 7. Install Step Current Module ---
+    cd /tmp
+    rm -rf nest-step-current-module
+    git clone https://github.com/CSNG-MFF/nest-step-current-module.git
+    cd nest-step-current-module
+    cmake \
+        -Dwith-mpi=ON \
+        -Dwith-boost=ON \
+        -Dwith-optimize='-O3 -march=native -mtune=native' \
+        -Dwith-nest=$MOZAIK_HOME/bin/nest-config \
+        ./
+    make -j$(nproc) && make install
+
+    # Cleanup
+    # rm -rf /tmp/*
+
+%runscript
+    # Ensure correct python is used at runtime
+    export PATH="/usr/local/mozaik-python/bin:$PATH"
+    exec python "$@"

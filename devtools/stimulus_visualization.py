@@ -111,7 +111,7 @@ def show_frame(frame, params=None, grid=None):
         plt.xlabel("x/$^\circ$")
         plt.ylabel("y/$^\circ$")
     plot_colorbar(plot_frame(frame, params, grid)[0])
-    plt.gcf().canvas.manager.set_window_title("")
+    # plt.gcf().canvas.manager.set_window_title("") # Crashing here 
     plt.show()
 
 
@@ -150,20 +150,26 @@ def show_frames(
             plt.xlabel("x/$^\circ$")
             plt.ylabel("y/$^\circ$")
 
+        plt.savefig('animation_with_text_frame0.png')  # Save first frame as a static image
         ani = FuncAnimation(
             fig,
             func=plot_frame,
-            frames=frames,
+            frames=frames[:20],
             interval=frame_delay,
             blit=blit_on,
             fargs=(params, grid, vmin, vmax),
-            repeat=repeat,
+            repeat=False,
         )
 
-        try:  # Catch exception that crashes program on window close
-            plt.show(block=True)
-        except AttributeError:
-            pass
+        try:
+            # Save the animation to a file instead of showing it
+            print("Saving animation to 'visualization_demo.mp4'...")
+            # You can adjust dpi (resolution) or writer as needed
+            ani.save('animation_with_text.gif', writer='pillow', fps=5)
+            # ani.save("visualization_demo.mp4", writer="ffmpeg", dpi=150)
+            print("...Done saving animation.")
+        except Exception as e:
+            print(f"Error saving animation: {e}")
 
         plt.close()
     else:
@@ -243,10 +249,10 @@ def plot_frame(frame, params=None, grid=None, vmin=None, vmax=None):
     params_duration_str = (  # Print what the framerate should be
         "" if params is None else " (in params %d ms)" % params["frame_duration"]
     )
-    plt.gcf().canvas.manager.set_window_title(
-        "Frame duration: %3d ms%s, fps: %6.2f"
-        % (duration * 1000, params_duration_str, 1 / duration)
-    )
+    # plt.gcf().canvas.manager.set_window_title(
+    #     "Frame duration: %3d ms%s, fps: %6.2f"
+    #     % (duration * 1000, params_duration_str, 1 / duration)
+    # ) # Crashing here
 
     # Set ticks given stimulus parameters and set equal axis
     if params is not None:

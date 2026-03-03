@@ -1510,6 +1510,68 @@ class NaturalImage(TopographicaBasedVisualStimulus):
         ):
             yield (blank, [i])
 
+class StaticImage(TopographicaBasedVisualStimulus):
+    """
+    A visual stimulus consisting of a static image, followed by a blank screen
+    with background luminance.
+    """
+
+    size = SNumber(
+        degrees, doc="The length of the longer axis of the image in visual degrees"
+    )
+    image_path = SString(doc="Path to the image file.")
+    image_duration = SNumber(ms, doc="Duration of the image display.")
+    blank_duration = SNumber(ms, doc="Duration of the blank screen display.")
+    duration = SNumber(ms, doc="Image + blank screen display duration.")
+
+    def __init__(self, **params):
+        TopographicaBasedVisualStimulus.__init__(self, **params)
+        assert (
+            self.image_duration / self.frame_duration
+        ) % 1.0 == 0.0, (
+            "The duration of image presentation should be multiple of frame duration."
+        )
+        assert (
+            (self.duration - self.image_duration) / self.frame_duration
+        ) % 1.0 == 0.0, (
+            "The duration of blank presentation should be multiple of frame duration."
+        )
+
+    def frames(self):
+        self.pattern_sampler = imagen.image.PatternSampler(
+            size_normalization="fit_shortest",
+            whole_pattern_output_fns=[MaximumDynamicRange()],
+        )
+   
+        img = imagen.image.FileImage(
+            filename=self.image_path,
+            x=0,
+            y=0,
+            orientation=0,
+            xdensity=self.density,
+            ydensity=self.density,
+            size=self.size,
+            bounds=BoundingBox(
+                points=(
+                    (-self.size_x / 2, -self.size_y / 2),
+                    (self.size_x / 2, self.size_y / 2),
+                )
+            ),
+            scale=2 * self.background_luminance,
+            pattern_sampler=self.pattern_sampler,
+        )
+
+        image = img()
+        blank = image * 0 + self.background_luminance
+        for i in range(int(self.image_duration / self.frame_duration)):
+            yield (image, [i])
+
+        for i in range(
+            int((self.duration - self.image_duration) / self.frame_duration)
+        ):
+            yield (blank, [i])
+
+
 class NDArrayImage(GenericImage):
     r"""
     2D Image generator that reads the image from a 2D ndarray. It assummes a single channel (grayscale).
@@ -1526,10 +1588,8 @@ class NDArrayImage(GenericImage):
     def _get_image(self,p):
         return self._image
 
-
-
-class PixelMovieFromFile(TopographicaBasedVisualStimulus):
-    r"""
+class PixelMovieExperanto(TopographicaBasedVisualStimulus):
+    """
     A visual stimulus that consists of a movie that is loaded from a file, where it is stored as a 3D numpy matrix (npy), 
     with the first axis the time, and 2nd and 3rd axis the visual field. The individual frames are presented one by one 
     for the self.frame_duration. The stimulus is assumed to have pixel values in the interval [0,1].
@@ -1539,8 +1599,12 @@ class PixelMovieFromFile(TopographicaBasedVisualStimulus):
     size = SNumber(degrees, doc="The length of the longer axis of the image in visual degrees")
     movie_path = SString(doc="Path to the image file.")
     movie_name = SString(doc="Name of the image file.")
+    condition_hash = SString(doc="Condition hash of stimulus")
     movie_frame_duration = SNumber(ms, doc="Image + blank screen display duration.")
     frame_offset = SNumber(ms, doc="The offset at which to start presenting frames.")
+    x_location = SNumber(degrees, default=0., doc="The x location of the center of the movie stimulus.")
+    y_location = SNumber(degrees, default=0., doc="The y location of the center of the movie stimulus.")
+    video_max_value = SNumber(dimensionless, default=1.0, doc="The maximum pixel value in the video file.")
 
     # we will chaceh the loaded files in case many stimuli access frames from the same file
     cache = {}
@@ -1551,14 +1615,18 @@ class PixelMovieFromFile(TopographicaBasedVisualStimulus):
         import os
         # Check if file was already loaded earlier as in the cache. If yes use it. If not load it and insert it in the cache.
         p = os.path.join(self.movie_path,self.movie_name)
-        if p in PixelMovieFromFile.cache.keys():
-            self.mc = PixelMovieFromFile.cache[p]
+        if p in PixelMovieExperanto.cache.keys():
+            self.mc = PixelMovieExperanto.cache[p]
         else:
             with open(p, 'rb') as f:
                 self.mc = numpy.load(f)
-                PixelMovieFromFile.cache[p] = self.mc
+                if len(self.mc.shape) == 2:
+                    # print(">>>>>>>>>>>>>>>>>>>>>>>>>>> Got an image")
+                    # if only one frame is present, we need to add a time axis
+                    self.mc = self.mc[numpy.newaxis,:,:]
+                PixelMovieExperanto.cache[p] = self.mc/self.video_max_value  # normalizing the pixel values to [0,1]
 
-        assert self.mc.shape[1] == self.mc.shape[2], "The spatial shape of the pixel movie has to be square"
+        # assert self.mc.shape[1] == self.mc.shape[2], "The spatial shape of the pixel movie has to be square"
         assert ( self.duration <= self.movie_frame_duration * (len(self.mc)-self.frame_offset)), "The duration of the total stimulus has to be less than number of frames in the movie remaining after the offset times the movie frame duration."
         assert ( self.movie_frame_duration % self.frame_duration == 0), "The duration of single movie frame has to be multiple of the frame duration of the input space."
 
@@ -1569,8 +1637,8 @@ class PixelMovieFromFile(TopographicaBasedVisualStimulus):
             frame = int(math.floor(self.time/self.movie_frame_duration) + self.frame_offset)
             image = NDArrayImage(         
                                 self.mc[frame],
-                                x=0,
-                                y=0,
+                                x=self.x_location,
+                                y=self.y_location,
                                 orientation=0,
                                 xdensity=self.density,
                                 ydensity=self.density,
@@ -1579,6 +1647,7 @@ class PixelMovieFromFile(TopographicaBasedVisualStimulus):
                                                             (self.size_x/2, self.size_y/2))),
                                 scale=2*self.background_luminance,
                                 pattern_sampler= imagen.image.PatternSampler(size_normalization="fit_longest",whole_pattern_output_fns=[MaximumDynamicRange()]))
-
+            
             yield (image(), [frame])
+
             self.time += self.frame_duration

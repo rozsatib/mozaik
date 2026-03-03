@@ -1,0 +1,110 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+%help
+    Apptainer definition file for Mozaik (Conda + MKL).
+    Installs to /mozaik-env to avoid /opt bind mount conflicts.
+
+%environment
+    # 1. CRITICAL: Use a custom path to avoid Host /opt masking
+    export MOZAIK_ENV=/mozaik-env
+    export PATH="$MOZAIK_ENV/bin:$PATH"
+    export PYTHONPATH="$MOZAIK_ENV/lib/python3.10/site-packages:$PYTHONPATH"
+    
+    # 2. NEST Configuration
+    export NEST_INSTALL_DIR=$MOZAIK_ENV
+    export NEST_DATA_DIR=$MOZAIK_ENV/share/nest
+    export NEST_MODULE_PATH=$MOZAIK_ENV/lib/nest
+    
+    # 3. Performance Variables (Force MKL)
+    export MKL_NUM_THREADS=1
+    export OMP_NUM_THREADS=1
+    export OPENBLAS_NUM_THREADS=1
+
+%post
+    # Stop on error
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+    
+    # --- A. Install System Tools ---
+    apt-get update -y
+    apt-get install -y --no-install-recommends \
+        wget git build-essential cmake ca-certificates \
+        libopenmpi-dev openmpi-bin \
+        libgl1-mesa-glx libncurses-dev \
+        libgsl-dev libboost-all-dev
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+    # --- B. Install Miniforge to Safe Directory (/mozaik-env) ---
+    wget https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh -O /tmp/miniforge.sh
+    # Install directly to /mozaik-env (bypassing the need for a separate env create step)
+    bash /tmp/miniforge.sh -b -p /mozaik-env
+    rm /tmp/miniforge.sh
+    
+    # Activate path for the build process
+    export PATH="/mozaik-env/bin:$PATH"
+    export CONDA_PREFIX="/mozaik-env"
+
+    # --- C. Install Mamba/Conda Packages ---
+    # We install directly into the base environment at /mozaik-env
+    mamba install -y python=3.10 \
+        "libblas=*=*mkl" "cython<3" numpy scipy matplotlib pandas seaborn \
+        mpi4py numba scikit-image jupyterlab \
+        ipython requests psutil
+
+    # --- D. Install Pip Packages ---
+    pip install quantities lazyarray interval Pillow param==1.5.1 \
+        parameters neo==0.12.0 future elephant pytest-xdist \
+        pytest-timeout junitparser numpyencoder sphinx imageio tk
+
+    # --- E. Install Imagen & PyNN ---
+    cd /tmp
+    rm -rf imagen
+    git clone https://github.com/antolikjan/imagen.git
+    cd imagen && pip install .
+    
+    cd /tmp
+    rm -rf PyNN
+    git clone https://github.com/CSNG-MFF/PyNN.git
+    cd PyNN && git checkout PyNNStepCurrentModule && pip install .
+
+    # --- F. Install NEST (Linked to Conda MKL) ---
+    cd /tmp
+    rm -rf nest-simulator-3.4 v3.4.tar.gz
+    wget https://github.com/nest/nest-simulator/archive/v3.4.tar.gz
+    tar xvfz v3.4.tar.gz
+    cd nest-simulator-3.4
+    
+    cmake \
+        -Dwith-mpi=ON \
+        -Dwith-boost=ON \
+        -DCMAKE_INSTALL_PREFIX:PATH=$CONDA_PREFIX \
+        -DCMAKE_PREFIX_PATH=$CONDA_PREFIX \
+        -Dwith-optimize='-O3 -march=native -mtune=native' \
+        -Dwith-gsl=ON \
+        -Dwith-python=ON \
+        -Dcythonize-pynest=ON \
+        ./
+
+    make -j$(nproc) && make install
+
+    # --- G. Install Step Current Module ---
+    cd /tmp
+    rm -rf nest-step-current-module
+    git clone https://github.com/CSNG-MFF/nest-step-current-module.git
+    cd nest-step-current-module
+    cmake \
+        -Dwith-mpi=ON \
+        -Dwith-boost=ON \
+        -Dwith-optimize='-O3 -march=native -mtune=native' \
+        -Dwith-nest=$CONDA_PREFIX/bin/nest-config \
+        ./
+    make -j$(nproc) && make install
+
+    # Cleanup
+    mamba clean -a -y
+
+%runscript
+    # Ensure correct python is used
+    export PATH="/mozaik-env/bin:$PATH"
+    exec python "$@"

@@ -1,0 +1,113 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+%help
+    Apptainer definition file for Mozaik (Miniforge + MKL Optimized).
+    Fixes: Pins Cython<3 for NEST 3.4 compatibility.
+
+%environment
+    # Set up the Conda environment path
+    export MOZAIK_ENV=/opt/conda/envs/mozaik
+    export PATH="$MOZAIK_ENV/bin:/opt/conda/bin:$PATH"
+    export PYTHONPATH="$MOZAIK_ENV/lib/python3.10/site-packages:$PYTHONPATH"
+    
+    # NEST Variables
+    export NEST_INSTALL_DIR=$MOZAIK_ENV
+    export NEST_DATA_DIR=$MOZAIK_ENV/share/nest
+    export NEST_MODULE_PATH=$MOZAIK_ENV/lib/nest
+    
+    # Force single-threaded operation (MPI handles parallelism)
+    export MKL_NUM_THREADS=1
+    export OMP_NUM_THREADS=1
+    export OPENBLAS_NUM_THREADS=1
+
+%post
+    # Stop execution immediately if any command fails (Prevents cascading errors)
+    set -e 
+    export DEBIAN_FRONTEND=noninteractive
+    
+    # 1. Install System Build Tools
+    apt-get update -y
+    apt-get install -y --no-install-recommends \
+        wget git build-essential cmake ca-certificates \
+        libopenmpi-dev openmpi-bin \
+        libgl1-mesa-glx libncurses-dev \
+        libgsl-dev libboost-all-dev
+    
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+    # 2. Install Miniforge
+    wget https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh -O /tmp/miniforge.sh
+    bash /tmp/miniforge.sh -b -p /opt/conda
+    rm /tmp/miniforge.sh
+    export PATH="/opt/conda/bin:$PATH"
+
+    # 3. Create Optimized Environment
+    # CHANGE: Added "cython<3" to force version 0.29.x. 
+    # Cython 3.0+ breaks NEST 3.4 compilation (removes 'long' type).
+    mamba create -y -n mozaik python=3.10 \
+        "libblas=*=*mkl" "cython<3" numpy scipy matplotlib pandas seaborn \
+        mpi4py numba scikit-image jupyterlab \
+        ipython requests psutil
+
+    # Activate Environment
+    export PATH="/opt/conda/envs/mozaik/bin:$PATH"
+    export CONDA_PREFIX="/opt/conda/envs/mozaik"
+
+    # 4. Install remaining pip dependencies
+    pip install quantities lazyarray interval Pillow param==1.5.1 \
+        parameters neo==0.12.0 future elephant pytest-xdist \
+        pytest-timeout junitparser numpyencoder sphinx imageio tk
+
+    # 5. Install Imagen & PyNN
+    cd /tmp
+    rm -rf imagen
+    git clone https://github.com/antolikjan/imagen.git
+    cd imagen && pip install .
+    
+    cd /tmp
+    rm -rf PyNN
+    git clone https://github.com/CSNG-MFF/PyNN.git
+    cd PyNN && git checkout PyNNStepCurrentModule && pip install .
+
+    # 6. Install NEST (Linked to Conda MKL)
+    cd /tmp
+    rm -rf nest-simulator-3.4 v3.4.tar.gz
+    wget https://github.com/nest/nest-simulator/archive/v3.4.tar.gz
+    tar xvfz v3.4.tar.gz
+    cd nest-simulator-3.4
+    
+    cmake \
+        -Dwith-mpi=ON \
+        -Dwith-boost=ON \
+        -DCMAKE_INSTALL_PREFIX:PATH=$CONDA_PREFIX \
+        -DCMAKE_PREFIX_PATH=$CONDA_PREFIX \
+        -Dwith-optimize='-O3 -march=native -mtune=native' \
+        -Dwith-gsl=ON \
+        -Dwith-python=ON \
+        -Dcythonize-pynest=ON \
+        ./
+
+    make -j$(nproc) && make install
+
+    # 7. Install Step Current Module
+    cd /tmp
+    rm -rf nest-step-current-module
+    git clone https://github.com/CSNG-MFF/nest-step-current-module.git
+    cd nest-step-current-module
+    cmake \
+        -Dwith-mpi=ON \
+        -Dwith-boost=ON \
+        -Dwith-optimize='-O3 -march=native -mtune=native' \
+        -Dwith-nest=$CONDA_PREFIX/bin/nest-config \
+        ./
+    make -j$(nproc) && make install
+
+    # Cleanup
+    # rm -rf /tmp/*
+    mamba clean -a -y
+
+%runscript
+    # Activate Conda env at runtime
+    export PATH="/opt/conda/envs/mozaik/bin:$PATH"
+    exec python "$@"

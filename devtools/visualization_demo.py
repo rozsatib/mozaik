@@ -1,6 +1,6 @@
 import matplotlib
 
-matplotlib.use("TkAgg")
+matplotlib.use("Agg")
 import mozaik.stimuli.vision.topographica_based as topo
 import mozaik.experiments.vision as exp
 import mozaik.experiments.apparent_motion as am
@@ -228,6 +228,7 @@ def MeasureSparseBar_default_parameters():
         "y": 0,
         "n_positions": 10,
         "experiment_seed": 17,
+        'shuffle_stimuli': False,
     }
     return d
 
@@ -337,9 +338,28 @@ def demo_experiment_5():
     experiment = exp.MeasureSparseBar(model=model, parameters=parameters)
     viz.show_experiment(experiment, merge_stimuli=True, frame_delay=50)
 
+def demo_experiment_6():
+    model_params = visual_stim_default_parameters()
+    model_params["frame_duration"] = 7
+    model = dm.DummyModel(**model_params)
+    params ={'base_path': './',
+             'movie_name': 'test.npy',
+             "width" : 11,
+             "movie_frame_duration" : 7,
+             "global_frame_offset" : 0,
+             "images_per_trial" : 300,
+             "num_presentation_trials" : 1,
+             "num_trials": 2,
+             "shuffle_stimuli": False,
+             "video_max_value": 255.0,
+            }
+    parameters = ParameterSet(params)
+    experiment = exp.MeasurePixelMovieExperanto(model=model, parameters=parameters)
+    viz.show_experiment(experiment, merge_stimuli=True, frame_delay=50)
+
 
 def main():
-    demo_experiment_5()
+    demo_experiment_6()
 
     if False:
         # Try out show_stimulus arguments
