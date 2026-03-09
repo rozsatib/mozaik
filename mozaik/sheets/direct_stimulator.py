@@ -1069,7 +1069,7 @@ def generate_2d_stim(sheet, coor_x, coor_y, parameters):
     """
     if parameters.shape == "or_map":
         return or_map_mask(sheet, coor_x, coor_y, parameters)
-    elif parameters.shape in ["hexagon", "circle","hexagon"]:
+    elif parameters.shape in ["hexagon", "circle","polygon"]:
         return simple_shapes_binary_mask(coor_x, coor_y, parameters.shape, parameters) * parameters.intensity
     elif parameters.shape == "image":
         return image_stim(coor_x, coor_y, parameters)
@@ -1103,11 +1103,11 @@ def image_stim(coor_x, coor_y, parameters):
                 Path to the .npy file containing the image (2D array).
     """
     for i in range(coor_x.shape[1]):
-        assert np.allclose(coor_x[:, i], coor_x[:, i]), "X coordinates must be in grid!"
+        assert np.allclose(coor_x[:, 0], coor_x[:, i]), "X coordinates must be in grid!"
     for i in range(coor_y.shape[0]):
         assert np.allclose(coor_y[0, :], coor_y[i, :]), "Y coordinates must be in grid!"
     A = np.load(parameters.image_path)
-    assert len(A.shape) == 2, "The image must be 2D! Instead, the image shape is: " % A.shape
+    assert len(A.shape) == 2, "The image must be 2D! Instead, the image shape is: %s" % (A.shape)
     assert np.all(A >= 0) and np.all(A <= 1), "All values in the image must be in the range of (0,1)!"
     A_interp = scipy.interpolate.RegularGridInterpolator(
         (np.linspace(np.min(coor_x), np.max(coor_x), A.shape[0]),
