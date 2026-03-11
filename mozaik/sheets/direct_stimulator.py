@@ -1106,7 +1106,29 @@ def video_stim(coor_x, coor_y, parameters):
         video_path : str
                 Path to the .npy file containing the video (3D array).
     """
-    return
+    for i in range(coor_x.shape[1]):
+        assert np.allclose(coor_x[:, 0], coor_x[:, i]), "X coordinates must be in grid!"
+    for i in range(coor_y.shape[0]):
+        assert np.allclose(coor_y[0, :], coor_y[i, :]), "Y coordinates must be in grid!"
+
+    A = np.load(parameters.video_path)
+
+    assert len(A.shape) == 3, "The video must be 3D! Instead, the image shape is: %s" % (A.shape)
+    assert np.all(A >= 0) and np.all(A <= 1), "All values in the image must be in the range of (0,1)!"
+
+    n_frames = A.shape[2]
+    A_interp = np.zeros((coor_x.shape[0], coor_x.shape[1], n_frames))
+
+    x_axis = np.linspace(np.min(coor_x), np.max(coor_x), A.shape[0])
+    y_axis = np.linspace(np.min(coor_y), np.max(coor_y), A.shape[1])
+    points = np.vstack([coor_x.ravel(), coor_y.ravel()]).T
+    
+    for t in range(n_frames):
+        interp = scipy.interpolate.RegularGridInterpolator((x_axis, y_axis), A[:, :, t], bounds_error=False, fill_value=np.nan)
+        frame_interp = interp(points).reshape(coor_x.shape)
+        A_interp[:, :, t] = frame_interp
+
+    return A_interp * parameters.intensity
 
 def image_stim(coor_x, coor_y, parameters):
     """
@@ -1137,14 +1159,17 @@ def image_stim(coor_x, coor_y, parameters):
         assert np.allclose(coor_x[:, 0], coor_x[:, i]), "X coordinates must be in grid!"
     for i in range(coor_y.shape[0]):
         assert np.allclose(coor_y[0, :], coor_y[i, :]), "Y coordinates must be in grid!"
+
     A = np.load(parameters.image_path)
     assert len(A.shape) == 2, "The image must be 2D! Instead, the image shape is: %s" % (A.shape)
     assert np.all(A >= 0) and np.all(A <= 1), "All values in the image must be in the range of (0,1)!"
+
     A_interp = scipy.interpolate.RegularGridInterpolator(
         (np.linspace(np.min(coor_x), np.max(coor_x), A.shape[0]),
          np.linspace(np.min(coor_y), np.max(coor_y), A.shape[1])),
         A, bounds_error=False, fill_value=np.nan)(np.vstack([coor_x.ravel(), coor_y.ravel()]).T)
     A_interp = A_interp.reshape(coor_x.shape)
+
     return A_interp * parameters.intensity
 
 
