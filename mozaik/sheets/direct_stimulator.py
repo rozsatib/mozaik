@@ -1039,8 +1039,13 @@ def stimulating_pattern_flash(sheet, coor_x, coor_y, update_interval, parameters
     t_onset = int(numpy.floor(parameters.onset_time / update_interval))
     t_offset = int(numpy.floor(parameters.offset_time / update_interval))
 
-    mask = generate_2d_stim(sheet, coor_x, coor_y, parameters)
-    signals[:, :, t_onset:t_offset] = np.repeat(mask[:, :, np.newaxis], t_offset-t_onset, axis=2)
+    if parameters.shape == "video":
+        stim = video_stim(coor_x, coor_y, parameters)
+        assert stim.shape == (coor_x.shape[0], coor_x.shape[1], t_offset - t_onset), f"Video stimulation has wrong shape: {stim.shape}"
+        signals[:, :, t_onset:t_offset] = stim
+    else:
+        mask = generate_2d_stim(sheet, coor_x, coor_y, parameters)
+        signals[:, :, t_onset:t_offset] = np.repeat(mask[:, :, np.newaxis], t_offset-t_onset, axis=2)
 
     return signals
 
@@ -1074,8 +1079,34 @@ def generate_2d_stim(sheet, coor_x, coor_y, parameters):
     elif parameters.shape == "image":
         return image_stim(coor_x, coor_y, parameters)
     else:
-        raise ValueError("Unknown shape %s for cortical stimulation!", parameters.shape)
+        raise ValueError("Unknown shape %s for cortical stimulation!" % parameters.shape)
 
+def video_stim(coor_x, coor_y, parameters):
+    """
+    Generate stimulation in the pattern of a grayscale video, loaded from a .npy
+    file containing a 3D numpy array, with values between 0 (black) and 1 (white).
+
+    The mapping between the axes of the numpy array and cortical space
+    is 0->X, 1->Y, 2->time.
+
+    If the video has a different aspect ratio or number of pixels as the stimulation
+    array, it will be stretched to fit the array.
+
+    Parameters
+    ----------
+    coor_x : numpy array
+                X coordinates of all electrodes
+
+    coor_y : numpy array
+                Y coordinates of all electrodes
+
+    parameters : ParameterSet
+        intensity : float
+                Stimulation intensity constant
+        video_path : str
+                Path to the .npy file containing the video (3D array).
+    """
+    return
 
 def image_stim(coor_x, coor_y, parameters):
     """
