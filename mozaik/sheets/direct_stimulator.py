@@ -997,7 +997,7 @@ class ClosedLoopOpticalStimulatorArray(PluginOpticalStimulatorArrayChR):
 
 def stimulating_pattern_flash(sheet, coor_x, coor_y, update_interval, parameters):
     """
-    Stimulation with a static stimulation pattern, its exact form is determined
+    Stimulation with a stimulation pattern, its exact form is determined
     by the supplied extra parameters. The stimulus turns on at *onset_time*, turns off
     at *offset_time*. The overall duration of the stimulus is *duration* ms.
 
@@ -1038,10 +1038,11 @@ def stimulating_pattern_flash(sheet, coor_x, coor_y, update_interval, parameters
 
     t_onset = int(numpy.floor(parameters.onset_time / update_interval))
     t_offset = int(numpy.floor(parameters.offset_time / update_interval))
+    stim_length = t_offset - t_onset
+    assert t_offset > t_onset, "offset_time must be greater than onset_time"
 
     if parameters.shape == "video":
-        stim = video_stim(coor_x, coor_y, parameters)
-        assert stim.shape == (coor_x.shape[0], coor_x.shape[1], t_offset - t_onset), f"Video stimulation has wrong shape: {stim.shape}"
+        stim = video_stim(coor_x, coor_y, parameters, stim_length)
         signals[:, :, t_onset:t_offset] = stim
     else:
         mask = generate_2d_stim(sheet, coor_x, coor_y, parameters)
@@ -1081,7 +1082,7 @@ def generate_2d_stim(sheet, coor_x, coor_y, parameters):
     else:
         raise ValueError("Unknown shape %s for cortical stimulation!" % parameters.shape)
 
-def video_stim(coor_x, coor_y, parameters):
+def video_stim(coor_x, coor_y, parameters, stim_length):
     """
     Generate stimulation in the pattern of a grayscale video, loaded from a .npy
     file containing a 3D numpy array, with values between 0 (black) and 1 (white).
@@ -1104,7 +1105,9 @@ def video_stim(coor_x, coor_y, parameters):
         intensity : float
                 Stimulation intensity constant
         video_path : str
-                Path to the .npy file containing the video (3D array).
+                Path to the .npy file containing the video (3D array)
+    stim_length : int
+                Number of time steps of the stimulation
     """
     for i in range(coor_x.shape[1]):
         assert np.allclose(coor_x[:, 0], coor_x[:, i]), "X coordinates must be in grid!"
@@ -1113,8 +1116,8 @@ def video_stim(coor_x, coor_y, parameters):
 
     A = np.load(parameters.video_path)
 
-    assert len(A.shape) == 3, "The video must be 3D! Instead, the image shape is: %s" % (A.shape)
-    assert np.all(A >= 0) and np.all(A <= 1), "All values in the image must be in the range of (0,1)!"
+    assert len(A.shape) == 3, "The video must be 3D! Instead, the video shape is: %s" % (A.shape)
+    assert np.all(A >= 0) and np.all(A <= 1), "All values in the video must be in the range of (0,1)!"
 
     n_frames = A.shape[2]
     A_interp = np.zeros((coor_x.shape[0], coor_x.shape[1], n_frames))
@@ -1127,8 +1130,18 @@ def video_stim(coor_x, coor_y, parameters):
         interp = scipy.interpolate.RegularGridInterpolator((x_axis, y_axis), A[:, :, t], bounds_error=False, fill_value=np.nan)
         frame_interp = interp(points).reshape(coor_x.shape)
         A_interp[:, :, t] = frame_interp
+    A_interp *= parameters.intensity
 
-    return A_interp * parameters.intensity
+    if n_frames == stim_length:
+        return A_interp
+
+    resampled = np.zeros((coor_x.shape[0], coor_x.shape[1], stim_length))
+    frame_indices = np.linspace(0, n_frames - 1, stim_length)
+    for t in range(stim_length):
+        idx = min(int(np.round(frame_indices[t])), n_frames - 1)
+        resampled[:, :, t] = A_interp[:, :, idx]
+    
+    return resampled
 
 def image_stim(coor_x, coor_y, parameters):
     """
