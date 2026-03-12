@@ -997,7 +997,7 @@ class ClosedLoopOpticalStimulatorArray(PluginOpticalStimulatorArrayChR):
 
 def stimulating_pattern_flash(sheet, coor_x, coor_y, update_interval, parameters):
     """
-    Stimulation with a static stimulation pattern, its exact form is determined
+    Stimulation with a stimulation pattern, its exact form is determined
     by the supplied extra parameters. The stimulus turns on at *onset_time*, turns off
     at *offset_time*. The overall duration of the stimulus is *duration* ms.
 
@@ -1038,9 +1038,15 @@ def stimulating_pattern_flash(sheet, coor_x, coor_y, update_interval, parameters
 
     t_onset = int(numpy.floor(parameters.onset_time / update_interval))
     t_offset = int(numpy.floor(parameters.offset_time / update_interval))
+    stim_length = t_offset - t_onset
+    assert t_offset > t_onset, "offset_time must be greater than onset_time"
 
-    mask = generate_2d_stim(sheet, coor_x, coor_y, parameters)
-    signals[:, :, t_onset:t_offset] = np.repeat(mask[:, :, np.newaxis], t_offset-t_onset, axis=2)
+    if parameters.shape == "video":
+        stim = video_stim(coor_x, coor_y, parameters, stim_length)
+        signals[:, :, t_onset:t_offset] = stim
+    else:
+        mask = generate_2d_stim(sheet, coor_x, coor_y, parameters)
+        signals[:, :, t_onset:t_offset] = np.repeat(mask[:, :, np.newaxis], t_offset-t_onset, axis=2)
 
     return signals
 
@@ -1069,13 +1075,73 @@ def generate_2d_stim(sheet, coor_x, coor_y, parameters):
     """
     if parameters.shape == "or_map":
         return or_map_mask(sheet, coor_x, coor_y, parameters)
-    elif parameters.shape in ["hexagon", "circle","hexagon"]:
+    elif parameters.shape in ["hexagon", "circle","polygon"]:
         return simple_shapes_binary_mask(coor_x, coor_y, parameters.shape, parameters) * parameters.intensity
     elif parameters.shape == "image":
         return image_stim(coor_x, coor_y, parameters)
     else:
-        raise ValueError("Unknown shape %s for cortical stimulation!", parameters.shape)
+        raise ValueError("Unknown shape %s for cortical stimulation!" % parameters.shape)
 
+def video_stim(coor_x, coor_y, parameters, stim_length):
+    """
+    Generate stimulation in the pattern of a grayscale video, loaded from a .npy
+    file containing a 3D numpy array, with values between 0 (black) and 1 (white).
+
+    The mapping between the axes of the numpy array and cortical space
+    is 0->X, 1->Y, 2->time.
+
+    If the video has a different aspect ratio or number of pixels as the stimulation
+    array, it will be stretched to fit the array.
+
+    Parameters
+    ----------
+    coor_x : numpy array
+                X coordinates of all electrodes
+
+    coor_y : numpy array
+                Y coordinates of all electrodes
+
+    parameters : ParameterSet
+        intensity : float
+                Stimulation intensity constant
+        video_path : str
+                Path to the .npy file containing the video (3D array)
+    stim_length : int
+                Number of time steps of the stimulation
+    """
+    for i in range(coor_x.shape[1]):
+        assert np.allclose(coor_x[:, 0], coor_x[:, i]), "X coordinates must be in grid!"
+    for i in range(coor_y.shape[0]):
+        assert np.allclose(coor_y[0, :], coor_y[i, :]), "Y coordinates must be in grid!"
+
+    A = np.load(parameters.video_path)
+
+    assert len(A.shape) == 3, "The video must be 3D! Instead, the video shape is: %s" % (A.shape)
+    assert np.all(A >= 0) and np.all(A <= 1), "All values in the video must be in the range of (0,1)!"
+
+    n_frames = A.shape[2]
+    A_interp = np.zeros((coor_x.shape[0], coor_x.shape[1], n_frames))
+
+    x_axis = np.linspace(np.min(coor_x), np.max(coor_x), A.shape[0])
+    y_axis = np.linspace(np.min(coor_y), np.max(coor_y), A.shape[1])
+    points = np.vstack([coor_x.ravel(), coor_y.ravel()]).T
+    
+    for t in range(n_frames):
+        interp = scipy.interpolate.RegularGridInterpolator((x_axis, y_axis), A[:, :, t], bounds_error=False, fill_value=np.nan)
+        frame_interp = interp(points).reshape(coor_x.shape)
+        A_interp[:, :, t] = frame_interp
+    A_interp *= parameters.intensity
+
+    if n_frames == stim_length:
+        return A_interp
+
+    resampled = np.zeros((coor_x.shape[0], coor_x.shape[1], stim_length))
+    frame_indices = np.linspace(0, n_frames - 1, stim_length)
+    for t in range(stim_length):
+        idx = min(int(np.round(frame_indices[t])), n_frames - 1)
+        resampled[:, :, t] = A_interp[:, :, idx]
+    
+    return resampled
 
 def image_stim(coor_x, coor_y, parameters):
     """
@@ -1103,17 +1169,20 @@ def image_stim(coor_x, coor_y, parameters):
                 Path to the .npy file containing the image (2D array).
     """
     for i in range(coor_x.shape[1]):
-        assert np.allclose(coor_x[:, i], coor_x[:, i]), "X coordinates must be in grid!"
+        assert np.allclose(coor_x[:, 0], coor_x[:, i]), "X coordinates must be in grid!"
     for i in range(coor_y.shape[0]):
         assert np.allclose(coor_y[0, :], coor_y[i, :]), "Y coordinates must be in grid!"
+
     A = np.load(parameters.image_path)
-    assert len(A.shape) == 2, "The image must be 2D! Instead, the image shape is: " % A.shape
+    assert len(A.shape) == 2, "The image must be 2D! Instead, the image shape is: %s" % (A.shape)
     assert np.all(A >= 0) and np.all(A <= 1), "All values in the image must be in the range of (0,1)!"
+
     A_interp = scipy.interpolate.RegularGridInterpolator(
         (np.linspace(np.min(coor_x), np.max(coor_x), A.shape[0]),
          np.linspace(np.min(coor_y), np.max(coor_y), A.shape[1])),
         A, bounds_error=False, fill_value=np.nan)(np.vstack([coor_x.ravel(), coor_y.ravel()]).T)
     A_interp = A_interp.reshape(coor_x.shape)
+
     return A_interp * parameters.intensity
 
 
