@@ -34,12 +34,25 @@
                             'v_thresh' : ref('sheets.l4_cortex_exc.params.cell.params.v_thresh'), 
                         },
 
+                       'receptors':None,
                        'initial_values': {
                                     'v': PyNNDistribution(name='uniform',low=-70,high=-51),
                                 },
 
                     },
-                'artificial_stimulators' : ref('sheets.l4_cortex_exc.params.artificial_stimulators'),
+                'artificial_stimulators' : {
+                        'stimulator_array':  {
+                        'component' :  'mozaik.sheets.direct_stimulator.PluginOpticalStimulatorArrayChR',   
+                        'params' : {
+                            "size": 1000,
+                            "spacing": 10,
+                            "depth_sampling_step": 10,
+                            "light_source_light_propagation_data": "light_scattering_radial_profiles_lsd10.pickle",
+                            "update_interval": 1,
+                            "transfection_proportion": 1.0,
+                        },
+                     },
+                },
                 'recording_interval'  :  ref('sheets.l4_cortex_exc.params.recording_interval'),                                            
                 'recorders' : url("param/l23_exc_rec"),    
     },
