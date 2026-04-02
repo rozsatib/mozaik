@@ -8,20 +8,21 @@ import mozaik
 
 
 class MapSimpleGabor(VisualExperiment):
-    """
+    r"""
     Map RF with a Gabor patch stimuli.
 
     This experiment presents a series of flashed Gabor patches at the centers
     of regular hexagonal tides with given range of orientations.
 
-
     Parameters
     ----------
+
     model : Model
-          The model on which to execute the experiment.
+        The model on which to execute the experiment.
 
     Other parameters
     ----------------
+
     relative_luminance : float
         Luminance of the Gabor patch relative to background luminance.
         0. is dark, 1.0 is double the background luminance.
@@ -38,7 +39,7 @@ class MapSimpleGabor(VisualExperiment):
         The phase of the Gabor patch.
 
     spatial_frequency : float
-        The spatial freqency of the Gabor patch.
+        The spatial frequency of the Gabor patch.
 
     rotations : int
         Number of different orientations at each given place.
@@ -53,10 +54,10 @@ class MapSimpleGabor(VisualExperiment):
         Gabor patch size is set so that sigma of Gaussian envelope is size/3
 
     x : float
-        The x corrdinates of the central tide.
+        The x coordinates of the central tide.
 
     y : float
-        The y corrdinates of the central tide.
+        The y coordinates of the central tide.
 
     flash_duration : float
         The duration of the presentation of a single Gabor patch.
@@ -65,7 +66,7 @@ class MapSimpleGabor(VisualExperiment):
         The duration of single presentation of the stimulus.
 
     num_trials : int
-        Number of trials each each stimulus is shown.
+        Number of trials each stimulus is shown.
 
     circles : int
         Number of "circles" where the Gabor patch is presented.
@@ -74,30 +75,31 @@ class MapSimpleGabor(VisualExperiment):
         forming a "circle" around the central
 
     grid : bool
-        If True hexagonal tiding with relative luminance 0 is drawn over the
-        stimmuli.
-        Mostly for testing purposes to check the stimuli are generated
-        correctly.
+        If True hexagonal tiding with relative luminance 0 is drawn over the stimuli.
+        Mostly for testing purposes to check the stimuli are generated correctly.
 
-    Note on hexagonal tiding:
-    -------------------------
-        Generating coordinates of centers of regular (!) hexagonal tidings.
-        It is done this way, because the centers of tides are not on circles (!)
-        First it generates integer indexed centers like this:
-              . . .                (-2,2) (0, 2) (2,2)
-             . . . .           (-3,1) (-1,1) (1,1) (3,1)
-            . . . . .   ==> (-4,0) (-2,0) (0,0) (2,0) (4,0)     (circles=3)
-             . . . .           (-3,-1)(-1,-1)(1,-1)(3,-1)
-              . . .                (-2,-2)(0,-2)(2,-2)
+    Notes
+    -----
 
-        coordinates then multiplied by non-integer factor to get the right position
-            x coordinate multiplied by factor 1/2*size
-            y coordinate multiplied by factor sqrt(3)/2*size
+    **Notes on Hexagonal Tiding:-**
+    Generating coordinates of centers of regular (!) hexagonal tidings.
+    It is done this way, because the centers of tides are not on circles (!)
 
-    Note on central relative luminance:
-    -----------------------------------
-        In the experiment they had lower luminance for Gabor patches presented
-        at the central tide
+    First it generates integer indexed centers like this
+
+    >>>         . . .                (-2,2) (0, 2) (2,2)
+    >>>        . . . .           (-3,1) (-1,1) (1,1) (3,1)
+    >>>       . . . . .   ==> (-4,0) (-2,0) (0,0) (2,0) (4,0)     (circles=3)
+    >>>        . . . .           (-3,-1)(-1,-1)(1,-1)(3,-1)
+    >>>         . . .                (-2,-2)(0,-2)(2,-2)
+
+    Coordinates then multiplied by non-integer factor to get the right position:
+    x coordinate multiplied by factor 1/2*size
+    y coordinate multiplied by factor sqrt(3)/2*size
+
+    **Notes on Central relative luminance:-**
+    In the experiment they had lower luminance for Gabor patches presented at the central tide.
+
     """
 
     required_parameters = ParameterSet(
@@ -174,27 +176,28 @@ class MapSimpleGabor(VisualExperiment):
 
 
 class MapTwoStrokeGabor(VisualExperiment):
-    """
+    r"""
     Map RF with a two stroke Gabor patch stimuli to study response on apparent
     movement. First a Gabor patch is presented for specified time after that
     another Gabor patch is presented at neighbohring tide with same orientation
     and other properties.
 
     There are two configuration for the movement:
+
         ISO i.e. Gabor patch moves parallel to its orientation
         CROSS i.e. Gabor patch moves perpendicular to its orientation
 
-        In any case it has to move into another tide, therefore orientation
-        determines the configuration
-
+    In any case it has to move into another tide, therefore orientation determines the configuration.
 
     Parameters
     ----------
+
     model : Model
-          The model on which to execute the experiment.
+        The model on which to execute the experiment.
 
     Other parameters
     ----------------
+
     relative_luminance : float
         Luminance of the Gabor patch relative to background luminance.
         0. is dark, 1.0 is double the background luminance.
@@ -239,7 +242,7 @@ class MapTwoStrokeGabor(VisualExperiment):
     flash_duration : float
         The total duration of the presentation of Gabor patches. Therefore,
         the second stroke is presented for time equal:
-            flash_duration - stroke_time
+        flash_duration - stroke_time
 
     duration : float
         The duration of single presentation of the stimulus.
@@ -261,54 +264,58 @@ class MapTwoStrokeGabor(VisualExperiment):
         Mostly for testing purposes to check the stimuli are generated
         correctly.
 
-    Note on hexagonal tiding:
-    -------------------------
-        Generating coordinates of centers of regular (!) hexagonal tidings.
-        It is done this way, because the centers of tides are not on circles (!)
-        First it generates integer indexed centers like this:
-              . . .                (-2,2) (0, 2) (2,2)
-             . . . .           (-3,1) (-1,1) (1,1) (3,1)
-            . . . . .   ==> (-4,0) (-2,0) (0,0) (2,0) (4,0)     (circles=3)
-             . . . .           (-3,-1)(-1,-1)(1,-1)(3,-1)
-              . . .                (-2,-2)(0,-2)(2,-2)
 
-        coordinates then multiplied by non-integer factor to get the right position
-            x coordinate multiplied by factor 1/2*size
-            y coordinate multiplied by factor sqrt(3)/2*size
+    Notes
+    -----
 
-    Note on central relative luminance:
-    -----------------------------------
-        In the experiment they had lower luminance for Gabor patches presented
-        at the central tide
+    **Notes on hexagonal tiding:-**
+    Generating coordinates of centers of regular (!) hexagonal tidings.
+    It is done this way, because the centers of tides are not on circles (!)
+
+    First it generates integer indexed centers like this:
+
+    >>>         . . .                (-2,2) (0, 2) (2,2)
+    >>>        . . . .           (-3,1) (-1,1) (1,1) (3,1)
+    >>>       . . . . .   ==> (-4,0) (-2,0) (0,0) (2,0) (4,0)     (circles=3)
+    >>>        . . . .           (-3,-1)(-1,-1)(1,-1)(3,-1)
+    >>>         . . .                (-2,-2)(0,-2)(2,-2)
+
+    coordinates then multiplied by non-integer factor to get the right position
+    x coordinate multiplied by factor 1/2*size
+    y coordinate multiplied by factor sqrt(3)/2*size
 
 
-    Note on number of circles:
-    --------------------------
-        For 2 stroke the experiment includes also the trajectories that
-        start inside the defined number of circles but get out as well as
-        trajectories starting in the outside layer of tides comming inside.
+    **Notes on central relative lumninance:-**
+    In the experiment they had lower luminance for Gabor patches presented
+    at the central tide
 
-        For example if we have number of circles = 2 -> that means we have
-        central tide and the first circle of tides around, but for two stroke
-        it is possible we start with Gabor patch at the distance 2 tides away
-        from the central tide (i.e. tides that are in circles = 3) if we move
-        inside and vice versa.
 
-        This is solved by checking the distance of the final position of the
-        Gabor patch, if the distance is bigger than a radius of a circle
-        then opposite direction is taken into account.
+    **Notes on number of circles:-**
+    For 2 stroke the experiment includes also the trajectories that
+    start inside the defined number of circles but get out as well as
+    trajectories starting in the outside layer of tides comming inside.
 
-        Since we have hexagonal tides this check is valid only for
-        n <= 2/(2-sqrt(3)) ~ 7.5
-        which is for given purposes satisfied, but should be mentioned.
+    For example if we have number of circles = 2 -> that means we have
+    central tide and the first circle of tides around, but for two stroke
+    it is possible we start with Gabor patch at the distance 2 tides away
+    from the central tide (i.e. tides that are in circles = 3) if we move
+    inside and vice versa.
 
-    Note on rotations:
-    ------------------
-        This number is taken as a free parameter, but to replicate hexagonal
-        tiding this number has to be 6 or 1 or 2. The code exploits symmetry and
-        properties of the hexagonal tiding rather a lot!
-        The ISO/CROSS configuration is determined from this number, so any other
-        number generates moving paterns but in directions not matching hexes.
+    This is solved by checking the distance of the final position of the
+    Gabor patch, if the distance is bigger than a radius of a circle
+    then opposite direction is taken into account.
+
+    Since we have hexagonal tides this check is valid only for
+    n <= 2/(2-sqrt(3)) ~ 7.5
+    which is for given purposes satisfied, but should be mentioned.
+
+
+    **Notes on rotation:-**
+    This number is taken as a free parameter, but to replicate hexagonal
+    tiding this number has to be 6 or 1 or 2. The code exploits symmetry and
+    properties of the hexagonal tiding rather a lot!
+    The ISO/CROSS configuration is determined from this number, so any other
+    number generates moving paterns but in directions not matching hexes.
 
     """
 
@@ -455,15 +462,16 @@ class MapTwoStrokeGabor(VisualExperiment):
 
 
 class MeasureGaborFlashDuration(VisualExperiment):
-    """
+    r"""
     Experiment to measure the shortest duration of flashing a Gabor patch onto the RF of
     a neuron, which evokes a significant response. It tries flash durations in a range,
     and randomizes the order of durations.
 
     Parameters
     ----------
+
     model : Model
-          The model on which to execute the experiment.
+        The model on which to execute the experiment.
 
     Other parameters
     ----------------
@@ -510,6 +518,8 @@ class MeasureGaborFlashDuration(VisualExperiment):
 
     num_trials : int
         Number of trials of showing the stimuli.
+
+
     """
 
     required_parameters = ParameterSet(
@@ -573,7 +583,7 @@ class MeasureGaborFlashDuration(VisualExperiment):
 
 
 class CompareSlowVersusFastGaborMotion(VisualExperiment):
-    """
+    r"""
     Present Gabor stimuli moving radially inward in either continuous or apparent
     motion.
 
@@ -582,8 +592,9 @@ class CompareSlowVersusFastGaborMotion(VisualExperiment):
 
     Parameters
     ----------
+
     model : Model
-          The model on which to execute the experiment.
+        The model on which to execute the experiment.
 
     Other parameters
     ----------------
@@ -640,6 +651,7 @@ class CompareSlowVersusFastGaborMotion(VisualExperiment):
 
     num_trials : int
         Number of trials of showing the stimuli.
+
     """
 
     required_parameters = ParameterSet(
@@ -781,7 +793,7 @@ class CompareSlowVersusFastGaborMotion(VisualExperiment):
 
 
 class RunApparentMotionConfigurations(VisualExperiment):
-    """
+    r"""
     Apparent motion stimulus configurations from Benoit Le Bec, 2018.
 
     Benoit Le Bec, Lateral connectivity: propagation of network belief and
@@ -789,8 +801,9 @@ class RunApparentMotionConfigurations(VisualExperiment):
 
     Parameters
     ----------
+    
     model : Model
-          The model on which to execute the experiment.
+        The model on which to execute the experiment.
 
     Other parameters
     ----------------
@@ -850,73 +863,76 @@ class RunApparentMotionConfigurations(VisualExperiment):
         Number of trials of showing the stimuli.
 
 
-    Possible configurations
-    -----------------------
+    Notes
+    -----
 
-    SECTOR_ISO
+    **Notes on Possible Configurations**
 
-       \ | /       .              .
-                   .     \|/      .
-                   .              .    |
-                   .     /|\      .
-       / | \       .              .
+    Possible Configurations:
 
-    SECTOR_CROSS
+    ::
 
-    /          \   .              .
-                   .    /    \    .
-   |            |  .   |      |   .    |
-                   .    \    /    .
-    \          /   .              .
-
-    SECTOR_CF
-
-                   .              .  \ | /
-                   .     \|/      .
-         |         .              .
-                   .     /|\      .
-                   .              .  / | \
-
-    SECTOR_RND
-
-      \            .      | /     .
-       \           .      |/      .
-                   .              .    |
-         |         .     / \      .
-       /   \       .      |       .
-
-    FULL_ISO
-
-       \ | /       .              .
-     \       /     .    \ | /     .
-   --         --   .   --   --    .    |
-     /       \     .    / | \     .
-       / | \       .              .
-
-    FULL_CROSS
-         __
-      /      \
-    /          \   .      __      .
-                   .    /    \    .
-   |            |  .   |      |   .    |
-                   .    \ __ /    .
-    \          /   .              .
-      \  __  /
-
-    FULL_RND
-
-         |         .     \   /    .
-     \     /       .     \ |   /  .
-   --      -- --   .    --        .    |
-     / / | \       .           \  .
-       /   \       .       |      .
-
-    CENTER_ONLY
-
-
-
-        |
-
+    >>> SECTOR_ISO
+    >>> 
+    >>>        \ | /       .              .
+    >>>                    .     \|/      .
+    >>>                    .              .    |
+    >>>                    .     /|\      .
+    >>>        / | \       .              .
+    >>> 
+    >>> SECTOR_CROSS
+    >>> 
+    >>>        /          \   .              .
+    >>>                    .    /    \    .
+    >>>       |            |  .   |      |   .    |
+    >>>                    .    \    /    .
+    >>>        \          /   .              .
+    >>> 
+    >>> SECTOR_CF
+    >>> 
+    >>>                    .              .  \ | /
+    >>>                    .     \|/      .
+    >>>          |         .              .
+    >>>                    .     /|\      .
+    >>>                    .              .  / | \
+    >>> 
+    >>> SECTOR_RND
+    >>> 
+    >>>          \            .      | /     .
+    >>>           \           .      |/      .
+    >>>                    .              .    |
+    >>>          |         .     / \      .
+    >>>           /   \       .      |       .
+    >>> 
+    >>> FULL_ISO
+    >>> 
+    >>>           \ | /       .              .
+    >>>         \       /     .    \ | /     .
+    >>>       --         --   .   --   --    .    |
+    >>>         /       \     .    / | \     .
+    >>>           / | \       .              .
+    >>> 
+    >>> FULL_CROSS
+    >>>              __
+    >>>           /      \
+    >>>         /          \   .      __      .
+    >>>                    .    /    \    .
+    >>>        |            |  .   |      |   .    |
+    >>>                    .    \ __ /    .
+    >>>         \          /   .              .
+    >>>           \  __  /
+    >>> 
+    >>> FULL_RND
+    >>> 
+    >>>              |         .     \   /    .
+    >>>         \     /       .     \ |   /  .
+    >>>       --      -- --   .    --        .    |
+    >>>         / / | \       .           \  .
+    >>>           /   \       .       |      .
+    >>> 
+    >>> CENTER_ONLY
+    >>> 
+    >>>            |
 
 
     """

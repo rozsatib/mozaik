@@ -10,7 +10,7 @@ from mozaik.tools.distribution_parametrization import PyNNDistribution
 
 from builtins import zip
 
-"""
+r"""
 This file contains meta-connectors. These are classes that represent some higher-level 
 algorithms for connecting neurons in mozaik.
 
@@ -27,45 +27,67 @@ a given neuron has to be used when calclulating both the ON and OFF connections 
 
 
 class GaborConnector(BaseComponent):
-    """
+    r"""
     Connector that creates Gabor projections.
 
     The individual Gabor parameters are drawn from distributions specified in
     the parameter set:
 
-    `aspect_ratio`  -  aspect ratio of the gabor
-    `size`          -  the size of the gabor  RFs in degrees of visual field
-    `orientation`   -  the orientation of the gabor RFs
-    `phase`         -  the phase of the gabor RFs
-    `frequency`     -  the frequency of the gabor in degrees of visual field
+    `target_synapses`  - name of the targeted receptor 
+    `aspect_ratio`     -  aspect ratio of the gabor
+    `size`             -  the size of the gabor  RFs in degrees of visual field
+    `orientation`      -  the orientation of the gabor RFs
+    `phase`            -  the phase of the gabor RFs
+    `frequency`        -  the frequency of the gabor in degrees of visual field
 
-    Other parameters:
-    
-    `topological`          -  should the receptive field centers vary with the
-                              position of the given neurons in the target sheet
-                              (note positions of neurons are always stored in
-                              visual field coordinates)
-    
-    `delay`                -  (ms) the delay on the projections
+    Other parameters
+    ----------------
 
-    `short_term_plasticity` - short term plasticity configuration (see basic connector)
-    
-    `base_weight`          - The weight of the synapses
-    `num_samples`           - The number of synapses per cortical neuron from each of the ON and OFF LGN populations (so effectively there will be 2 * num_samples LGN synapses)
+    topological : bool 
+        should the receptive field centers vary with the
+        position of the given neurons in the target sheet
+        (note positions of neurons are always stored in
+        visual field coordinates)
 
-    `or_map`             - is an orientation map supplied?
-    `or_map_location`    - if or_map is True where can one find the map. It
-                           has to be a file containing a single pickled 2d
-                           numpy array
-    `phase_map`          - is a phase map supplied?
-    `phase_map_location` - if phase_map is True where can one find the map.
-                           It has to be a file containing a single pickled 2d
-                           numpy array
-    `gauss_coefficient` : float - The coefficient of the gaussian component (if any) of the meta connector
+    delay : float
+        (ms) the delay on the projections  
 
+    short_term_plasticity : ParameterSet
+        short term plasticity configuration (see basic connector)  
+
+    base_weight : float          
+        The weight of the synapses  
+
+    num_samples : PyNNDistribution
+        The number of synapses per cortical neuron from each
+        of the ON and OFF LGN populations (so effectively
+        there will be 2 * num_samples LGN synapses)  
+
+    or_map : bool 
+        is an orientation map supplied? 
+
+    or_map_location : str      
+        if or_map is True where can one find the map. It
+        has to be a file containing a single pickled 2d
+        numpy array  
+
+    phase_map : bool
+        is a phase map supplied. 
+
+    phase_map_location: str
+        if phase_map is True where can one find the map.
+        It has to be a file containing a single pickled 2d
+        numpy array  
+
+    gauss_coefficient : float  
+        The coefficient of the gaussian component (if any)
+        of the meta connector
+                            
     """
 
+
     required_parameters = ParameterSet({
+        'target_synapses': str, # name of the targeted receptor
         'aspect_ratio': PyNNDistribution,  # aspect ratio of the gabor
         'size':         PyNNDistribution,  # the size of the gabor  RFs in degrees of visual field
         'orientation_preference':  PyNNDistribution,  # the orientation preference of the gabor RFs
@@ -98,7 +120,6 @@ class GaborConnector(BaseComponent):
         'phase_map': bool,  # is a phase map supplied?
         'phase_map_location': str,  # if phase_map is True where can one find the map. It has to be a file containing a single pickled 2d numpy array
         'gauss_coefficient': float, # The coefficient of the gaussian component (if any) of the meta connector
-
     })
 
     def __init__(self, network, lgn_on, lgn_off, target, parameters, name):
@@ -168,7 +189,14 @@ class GaborConnector(BaseComponent):
             target.add_neuron_annotation(j, 'LGNAfferentFrequency', frequency, protected=True)
             target.add_neuron_annotation(j, 'LGNAfferentSize', size, protected=True)
             target.add_neuron_annotation(j, 'LGNAfferentPhase', phase, protected=True)
-            target.add_neuron_annotation(j, 'aff_samples', self.parameters.num_samples.next(), protected=True)
+            increment_aff_samples = self.parameters.num_samples.next()
+            if target.has_neuron_annotation(j, 'aff_samples'):
+                current_aff_samples = target.get_neuron_annotation(j, 'aff_samples')
+                target.add_neuron_annotation(j, 'aff_samples', increment_aff_samples + current_aff_samples, protected=False)
+                target.add_neuron_annotation(j, 'aff_samples_increment', increment_aff_samples, protected=False)
+            else:
+                target.add_neuron_annotation(j, 'aff_samples', increment_aff_samples, protected=False)
+                target.add_neuron_annotation(j, 'aff_samples_increment', increment_aff_samples, protected=False)
             
             
             if self.parameters.topological:
@@ -178,7 +206,7 @@ class GaborConnector(BaseComponent):
                 target.add_neuron_annotation(j, 'LGNAfferentX', parameters.rf_jitter.next(), protected=True)
                 target.add_neuron_annotation(j, 'LGNAfferentY', parameters.rf_jitter.next(), protected=True)
 
-        ps = ParameterSet({   'target_synapses' : 'excitatory',               
+        ps = ParameterSet({   'target_synapses' : self.parameters.target_synapses,               
                               'weight_functions' : {  'f1' : {
                                                                  'component' : 'mozaik.connectors.vision.GaborArborization',
                                                                  'params' : {
@@ -196,8 +224,9 @@ class GaborConnector(BaseComponent):
                              'local_module' : self.parameters.local_module,
                              'short_term_plasticity' : self.parameters.short_term_plasticity,
                              'base_weight' : self.parameters.base_weight,
+                             'samples_coeff': 1,
                              'num_samples' : 0,
-                             'annotation_reference_name' : 'aff_samples',
+                             'annotation_reference_name' : 'aff_samples_increment',
                           })
                           
         ModularSamplingProbabilisticConnectorAnnotationSamplesCount(network,name+'On',lgn_on,target,ps).connect()
