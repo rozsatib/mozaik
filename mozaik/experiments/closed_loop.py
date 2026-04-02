@@ -6,6 +6,7 @@ from mozaik.stimuli import InternalStimulus
 from mozaik.tools.distribution_parametrization import MozaikExtendedParameterSet
 from collections import OrderedDict
 
+
 class ClosedLoopOptogeneticStimulation(Experiment):
 
     required_parameters = ParameterSet(
@@ -18,7 +19,12 @@ class ClosedLoopOptogeneticStimulation(Experiment):
 
     def __init__(self, model, parameters):
         Experiment.__init__(self, model, parameters)
-        stimulator_array_keys = {"sheet", "name","input_calculation_function","state_update_function"}
+        stimulator_array_keys = {
+            "sheet",
+            "name",
+            "input_calculation_function",
+            "state_update_function",
+        }
         for stimulator_param in self.parameters.stimulator_array_list:
             assert (
                 stimulator_param.keys() == stimulator_array_keys
@@ -35,18 +41,29 @@ class ClosedLoopOptogeneticStimulation(Experiment):
             stimulator = model.sheets[p["sheet"]].artificial_stimulators[p["name"]]
             stimulator.calculate_input_function = p["input_calculation_function"]
             stimulator.update_state_function = p["state_update_function"]
-            stimulators[p["sheet"]] = [stimulator] # In this experiment we only have a single stimulator per sheet
-            x, dt = stimulator.stimulator_coords_x, stimulator.parameters.update_interval
-            signals.append(np.ones((np.shape(x)[0],np.shape(x)[1],int(self.parameters.duration / dt))))
+            stimulators[p["sheet"]] = [
+                stimulator
+            ]  # In this experiment we only have a single stimulator per sheet
+            x, dt = (
+                stimulator.stimulator_coords_x,
+                stimulator.parameters.update_interval,
+            )
+            signals.append(
+                np.ones(
+                    (np.shape(x)[0], np.shape(x)[1], int(self.parameters.duration / dt))
+                )
+            )
 
         for trial in range(self.parameters.num_trials):
             self.direct_stimulation.append(stimulators)
             stimulus = InternalStimulus(
-                    frame_duration=self.parameters.duration,
-                    duration=self.parameters.duration,
-                    trial=trial,
-                    direct_stimulation_name=type(next(iter(stimulators.values()))).__name__,
-                    direct_stimulation_parameters=MozaikExtendedParameterSet({"La":None}), # TODO remove this ugly hack somehow!!
-                )
+                frame_duration=self.parameters.duration,
+                duration=self.parameters.duration,
+                trial=trial,
+                direct_stimulation_name=type(next(iter(stimulators.values()))).__name__,
+                direct_stimulation_parameters=MozaikExtendedParameterSet(
+                    {"La": None}
+                ),  # TODO remove this ugly hack somehow!!
+            )
             stimulus.direct_stimulation_signals = signals
             self.stimuli.append(stimulus)

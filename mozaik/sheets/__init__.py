@@ -104,7 +104,7 @@ class Sheet(BaseComponent):
         self.size_x = size_x
         self.size_y = size_y
         self.msc=0
-	self.last_recording = None
+        self.last_recording = None
         # By default we assume that the population corresponds to a non multisynapse model
         self.multisynapse = False
         # We want to be able to define in cell.params the cell parameters as also PyNNDistributions so we can get variably parametrized populations

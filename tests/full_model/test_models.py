@@ -286,7 +286,7 @@ class TestModel(object):
         np.testing.assert_allclose(
             self.get_voltages(ds0, sheet_name, max_neurons),
             self.get_voltages(ds1, sheet_name, max_neurons),
-            atol=1e-14
+            atol=1e-14,
         )
 
 
@@ -395,19 +395,16 @@ class TestLSV1MTinyOpto(TestModel):
 
     @pytest.mark.model
     @pytest.mark.LSV1M_tiny
-    @pytest.mark.parametrize(
-        "sheet_name", ["V1_Exc_L2/3"]
-    )
+    @pytest.mark.parametrize("sheet_name", ["V1_Exc_L2/3"])
     def test_spikes(self, sheet_name):
         self.check_spikes(self.ds, self.ds_ref, sheet_name)
 
     @pytest.mark.model
     @pytest.mark.LSV1M_tiny
-    @pytest.mark.parametrize(
-        "sheet_name", ["V1_Exc_L2/3"]
-    )
+    @pytest.mark.parametrize("sheet_name", ["V1_Exc_L2/3"])
     def test_voltages(self, sheet_name):
         self.check_voltages(self.ds, self.ds_ref, sheet_name, max_neurons=25)
+
 
 class TestModelExplosionMonitoring(TestModel):
     """

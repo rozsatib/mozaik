@@ -63,7 +63,7 @@ class SelfSustainedPushPull(Model):
             cortex_inh_l23 = CortexInhL23(
                 self, self.parameters.sheets.l23_cortex_inh.params
             )
-            
+
         # initialize afferent layer 4 projections
         GaborConnector(
             self,
@@ -81,7 +81,7 @@ class SelfSustainedPushPull(Model):
             self.parameters.sheets.l4_cortex_inh.AfferentConnection,
             "V1AffInhConnection",
         )
-        
+
         # initialize afferent layer 4 to layer 2/3 projection
         ModularSamplingProbabilisticConnector(
             self,

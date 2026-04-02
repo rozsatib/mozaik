@@ -7,7 +7,9 @@ from mozaik.stimuli.vision.topographica_based import FullfieldDriftingSquareGrat
 from mozaik.experiments.vision import VisualExperiment
 from mozaik.tools.distribution_parametrization import MozaikExtendedParameterSet
 from collections import OrderedDict
+from mozaik.sheets.direct_stimulator import OpticalStimulatorArrayChR
 import matplotlib
+from copy import deepcopy
 import random
 from mozaik import load_component
 
@@ -47,7 +49,7 @@ class CorticalStimulationWithOptogeneticArray(Experiment):
         range (0,1) - 0 means no cells, 1 means all cells.
 
     num_trials : int
-        Number of trials each stimulus is shown.
+                Number of trials each stimulus is shown.
     """
 
     required_parameters = ParameterSet(
@@ -68,7 +70,10 @@ class CorticalStimulationWithOptogeneticArray(Experiment):
                 stimulator_param.keys(),
                 set(stimulator_array_keys) ^ set(stimulator_param.keys()),
             )
-            assert stimulator_param["intensity_scaler"] >= 0, "Sheet intensity scalers for stimulator %s must be larger than 0!" % stimulator_param["name"]
+            assert stimulator_param["intensity_scaler"] >= 0, (
+                "Sheet intensity scalers for stimulator %s must be larger than 0!"
+                % stimulator_param["name"]
+            )
 
     def append_direct_stim(self, model, signal_function, signal_function_parameters):
         signal_function = load_component(signal_function)
@@ -77,20 +82,30 @@ class CorticalStimulationWithOptogeneticArray(Experiment):
         for i in range(len(self.parameters.stimulator_array_list)):
             p = self.parameters.stimulator_array_list[i]
             stimulator = model.sheets[p["sheet"]].artificial_stimulators[p["name"]]
-            x, y, dt = stimulator.stimulator_coords_x, stimulator.stimulator_coords_y, stimulator.parameters.update_interval
+            x, y, dt = (
+                stimulator.stimulator_coords_x,
+                stimulator.stimulator_coords_y,
+                stimulator.parameters.update_interval,
+            )
             signal_function_parameters["intensity"] *= p["intensity_scaler"]
-            stimulators[p["sheet"]] = [stimulator] # In this experiment we only have a single stimulator per sheet
-            signals.append(signal_function(p["sheet"],x,y,dt,signal_function_parameters))
+            stimulators[p["sheet"]] = [
+                stimulator
+            ]  # In this experiment we only have a single stimulator per sheet
+            signals.append(
+                signal_function(p["sheet"], x, y, dt, signal_function_parameters)
+            )
 
         for trial in range(self.parameters.num_trials):
             self.direct_stimulation.append(stimulators)
             stimulus = InternalStimulus(
-                    frame_duration=signal_function_parameters.duration,
-                    duration=signal_function_parameters.duration,
-                    trial=trial,
-                    direct_stimulation_name=type(next(iter(stimulators.values()))).__name__,
-                    direct_stimulation_parameters=MozaikExtendedParameterSet({"La":signal_function_parameters}), # TODO remove this ugly hack somehow!!
-                )
+                frame_duration=signal_function_parameters.duration,
+                duration=signal_function_parameters.duration,
+                trial=trial,
+                direct_stimulation_name=type(next(iter(stimulators.values()))).__name__,
+                direct_stimulation_parameters=MozaikExtendedParameterSet(
+                    {"La": signal_function_parameters}
+                ),  # TODO remove this ugly hack somehow!!
+            )
             stimulus.direct_stimulation_signals = signals
             self.stimuli.append(stimulus)
 
@@ -185,7 +200,11 @@ class SingleOptogeneticArrayStimulus(CorticalStimulationWithOptogeneticArray):
 
     def __init__(self, model, parameters):
         CorticalStimulationWithOptogeneticArray.__init__(self, model, parameters)
-        self.append_direct_stim(model, self.parameters.stimulating_signal_function, self.parameters.stimulating_signal_function_parameters)
+        self.append_direct_stim(
+            model,
+            self.parameters.stimulating_signal_function,
+            self.parameters.stimulating_signal_function_parameters,
+        )
 
 
 class OptogeneticArrayStimulusCircles(CorticalStimulationWithOptogeneticArray):
@@ -637,7 +656,7 @@ class OptogeneticArrayImageStimulus(CorticalStimulationWithOptogeneticArray):
 class OptogeneticArrayStimulusOrientationTuningProtocol(
     CorticalStimulationWithOptogeneticArray
 ):
-    """
+    r"""
     Optogenetic stimulation of cortical sheets with an array of light sources, with a
     pattern based on the cortical orientation map, simulating homogeneously oriented
     visual stimuli.
@@ -655,48 +674,60 @@ class OptogeneticArrayStimulusOrientationTuningProtocol(
 
     Parameters
     ----------
+
     model : Model
-          The model on which to execute the experiment.
+        The model on which to execute the experiment.
+
 
     Other parameters
     ----------------
 
     sheet_list : int
-               The list of sheets in which to do stimulation.
+        The list of sheets in which to do stimulation.
+
 
     num_trials : int
-                Number of trials each stimulus is shown.
+        Number of trials each stimulus is shown.
+
 
     stimulator_array_parameters : ParameterSet
-                Parameters for the optical stimulator array:
-                    size : float (μm)
-                    spacing : float (μm)
-                    update_interval : float (ms)
-                    depth_sampling_step : float (μm)
-                    light_source_light_propagation_data : str
-                These parameters are the same as the parameters of
-                mozaik.sheets.direct_stimulator.OpticalStimulatorArrayChR class,
-                except that it must not contain the parameters
-                *stimulating_signal* and *stimulating_signal_parameters* - those
-                are set by this experiment.
+        Parameters for the optical stimulator array:
+        size : float (μm)
+        spacing : float (μm)
+        update_interval : float (ms)
+        depth_sampling_step : float (μm)
+        light_source_light_propagation_data : str
+        These parameters are the same as the parameters of
+        mozaik.sheets.direct_stimulator.OpticalStimulatorArrayChR class,
+        except that it must not contain the parameters
+        *stimulating_signal* and *stimulating_signal_parameters* - those
+        are set by this experiment.
+
 
     num_orientations : int
-                Number of orientations to present
+        Number of orientations to present
+
 
     intensities : list(float)
-                Intensities at which to present the stimulation
+        Intensities at which to present the stimulation
+
 
     sharpness : float
-            Variance of the Gaussian falloff
+        Variance of the Gaussian falloff
+
 
     duration : float (ms)
-            Overall stimulus duration
+        Overall stimulus duration
+
 
     onset_time : float (ms)
-            Time point when the stimulation turns on
+        Time point when the stimulation turns on
+
 
     offset_time : float(ms)
-            Time point when the stimulation turns off
+        Time point when the stimulation turns off
+
+
     """
 
     required_parameters = ParameterSet(
@@ -747,7 +778,7 @@ class OptogeneticArrayStimulusOrientationTuningProtocol(
 class OptogeneticArrayStimulusContrastBasedOrientationTuningProtocol(
     CorticalStimulationWithOptogeneticArray
 ):
-    """
+    r"""
     Optogenetic stimulation of cortical sheets with an array of light sources, with a
     pattern based on the cortical orientation map, simulating homogeneously oriented
     visual stimuli of some specific contrast.
