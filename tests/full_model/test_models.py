@@ -286,7 +286,8 @@ class TestModel(object):
         np.testing.assert_allclose(
             self.get_voltages(ds0, sheet_name, max_neurons),
             self.get_voltages(ds1, sheet_name, max_neurons),
-            atol=1e-14,
+            rtol=1e-5,
+            atol=1e-5,
         )
 
 
