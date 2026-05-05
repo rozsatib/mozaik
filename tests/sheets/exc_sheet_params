@@ -2,7 +2,7 @@
     "name": "exc_sheet",
     "sx": 400,
     "sy": 400,
-    "density": 1000,
+    "density": 2000,
     "mpi_safe": False,
     "magnification_factor": 1000,
     "cell": {

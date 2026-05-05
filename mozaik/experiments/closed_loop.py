@@ -1,4 +1,3 @@
-import os
 import numpy as np
 from mozaik.experiments import Experiment
 from parameters import ParameterSet
@@ -8,6 +7,58 @@ from collections import OrderedDict
 
 
 class ClosedLoopOptogeneticStimulation(Experiment):
+    r"""
+    Closed-loop optogenetic stimulation of cortical sheets using optical
+    stimulator arrays.
+
+    In this experiment, stimulation is generated online based on neural activity.
+    Each stimulator is assigned:
+    - an input calculation function, computing the stimulation signal,
+    - a state update function, maintaining controller state.
+
+    The input calculation function must return a 3D numpy array of shape:
+
+        (Nx, Ny, T_step)
+
+    where Nx and Ny match the stimulator grid, and T_step corresponds to
+    state_update_interval / update_interval.
+
+    Values represent a dimensionless light intensity in [0, 1], which is
+    converted by the stimulator into physical light units and injected current.
+
+    Each stimulus lasts for *duration* and is repeated *num_trials* times.
+
+    Parameters
+    ----------
+
+    model : Model
+        The model on which to execute the experiment.
+
+    Other parameters
+    ----------------
+
+    stimulator_array_list : list(dict)
+        List defining which stimulator arrays are used. Each entry must contain:
+
+        sheet : str
+            Name of the sheet containing the stimulator.
+
+        name : str
+            Name of the stimulator within the sheet.
+
+        input_calculation_function : callable
+            Function computing the stimulation signal. Must return an array of
+            shape (Nx, Ny, T_step) with values in [0, 1].
+
+        state_update_function : callable
+            Function updating the internal controller state.
+
+    duration : int
+        Duration of the stimulation (ms).
+
+    num_trials : int
+        Number of times the stimulus is presented.
+    """
 
     required_parameters = ParameterSet(
         {
@@ -62,8 +113,8 @@ class ClosedLoopOptogeneticStimulation(Experiment):
                 trial=trial,
                 direct_stimulation_name=type(next(iter(stimulators.values()))).__name__,
                 direct_stimulation_parameters=MozaikExtendedParameterSet(
-                    {"La": None}
-                ),  # TODO remove this ugly hack somehow!!
+                    {"signal_function_parameters": None}
+                ),
             )
             stimulus.direct_stimulation_signals = signals
             self.stimuli.append(stimulus)

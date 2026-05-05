@@ -42,7 +42,7 @@
                     },
                 'artificial_stimulators' : {
                         'stimulator_array':  {
-                        'component' :  'mozaik.sheets.direct_stimulator.PluginOpticalStimulatorArrayChR',   
+                        'component' :  'mozaik.sheets.direct_stimulator.OpticalStimulatorArrayChR',   
                         'params' : {
                             "size": 1000,
                             "spacing": 10,

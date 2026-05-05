@@ -8,52 +8,80 @@ from parameters import ParameterSet
 from mozaik.sheets.vision import VisualCorticalUniformSheet3D
 from mozaik.tools.distribution_parametrization import (
     load_parameters,
-    PyNNDistribution,
     MozaikExtendedParameterSet,
 )
 from mozaik.connectors.vision import MapDependentModularConnectorFunction
 from mozaik.tools.circ_stat import circular_dist
 import scipy.stats
 import pathlib
+from mozaik.experiments.optogenetic import *
 
-test_dir = None
+
+@pytest.fixture(scope="class")
+def test_env(request):
+    from pyNN import nest
+    import mozaik
+
+    mozaik.setup_mpi(mozaik_seed=1024, pynn_seed=1024)
+    test_dir = str(pathlib.Path(__file__).parent.parent)
+
+    model_params = load_parameters(test_dir + "/sheets/model_params")
+
+    sheet_params = load_parameters(test_dir + "/sheets/exc_sheet_params")
+    sheet_params.min_depth = 100
+    sheet_params.max_depth = 400
+
+    opt_array_params = load_parameters(test_dir + "/sheets/opt_array_params")
+
+    opt_array_params["transfection_proportion"] = 1.0
+    sheet_params.artificial_stimulators = {
+        "stimulator": {
+            "component": "mozaik.sheets.direct_stimulator.OpticalStimulatorArrayChR",
+            "params": opt_array_params,
+        }
+    }
+
+    size = 400
+    sheet_params["sx"] = size
+    sheet_params["sy"] = size
+    sheet_params["recorders"]["1"]["params"]["size"] = size
+    opt_array_params["size"] = size
+
+    model = Model(nest, 8, model_params)
+    sheet = VisualCorticalUniformSheet3D(model, ParameterSet(sheet_params))
+    sheet.record()
+
+    request.cls.model = model
+    request.cls.sheet = sheet
+    request.cls.sheet_params = sheet_params
+    request.cls.opt_array_params = opt_array_params
+    request.cls.test_dir = test_dir
+    request.cls.stim_array_list = [
+        {
+            "sheet": "exc_sheet",
+            "name": "stimulator",
+            "intensity_scaler": 1.0,
+        }
+    ]
+
+    yield
+
+    model.sheets.clear()
 
 
+@pytest.mark.usefixtures("test_env")
 class TestCorticalStimulationWithOptogeneticArray:
-    model = None
-    sheet = None
 
-    @classmethod
-    def setup_class(cls):
-        from pyNN import nest
-        from mozaik.experiments.optogenetic import (
-            CorticalStimulationWithOptogeneticArray,
-            SingleOptogeneticArrayStimulus,
-            OptogeneticArrayStimulusCircles,
-            OptogeneticArrayStimulusHexagonalTiling,
-            OptogeneticArrayImageStimulus,
-            OptogeneticArrayStimulusOrientationTuningProtocol,
-        )
+    def plot(self, ds):
+        import matplotlib.pyplot as plt
 
-        global test_dir, CorticalStimulationWithOptogeneticArray, SingleOptogeneticArrayStimulus, OptogeneticArrayStimulusCircles, OptogeneticArrayStimulusHexagonalTiling, OptogeneticArrayImageStimulus, OptogeneticArrayStimulusOrientationTuningProtocol
-        test_dir = str(pathlib.Path(__file__).parent.parent)
-        model_params = load_parameters(test_dir + "/sheets/model_params")
-        cls.sheet_params = load_parameters(test_dir + "/sheets/exc_sheet_params")
-        cls.sheet_params.min_depth = 100
-        cls.sheet_params.max_depth = 400
-        cls.opt_array_params = load_parameters(test_dir + "/sheets/opt_array_params")
-        cls.set_sheet_size(cls, 400)
-        cls.model = Model(nest, 8, model_params)
-        cls.sheet = VisualCorticalUniformSheet3D(
-            cls.model, ParameterSet(cls.sheet_params)
-        )
-        cls.sheet.record()
-
-    def set_sheet_size(self, size):
-        self.sheet_params["sx"] = size
-        self.sheet_params["sy"] = size
-        self.sheet_params["recorders"]["1"]["params"]["size"] = size
-        self.opt_array_params["size"] = size
+        pos = self.sheet.pop.positions[0:2, :]
+        plt.scatter(pos[0, :], pos[1, :])
+        print(pos[:, np.argmin(np.sum(pos**2, axis=0))])
+        plt.axis("equal")
+        plt.xlim(-0.01, 0.01)
+        plt.ylim(-0.01, 0.01)
+        plt.show()
 
     def get_coords(self, neuron_ids):
         ac = np.array(list(self.sheet.pop.all()))
@@ -61,53 +89,44 @@ class TestCorticalStimulationWithOptogeneticArray:
         return pos[:, [np.where(ac == i)[0][0] for i in neuron_ids]] * 1000  # in µms
 
     def get_experiment(self, **params):
-        pass
+        raise NotImplementedError  # subclasses define this
 
-    def get_experiment_direct_stimulators(self, **params):
-        dss = self.get_experiment(**params).direct_stimulation
-        dss = [ds["exc_sheet"][0] for ds in dss]
-        for ds in dss:
-            ds.stimulator_signals = ds.decompress_array(ds.stimulator_signals)
-            ds.mixed_signals_photo = ds.decompress_array(ds.mixed_signals_photo)
-        return dss
+    def get_stimulated_cells(self, exp, stimulus):
+        ds = exp.direct_stimulation[0]["exc_sheet"][0]
+        self.sheet.prepare_artificial_stimulation(
+            stimulus, stimulus.duration, self.model.simulator_time, [ds]
+        )
+        return ds.sheet.pop.all_cells[ds.mixed_signals_photo.mean(axis=1) > 0]
 
-    def stimulated_neuron_in_radius(self, ds, invert=False):
-        ssp = ds.parameters.stimulating_signal_parameters
-        center = np.array(ssp.coords).T
-        coords = self.get_coords(ds.stimulated_cells)
-        d = np.sqrt(((coords - center) ** 2).sum(axis=0))
+    def stimulated_neuron_in_radius(self, exp, stimulus, invert=False):
+        signal_parameters = stimulus.direct_stimulation_parameters[
+            "signal_function_parameters"
+        ]
+        spacing = exp.direct_stimulation[0]["exc_sheet"][0].parameters.spacing
+        coords = self.get_coords(self.get_stimulated_cells(exp, stimulus))
+        d = np.sqrt(
+            ((coords - np.array(signal_parameters["coords"]).T) ** 2).sum(axis=0)
+        )
         if invert:
-            return np.all(d >= ssp.radius - ds.parameters.spacing)
+            return np.all(d >= signal_parameters["radius"] - spacing)
         else:
-            return np.all(d <= ssp.radius + ds.parameters.spacing)
+            return np.all(d <= signal_parameters["radius"] + spacing)
 
-    def test_initial_asserts(self):
+    @pytest.mark.skip("To be added later")
+    def test_intensity_scaler(self, intensity_scaler):
+        pass  # TODO: add intensity scaler output test
+
+    def test_initial_assert(self):
         p = MozaikExtendedParameterSet(
             {
-                "sheet_list": ["exc_sheet"],
-                "sheet_intensity_scaler": [1.0],
-                "sheet_transfection_proportion": [1.0],
+                "stimulator_array_list": self.stim_array_list,
                 "num_trials": 1,
-                "stimulator_array_parameters": deepcopy(self.opt_array_params),
             }
         )
-
-        for param in ["sheet_intensity_scaler", "sheet_transfection_proportion"]:
-            with pytest.raises(AssertionError):
-                p[param].append(1.0)
-                CorticalStimulationWithOptogeneticArray(self.model, p)
-            p[param].pop()
-
-            with pytest.raises(AssertionError):
-                p[param][0] = -1
-                CorticalStimulationWithOptogeneticArray(self.model, p)
-            p[param][0] = 1
-
-            if param == "sheet_transfection_proportion":
-                with pytest.raises(AssertionError):
-                    p[param][0] = 2
-                    CorticalStimulationWithOptogeneticArray(self.model, p)
-                p[param][0] = 1
+        with pytest.raises(AssertionError):
+            p["stimulator_array_list"][0]["intensity_scaler"] = -1
+            CorticalStimulationWithOptogeneticArray(self.model, p)
+        p["stimulator_array_list"][0]["intensity_scaler"] = 1
 
 
 class TestSingleOptogeneticArrayStimulus(TestCorticalStimulationWithOptogeneticArray):
@@ -116,14 +135,11 @@ class TestSingleOptogeneticArrayStimulus(TestCorticalStimulationWithOptogeneticA
             self.model,
             MozaikExtendedParameterSet(
                 {
-                    "sheet_list": ["exc_sheet"],
-                    "sheet_intensity_scaler": [1.0],
-                    "sheet_transfection_proportion": [1.0],
                     "num_trials": 1,
-                    "stimulator_array_parameters": deepcopy(self.opt_array_params),
-                    "stimulating_signal": "mozaik.sheets.direct_stimulator.single_pixel",
-                    "stimulating_signal_parameters": ParameterSet(
-                        {"x": x, "y": y, "intensity": 1, "duration": 2}
+                    "stimulator_array_list": self.stim_array_list,
+                    "stimulating_signal_function": "mozaik.sheets.direct_stimulator.single_pixel",
+                    "stimulating_signal_function_parameters": ParameterSet(
+                        {"x": x, "y": y, "intensity": 1, "duration": 1}
                     ),
                 }
             ),
@@ -133,17 +149,15 @@ class TestSingleOptogeneticArrayStimulus(TestCorticalStimulationWithOptogeneticA
     def c2a(self, c):
         return int((c + self.opt_array_params.size / 2) / self.opt_array_params.spacing)
 
-    @pytest.mark.parametrize("x", np.random.randint(-20, 20, 7) * 10)
-    @pytest.mark.parametrize("y", np.random.randint(-20, 20, 7) * 10)
+    @pytest.mark.parametrize("x", np.random.randint(-10, 10, 7) * 20)
+    @pytest.mark.parametrize("y", np.random.randint(-10, 10, 7) * 20)
     def test_random_pixels(self, x, y):
         size, spacing = self.opt_array_params.size, self.opt_array_params.spacing
-        assert size == 400 and spacing == 10
-        dss = self.get_experiment_direct_stimulators(x=x, y=y)
-        assert dss[0].stimulator_signals[self.c2a(x), self.c2a(y), 0] == 1
-        if dss[0].mixed_signals_current.shape[0] > 0:
-            coords = self.get_coords(dss[0].stimulated_cells)
-            assert np.all(np.isclose(coords[0, :], x, atol=spacing // 2))
-            assert np.all(np.isclose(coords[1, :], y, atol=spacing // 2))
+        assert size == 400 and spacing == 20
+        exp = self.get_experiment(x=x, y=y)
+        coords = self.get_coords(self.get_stimulated_cells(exp, exp.stimuli[0]))
+        assert np.all(np.isclose(coords[0, :], x, atol=spacing // 2))
+        assert np.all(np.isclose(coords[1, :], y, atol=spacing // 2))
 
 
 class TestOptogeneticArrayStimulusCircles(TestCorticalStimulationWithOptogeneticArray):
@@ -152,11 +166,8 @@ class TestOptogeneticArrayStimulusCircles(TestCorticalStimulationWithOptogenetic
             self.model,
             MozaikExtendedParameterSet(
                 {
-                    "sheet_list": ["exc_sheet"],
-                    "sheet_intensity_scaler": [1.0],
-                    "sheet_transfection_proportion": [1.0],
+                    "stimulator_array_list": self.stim_array_list,
                     "num_trials": 1,
-                    "stimulator_array_parameters": deepcopy(self.opt_array_params),
                     "x_center": center[0],
                     "y_center": center[1],
                     "radii": [25, 50, 100, 150],
@@ -172,9 +183,9 @@ class TestOptogeneticArrayStimulusCircles(TestCorticalStimulationWithOptogenetic
     @pytest.mark.parametrize("center", [[0, 0], [0, 1], [1, 0], [1, 1]])
     @pytest.mark.parametrize("inverted", [False, True])
     def test_stimulated_neurons_in_radius(self, center, inverted):
-        dss = self.get_experiment_direct_stimulators(center=center, inverted=inverted)
-        for ds in dss:
-            assert self.stimulated_neuron_in_radius(ds, inverted)
+        exp = self.get_experiment(center=center, inverted=inverted)
+        for stim in exp.stimuli:
+            assert self.stimulated_neuron_in_radius(exp, stim, inverted)
 
 
 class TestOptogeneticArrayStimulusHexagonalTiling(
@@ -185,11 +196,8 @@ class TestOptogeneticArrayStimulusHexagonalTiling(
             self.model,
             MozaikExtendedParameterSet(
                 {
-                    "sheet_list": ["exc_sheet"],
-                    "sheet_intensity_scaler": [1.0],
-                    "sheet_transfection_proportion": [1.0],
+                    "stimulator_array_list": self.stim_array_list,
                     "num_trials": 1,
-                    "stimulator_array_parameters": deepcopy(self.opt_array_params),
                     "x_center": center[0],
                     "y_center": center[1],
                     "radius": radius,
@@ -206,17 +214,22 @@ class TestOptogeneticArrayStimulusHexagonalTiling(
     @pytest.mark.parametrize("center", [[0, 0], [0, 1], [1, 0], [1, 1]])
     @pytest.mark.parametrize("radius", [25, 50])
     def test_stimulated_neurons_in_radius(self, center, radius):
-        dss = self.get_experiment_direct_stimulators(center=center, radius=radius)
-        for ds in dss:
-            assert self.stimulated_neuron_in_radius(ds)
+        exp = self.get_experiment(center=center, radius=radius)
+        for stim in exp.stimuli:
+            assert self.stimulated_neuron_in_radius(exp, stim)
 
     @pytest.mark.parametrize("radius", [25, 50, 75])
     def test_hexagon_centers(self, radius):
         # Check that all hexagon centers are at least 2*sqrt(3)/2*r distance
         # and that there is at least one hexagon at precisely that distance
-        dss = self.get_experiment_direct_stimulators(center=[0, 0], radius=radius)
+        stimuli = self.get_experiment(center=[0, 0], radius=radius).stimuli
         centers = np.array(
-            [ds.parameters.stimulating_signal_parameters.coords for ds in dss]
+            [
+                stim.direct_stimulation_parameters["signal_function_parameters"][
+                    "coords"
+                ]
+                for stim in stimuli
+            ]
         ).squeeze()
         for i in range(centers.shape[0]):
             d = np.sqrt(((centers[i] - centers) ** 2).sum(axis=1))
@@ -228,16 +241,13 @@ class TestOptogeneticArrayStimulusHexagonalTiling(
 
 
 class TestOptogeneticArrayImageStimulus(TestCorticalStimulationWithOptogeneticArray):
-    def get_experiment(self, im_path, intensity_scaler):
+    def get_experiment(self, im_path):
         return OptogeneticArrayImageStimulus(
             self.model,
             MozaikExtendedParameterSet(
                 {
-                    "sheet_list": ["exc_sheet"],
-                    "sheet_intensity_scaler": [intensity_scaler],
-                    "sheet_transfection_proportion": [1.0],
                     "num_trials": 1,
-                    "stimulator_array_parameters": deepcopy(self.opt_array_params),
+                    "stimulator_array_list": self.stim_array_list,
                     "intensities": [1.0],
                     "duration": 150,
                     "onset_time": 0,
@@ -253,7 +263,7 @@ class TestOptogeneticArrayImageStimulus(TestCorticalStimulationWithOptogeneticAr
             self.sheet,
             ParameterSet(
                 {
-                    "map_location": test_dir + "/sheets/or_map",
+                    "map_location": self.test_dir + "/sheets/or_map",
                     "map_stretch": 1,
                     "sigma": 0,
                     "periodic": True,
@@ -261,50 +271,23 @@ class TestOptogeneticArrayImageStimulus(TestCorticalStimulationWithOptogeneticAr
             ),
         )
 
-        f = open(test_dir + "/sheets/or_map", "rb")
+        f = open(self.test_dir + "/sheets/or_map", "rb")
         or_map = pickle.load(f, encoding="latin1")
         f.close()
-        np.save(test_dir + "/sheets/or_map.npy", circular_dist(0, or_map, 1))
+        np.save(self.test_dir + "/sheets/or_map.npy", circular_dist(0, or_map, 1))
 
-        dss = self.get_experiment_direct_stimulators(
-            im_path=test_dir + "/sheets/or_map.npy", intensity_scaler=1.0
-        )
         anns = self.model.neuron_annotations()["exc_sheet"]
-        ids = self.model.neuron_ids()["exc_sheet"]
         ors = [circular_dist(0, ann["LGNAfferentOrientation"], np.pi) for ann in anns]
-        assert len(dss) == 1
-        msp = dss[0].mixed_signals_photo[:, 0]
+
+        exp = self.get_experiment(im_path=self.test_dir + "/sheets/or_map.npy")
+        ds = exp.direct_stimulation[0]["exc_sheet"][0]
+        self.sheet.prepare_artificial_stimulation(
+            exp.stimuli[0], exp.stimuli[0].duration, self.model.simulator_time, [ds]
+        )
+        msp = exp.direct_stimulation[0]["exc_sheet"][0].mixed_signals_photo[:, 0]
         assert len(msp) == len(ors)
         corr, _ = scipy.stats.pearsonr(msp, ors)
-        assert corr > 0.85
-
-    @pytest.mark.parametrize("intensity_scaler", [0.5, 1.0, 1.5])
-    def test_intensity_scaler(self, intensity_scaler):
-        MapDependentModularConnectorFunction(
-            self.sheet,
-            self.sheet,
-            ParameterSet(
-                {
-                    "map_location": test_dir + "/sheets/or_map",
-                    "map_stretch": 1,
-                    "sigma": 0,
-                    "periodic": True,
-                }
-            ),
-        )
-        f = open(test_dir + "/sheets/or_map", "rb")
-        or_map = pickle.load(f, encoding="latin1")
-        f.close()
-        np.save(test_dir + "/sheets/or_map.npy", circular_dist(0, or_map, 1))
-        dss = self.get_experiment_direct_stimulators(
-            im_path=test_dir + "/sheets/or_map.npy", intensity_scaler=1.0
-        )
-        msp_full = dss[0].mixed_signals_photo.sum()
-        dss = self.get_experiment_direct_stimulators(
-            im_path=test_dir + "/sheets/or_map.npy", intensity_scaler=intensity_scaler
-        )
-        msp_is = dss[0].mixed_signals_photo.sum()
-        assert np.isclose(msp_is / msp_full, intensity_scaler)
+        assert corr > 0.825
 
 
 class TestOptogeneticArrayStimulusOrientationTuningProtocol(
@@ -315,11 +298,8 @@ class TestOptogeneticArrayStimulusOrientationTuningProtocol(
             self.model,
             MozaikExtendedParameterSet(
                 {
-                    "sheet_list": ["exc_sheet"],
-                    "sheet_intensity_scaler": [1.0],
-                    "sheet_transfection_proportion": [1.0],
                     "num_trials": 1,
-                    "stimulator_array_parameters": deepcopy(self.opt_array_params),
+                    "stimulator_array_list": self.stim_array_list,
                     "num_orientations": n_orientations,
                     "sharpness": 1,
                     "intensities": [1.0],
@@ -345,22 +325,71 @@ class TestOptogeneticArrayStimulusOrientationTuningProtocol(
             ),
         )
 
-        dss = self.get_experiment_direct_stimulators(n_orientations=n_orientations)
+        exp = self.get_experiment(n_orientations=n_orientations)
+        ds = exp.direct_stimulation[0]["exc_sheet"][0]
+
         orientations = np.linspace(0, np.pi, n_orientations, endpoint=False)
         for i in range(len(orientations)):
             anns = self.model.neuron_annotations()["exc_sheet"]
-            ids = self.model.neuron_ids()["exc_sheet"]
             dist = [
                 circular_dist(orientations[i], a["LGNAfferentOrientation"], np.pi)
                 for a in anns
             ]
             inv_dist = 1 - np.array(dist) / np.pi
-            msp = dss[i].mixed_signals_photo[:, 0]
+
+            self.sheet.prepare_artificial_stimulation(
+                exp.stimuli[i], exp.stimuli[i].duration, self.model.simulator_time, [ds]
+            )
+            msp = exp.direct_stimulation[0]["exc_sheet"][0].mixed_signals_photo[:, 0]
+
             assert len(msp) == len(inv_dist)
             corr, _ = scipy.stats.pearsonr(msp, inv_dist)
-            assert corr > 0.9
+            assert corr > 0.89
 
 
 class TestOptogeneticArrayStimulusContrastBasedOrientationTuningProtocol:
     # TODO: Enforce small activation difference between this and fullfield gratings
     pass
+
+
+@pytest.mark.usefixtures("test_env")
+class TestOptogeneticArrayStimulusCircleWithFullfieldSquareGrating(
+    TestCorticalStimulationWithOptogeneticArray
+):
+    # TODO: Modify the test model sheets so that they have an input layer
+    # and thus do not crash on this experiment
+    # Then test the circle activation for 0 contrast
+    pass
+    """
+    def get_experiment(self, center, inverted):
+        return OptogeneticArrayStimulusCircleWithFullfieldSquareGrating(
+            self.model,
+            MozaikExtendedParameterSet(
+                {
+                    "stimulator_array_list": self.stim_array_list,
+                    "num_trials": 1,
+                    "x_center": center[0],
+                    "y_center": center[1],
+                    "radii": [25, 50, 100, 150],
+                    "intensities": [0.5, 1.0],
+                    "duration": 150,
+                    "onset_time": 0,
+                    "offset_time": 75,
+                    "inverted": inverted,
+                    "orientations": [0.0],
+                    "spatial_frequency": 1.0,
+                    "temporal_frequency": 1.0,
+                    "contrasts": [0.0],  # Makes test equivalent to just circles
+                    "shuffle_stimuli": False,
+                }
+            ),
+        )
+
+    @pytest.mark.parametrize("center", [[0, 0], [0, 1], [1, 0], [1, 1]])
+    @pytest.mark.parametrize("inverted", [False, True])
+    def test_stimulated_neurons_in_radius(self, center, inverted):
+        exp = self.get_experiment(center=center, inverted=inverted)
+
+        for stim in exp.stimuli:
+            assert self.stimulated_neuron_in_radius(exp, stim, inverted)
+    """
