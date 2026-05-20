@@ -26,7 +26,6 @@ from mozaik.tools.json_export import (
 from parameters import ParameterSet
 import copy
 
-
 logger = mozaik.getMozaikLogger()
 
 
@@ -573,7 +572,7 @@ def run_experiments(
             duration=parameters.null_stimulus_period,
             frame_duration=parameters.null_stimulus_period,
         )
-        (segments, null_segments, input_stimulus, last_blank_run_time, _) = (
+        segments, null_segments, input_stimulus, last_blank_run_time, _ = (
             model.present_stimulus_and_record(s, ds)
         )
         data_store.add_recording(segments, s)
