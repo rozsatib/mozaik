@@ -12,9 +12,12 @@ from imagen.image import BoundingBox
 import pickle
 import numpy
 import numpy as np
+from PIL import Image
 from mozaik.tools.mozaik_parametrized import SNumber, SString
 from mozaik.tools.units import cpd
+from mozaik.space import VisualRegion, VisualSpace
 from numpy import pi
+from parameters import ParameterSet
 from quantities import Hz, rad, degrees, ms, dimensionless
 import mozaik.stimuli.vision.topographica_based as topo
 from collections import namedtuple
@@ -320,6 +323,127 @@ class TestMaximumDynamicRange(TransferFn):
 
 class TestNaturalImageWithEyeMovement(TopographicaBasedVisualStimulusTester):
     pass
+
+
+class TestNaturalImage:
+    image_size = 3
+    background_luminance = default_topo["background_luminance"]
+
+    def save_image(self, tmp_path, pixels, filename="natural_image.png"):
+        image_path = tmp_path / filename
+        Image.fromarray(pixels).save(image_path)
+        return str(image_path)
+
+    def stimulus(self, image_path, background_luminance=background_luminance):
+        return topo.NaturalImage(
+            frame_duration=default_topo["frame_duration"],
+            duration=3 * default_topo["frame_duration"],
+            trial=0,
+            background_luminance=background_luminance,
+            density=1.0,
+            location_x=0.0,
+            location_y=0.0,
+            size_x=float(self.image_size),
+            size_y=float(self.image_size),
+            image_path=image_path,
+            image_duration=2 * default_topo["frame_duration"],
+            blank_duration=default_topo["frame_duration"],
+            size=float(self.image_size),
+        )
+
+    def visual_space_frames(self, stimulus, num_frames):
+        visual_space = VisualSpace(
+            ParameterSet(
+                {
+                    "update_interval": stimulus.frame_duration,
+                    "background_luminance": stimulus.background_luminance,
+                }
+            )
+        )
+        visual_region = VisualRegion(
+            location_x=0.0,
+            location_y=0.0,
+            size_x=stimulus.size_x,
+            size_y=stimulus.size_y,
+        )
+        visual_space.add_object(str(stimulus), stimulus)
+
+        frames = []
+        for _ in range(num_frames):
+            visual_space.update()
+            frames.append(visual_space.view(visual_region, pixel_size=1.0))
+        return frames
+
+    def expected_frame(self, pixels, background_luminance=background_luminance):
+        return pixels.astype(float) / 255.0 * 2 * background_luminance
+
+    def test_nonuniform_8bit_image_values_presented_to_visual_space(self, tmp_path):
+        pixels = np.array(
+            [
+                [0, 64, 127],
+                [128, 192, 224],
+                [255, 32, 160],
+            ],
+            dtype=np.uint8,
+        )
+        stimulus = self.stimulus(self.save_image(tmp_path, pixels))
+
+        frame = self.visual_space_frames(stimulus, 1)[0]
+
+        np.testing.assert_allclose(frame, self.expected_frame(pixels))
+
+    @pytest.mark.parametrize("pixel_value", [0, 127, 255])
+    def test_constant_8bit_image_values_use_fixed_255_norm(
+        self, tmp_path, pixel_value
+    ):
+        pixels = np.full(
+            (self.image_size, self.image_size), pixel_value, dtype=np.uint8
+        )
+        stimulus = self.stimulus(self.save_image(tmp_path, pixels))
+
+        frame = self.visual_space_frames(stimulus, 1)[0]
+
+        np.testing.assert_allclose(frame, self.expected_frame(pixels))
+
+    def test_natural_image_repeat_image_frames_are_stable(self, tmp_path):
+        pixels = np.full((self.image_size, self.image_size), 127, dtype=np.uint8)
+        stimulus = self.stimulus(self.save_image(tmp_path, pixels))
+
+        frames = self.visual_space_frames(stimulus, 2)
+
+        np.testing.assert_allclose(frames[0], self.expected_frame(pixels))
+        np.testing.assert_allclose(frames[1], frames[0])
+
+    def test_blank_period_is_background_luminance(self, tmp_path):
+        pixels = np.full((self.image_size, self.image_size), 255, dtype=np.uint8)
+        stimulus = self.stimulus(self.save_image(tmp_path, pixels))
+
+        blank_frame = self.visual_space_frames(stimulus, 3)[-1]
+
+        np.testing.assert_allclose(
+            blank_frame,
+            np.full(
+                (self.image_size, self.image_size),
+                self.background_luminance,
+                dtype=float,
+            ),
+        )
+
+    def test_unsupported_high_bit_depth_image_raises(self, tmp_path):
+        pixels = np.array(
+            [
+                [0, 1024, 32768],
+                [40000, 50000, 65535],
+                [1, 2, 3],
+            ],
+            dtype=np.uint16,
+        )
+        stimulus = self.stimulus(
+            self.save_image(tmp_path, pixels, filename="natural_image_16bit.tif")
+        )
+
+        with pytest.raises(ValueError, match="supports only 8-bit image inputs"):
+            self.visual_space_frames(stimulus, 1)
 
 
 class TestDriftingGratingWithEyeMovement(TopographicaBasedVisualStimulusTester):
