@@ -393,9 +393,7 @@ class TestNaturalImage:
         np.testing.assert_allclose(frame, self.expected_frame(pixels))
 
     @pytest.mark.parametrize("pixel_value", [0, 127, 255])
-    def test_constant_8bit_image_values_use_fixed_255_norm(
-        self, tmp_path, pixel_value
-    ):
+    def test_constant_8bit_image_values_use_fixed_255_norm(self, tmp_path, pixel_value):
         pixels = np.full(
             (self.image_size, self.image_size), pixel_value, dtype=np.uint8
         )

@@ -281,8 +281,6 @@ class TestModel(object):
         max_neurons : maximum number of neurons to check voltages for
         """
 
-        print(len(self.get_voltages(ds0, sheet_name, max_neurons)), flush=True)
-        print(len(self.get_voltages(ds1, sheet_name, max_neurons)), flush=True)
         np.testing.assert_equal(
             self.get_voltages(ds0, sheet_name, max_neurons),
             self.get_voltages(ds1, sheet_name, max_neurons),
@@ -349,7 +347,7 @@ class TestLSV1M(TestModel):
 
 class TestLSV1MTiny(TestModel):
     """
-    Class that runs the a tiny version of the LSV0M model on construction from the mozaik-models
+    Class that runs the a tiny version of the LSV1M model on construction from the mozaik-models
     repository. Its testing methods compare the membrane potentials of a few neurons and the
     spike times of all neurons to a saved reference.
     """
@@ -376,6 +374,18 @@ class TestLSV1MTiny(TestModel):
     )
     def test_voltages(self, sheet_name):
         self.check_voltages(self.ds, self.ds_ref, sheet_name, max_neurons=25)
+
+
+class TestLSV1MTiny2024LGN(TestLSV1MTiny):
+    """
+    Reproduces the LGN behavior used in the 2024 published LSV1M model.
+    Filter-state carry-over is disabled and starting luminance is set to 0
+    to provide numerically identical results to the 2024 version.
+    """
+
+    model_run_command = f"cd tests/full_model/models/LSV1M_tiny && PYTHONPATH=../../../..:$PYTHONPATH {sys.executable} run.py nest 2 param/defaults sheets.retina_lgn.params.original_2024_lgn_mode True 'pytest' && cd ../../../.."
+    result_path = "tests/full_model/models/LSV1M_tiny/LSV1M_pytest_____sheets.retina_b55572cb16:True"
+    ref_path = "tests/full_model/reference_data/LSV1M_tiny_2024_LGN"
 
 
 class TestModelExplosionMonitoring(TestModel):
