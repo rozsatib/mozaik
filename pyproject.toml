@@ -43,7 +43,8 @@ exclude = '''
  | mozaik/experiments/direct_stimulations_mixins.py
  | mozaik/experiments/vision.py
  | mozaik/visualization
- | mozaik/models
+ | mozaik/models/__init__.py
+ | mozaik/models/vision/cai97.py
  | mozaik/storage
  | mozaik/analysis
  | mozaik/sheets
