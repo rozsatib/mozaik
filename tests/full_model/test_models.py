@@ -12,11 +12,18 @@ import shutil
 from mozaik.storage.queries import *
 from mozaik.storage.datastore import PickledDataStore
 from mozaik.tools.distribution_parametrization import PyNNDistribution
+from mozaik.tools.misc import result_directory_name
 from parameters import ParameterSet
 
 import pytest
 
 REPO_DIR = "tests/full_model/models/mozaik-models"
+SMOKE_MODEL_NAME = "SelfSustainedPushPull"
+SMOKE_RUN_NAME = "smoketest"
+SMOKE_MODEL_OVERRIDES = {
+    "sheets.l4_cortex_exc.params.density": "150",
+    "sheets.retina_lgn.params.density": "20",
+}
 
 repo_present = os.path.isdir(os.path.join(REPO_DIR, ".git"))
 
@@ -51,11 +58,20 @@ class TestMozaikModelsSmoke:
                 "tests/full_model/models/mozaik-models"
             )
 
+        l4_density = SMOKE_MODEL_OVERRIDES["sheets.l4_cortex_exc.params.density"]
+        retina_lgn_density = SMOKE_MODEL_OVERRIDES[
+            "sheets.retina_lgn.params.density"
+        ]
+
         # Remove previous simulations
         shutil.rmtree(
             os.path.join(
                 repo_dir,
-                "SelfSustainedPushPull_smoketest_____sheets.l4_cortex_exc.params.density:150_sheets.retina_lgn.params.density:20",
+                result_directory_name(
+                    SMOKE_RUN_NAME,
+                    SMOKE_MODEL_NAME,
+                    SMOKE_MODEL_OVERRIDES,
+                ),
             ),
             ignore_errors=True,
         )
@@ -79,10 +95,10 @@ class TestMozaikModelsSmoke:
                 "4",
                 "param/defaults",
                 "sheets.l4_cortex_exc.params.density",
-                "150",
+                "{l4_density}",
                 "sheets.retina_lgn.params.density",
-                "20",
-                "smoketest",
+                "{retina_lgn_density}",
+                "{SMOKE_RUN_NAME}",
             ]
 
             # edit run_workflow
@@ -115,10 +131,20 @@ class TestMozaikModelsSmoke:
         )
 
         if result.returncode != 0:
-            print(result.stdout)
-            print(result.stderr)
-
-        assert result.returncode == 0
+            pytest.fail(
+                "\n".join(
+                    [
+                        f"Subprocess failed for repo_dir={repo_dir!r}",
+                        f"Return code: {result.returncode}",
+                        "",
+                        "===== subprocess stdout =====",
+                        result.stdout or "<empty>",
+                        "",
+                        "===== subprocess stderr =====",
+                        result.stderr or "<empty>",
+                    ]
+                )
+            )
 
 
 class TestModel(object):
