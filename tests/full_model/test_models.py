@@ -59,9 +59,7 @@ class TestMozaikModelsSmoke:
             )
 
         l4_density = SMOKE_MODEL_OVERRIDES["sheets.l4_cortex_exc.params.density"]
-        retina_lgn_density = SMOKE_MODEL_OVERRIDES[
-            "sheets.retina_lgn.params.density"
-        ]
+        retina_lgn_density = SMOKE_MODEL_OVERRIDES["sheets.retina_lgn.params.density"]
 
         # Remove previous simulations
         shutil.rmtree(
