@@ -22,16 +22,29 @@ exclude = '''
  | mozaik/core.py
  | mozaik/cli.py
  | mozaik/space.py
- | mozaik/controller.py
  | mozaik/__init__.py
- | mozaik/meta_workflow
+ | mozaik/meta_workflow/__init__.py
+ | mozaik/meta_workflow/analysis.py
+ | mozaik/meta_workflow/visualization.py
  | mozaik/connectors
- | mozaik/tools
+ | mozaik/tools/__init__.py
+ | mozaik/tools/circ_stat.py
+ | mozaik/tools/datastore_utils.py
+ | mozaik/tools/debug.py
+ | mozaik/tools/distribution_parametrization.py
+ | mozaik/tools/json_export.py
+ | mozaik/tools/mozaik_parametrized.py
+ | mozaik/tools/neo_object_operations.py
+ | mozaik/tools/pyNN.py
+ | mozaik/tools/stats.py
+ | mozaik/tools/stgen.py
+ | mozaik/tools/units.py
  | mozaik/experiments/__init__.py
  | mozaik/experiments/direct_stimulations_mixins.py
  | mozaik/experiments/vision.py
  | mozaik/visualization
- | mozaik/models
+ | mozaik/models/__init__.py
+ | mozaik/models/vision/cai97.py
  | mozaik/storage
  | mozaik/analysis
  | mozaik/sheets

@@ -3,10 +3,9 @@
     'params': {
         'density': 10, # neurons per degree squared
         'size'  : (2.0,2.0), # the effective size of the modelled section of retina/lgn
+        'original_2024_lgn_mode': False,
         'linear_scaler': 6.0,
         'mpi_reproducible_noise' : False,
-        'cached' : False,
-        'cache_path' : 'retinal_cache/',
         'recorders' :  url("param/lgn_rec"),
         'recording_interval'  :  1.0,
         'receptive_field': {

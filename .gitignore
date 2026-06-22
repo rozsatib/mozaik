@@ -6,5 +6,6 @@ build
 *.komodoproject
 cover
 .coverage
+AGENTS.md
 mozaik.egg-info
 dist

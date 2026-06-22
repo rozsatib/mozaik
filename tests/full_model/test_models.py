@@ -12,11 +12,18 @@ import shutil
 from mozaik.storage.queries import *
 from mozaik.storage.datastore import PickledDataStore
 from mozaik.tools.distribution_parametrization import PyNNDistribution
+from mozaik.tools.misc import result_directory_name
 from parameters import ParameterSet
 
 import pytest
 
 REPO_DIR = "tests/full_model/models/mozaik-models"
+SMOKE_MODEL_NAME = "SelfSustainedPushPull"
+SMOKE_RUN_NAME = "smoketest"
+SMOKE_MODEL_OVERRIDES = {
+    "sheets.l4_cortex_exc.params.density": "150",
+    "sheets.retina_lgn.params.density": "20",
+}
 
 repo_present = os.path.isdir(os.path.join(REPO_DIR, ".git"))
 
@@ -51,11 +58,18 @@ class TestMozaikModelsSmoke:
                 "tests/full_model/models/mozaik-models"
             )
 
+        l4_density = SMOKE_MODEL_OVERRIDES["sheets.l4_cortex_exc.params.density"]
+        retina_lgn_density = SMOKE_MODEL_OVERRIDES["sheets.retina_lgn.params.density"]
+
         # Remove previous simulations
         shutil.rmtree(
             os.path.join(
                 repo_dir,
-                "SelfSustainedPushPull_smoketest_____sheets.l4_cortex_exc.params.density:150_sheets.retina_lgn.params.density:20",
+                result_directory_name(
+                    SMOKE_RUN_NAME,
+                    SMOKE_MODEL_NAME,
+                    SMOKE_MODEL_OVERRIDES,
+                ),
             ),
             ignore_errors=True,
         )
@@ -79,10 +93,10 @@ class TestMozaikModelsSmoke:
                 "4",
                 "param/defaults",
                 "sheets.l4_cortex_exc.params.density",
-                "150",
+                "{l4_density}",
                 "sheets.retina_lgn.params.density",
-                "20",
-                "smoketest",
+                "{retina_lgn_density}",
+                "{SMOKE_RUN_NAME}",
             ]
 
             # edit run_workflow
@@ -115,10 +129,20 @@ class TestMozaikModelsSmoke:
         )
 
         if result.returncode != 0:
-            print(result.stdout)
-            print(result.stderr)
-
-        assert result.returncode == 0
+            pytest.fail(
+                "\n".join(
+                    [
+                        f"Subprocess failed for repo_dir={repo_dir!r}",
+                        f"Return code: {result.returncode}",
+                        "",
+                        "===== subprocess stdout =====",
+                        result.stdout or "<empty>",
+                        "",
+                        "===== subprocess stderr =====",
+                        result.stderr or "<empty>",
+                    ]
+                )
+            )
 
 
 class TestModel(object):
@@ -283,11 +307,9 @@ class TestModel(object):
 
         print(len(self.get_voltages(ds0, sheet_name, max_neurons)), flush=True)
         print(len(self.get_voltages(ds1, sheet_name, max_neurons)), flush=True)
-        np.testing.assert_allclose(
+        np.testing.assert_equal(
             self.get_voltages(ds0, sheet_name, max_neurons),
             self.get_voltages(ds1, sheet_name, max_neurons),
-            rtol=1e-5,
-            atol=1e-5,
         )
 
 
@@ -351,7 +373,7 @@ class TestLSV1M(TestModel):
 
 class TestLSV1MTiny(TestModel):
     """
-    Class that runs the a tiny version of the LSV0M model on construction from the mozaik-models
+    Class that runs the a tiny version of the LSV1M model on construction from the mozaik-models
     repository. Its testing methods compare the membrane potentials of a few neurons and the
     spike times of all neurons to a saved reference.
     """
@@ -405,6 +427,18 @@ class TestLSV1MTinyOpto(TestModel):
     @pytest.mark.parametrize("sheet_name", ["V1_Exc_L2/3"])
     def test_voltages(self, sheet_name):
         self.check_voltages(self.ds, self.ds_ref, sheet_name, max_neurons=25)
+
+
+class TestLSV1MTiny2024LGN(TestLSV1MTiny):
+    """
+    Reproduces the LGN behavior used in the 2024 published LSV1M model.
+    Filter-state carry-over is disabled and starting luminance is set to 0
+    to provide numerically identical results to the 2024 version.
+    """
+
+    model_run_command = f"cd tests/full_model/models/LSV1M_tiny && PYTHONPATH=../../../..:$PYTHONPATH {sys.executable} run.py nest 2 param/defaults sheets.retina_lgn.params.original_2024_lgn_mode True 'pytest' && cd ../../../.."
+    result_path = "tests/full_model/models/LSV1M_tiny/LSV1M_pytest_____sheets.retina_b55572cb16:True"
+    ref_path = "tests/full_model/reference_data/LSV1M_tiny_2024_LGN"
 
 
 class TestModelExplosionMonitoring(TestModel):

@@ -9,9 +9,10 @@ from mozaik.stimuli.vision.visual_stimulus import VisualStimulus
 import math
 import imagen
 import imagen.random
-from imagen.transferfn import TransferFn
+from imagen.transferfn import MaximumDynamicRange, FixedNorm
 import param
 from imagen.image import BoundingBox, GenericImage
+from PIL import Image, ImageOps
 import pickle
 import numpy
 import numpy as np
@@ -24,6 +25,28 @@ import mozaik
 
 logger = mozaik.getMozaikLogger()
 
+
+#NOTE: This should go to imagen
+class ValidatedFileImage(imagen.image.FileImage):
+    r"""
+    FileImage variant that rejects image modes Pillow would convert to 8-bit
+    grayscale destructively.
+    """
+
+    unsupported_modes = {"I", "F", "I;16", "I;16L", "I;16B", "I;16N"}
+
+    def _get_image(self, p):
+        if p.filename != self.last_filename or self._image is None:
+            with Image.open(p.filename) as image:
+                if image.mode in self.unsupported_modes:
+                    raise ValueError(
+                        "Mozaik supports only 8-bit image inputs; "
+                        "unsupported image mode %s for %s"
+                        % (image.mode, p.filename)
+                    )
+                self.last_filename = p.filename
+                self._image = ImageOps.grayscale(image).copy()
+        return self._image
 
 
 class TopographicaBasedVisualStimulus(VisualStimulus):
@@ -195,7 +218,7 @@ class FullfieldDriftingSquareGrating(TopographicaBasedVisualStimulus):
                 [self.current_phase])
             self.current_phase += 2*pi * (self.frame_duration/1000.0) * self.temporal_frequency
 
-class FullfieldDriftingSinusoidalGratingA(TopographicaBasedVisualStimulus):
+class FullfieldDriftingSinusoidalGratingWithOnsetOffset(TopographicaBasedVisualStimulus):
     r"""
     A full field square grating stimulus.
 
@@ -203,6 +226,8 @@ class FullfieldDriftingSinusoidalGratingA(TopographicaBasedVisualStimulus):
     the visual space. The bars are moving a direction perpendicular to their
     long axis. The speed is dictated by the *temporal_freuquency* parameter
     the width of the bars by *spatial_frequency* parameter.
+
+    NOTE: Former FullfieldDriftingSinusoidalGrating.
     """
 
     orientation = SNumber(rad, period=pi, bounds=[0,pi], doc="Grating orientation")
@@ -1479,10 +1504,10 @@ class NaturalImage(TopographicaBasedVisualStimulus):
     def frames(self):
         self.pattern_sampler = imagen.image.PatternSampler(
             size_normalization="fit_longest",
-            whole_pattern_output_fns=[MaximumDynamicRange()],
+            whole_pattern_output_fns=[FixedNorm(norm_value=255)],
         )
 
-        img = imagen.image.FileImage(
+        img = ValidatedFileImage(
             filename=self.image_path,
             x=0,
             y=0,
@@ -1510,6 +1535,8 @@ class NaturalImage(TopographicaBasedVisualStimulus):
         ):
             yield (blank, [i])
 
+
+### TODO: This should go to imagen
 class NDArrayImage(GenericImage):
     r"""
     2D Image generator that reads the image from a 2D ndarray. It assummes a single channel (grayscale).
@@ -1578,7 +1605,7 @@ class PixelMovieFromFile(TopographicaBasedVisualStimulus):
                                 bounds=BoundingBox(points=((-self.size_x/2, -self.size_y/2),
                                                             (self.size_x/2, self.size_y/2))),
                                 scale=2*self.background_luminance,
-                                pattern_sampler= imagen.image.PatternSampler(size_normalization="fit_longest",whole_pattern_output_fns=[MaximumDynamicRange()]))
+                                pattern_sampler= imagen.image.PatternSampler(size_normalization="fit_longest",whole_pattern_output_fns=[FixedNorm(norm_value=255)]))
 
             yield (image(), [frame])
             self.time += self.frame_duration
