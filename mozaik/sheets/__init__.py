@@ -317,7 +317,7 @@ class Sheet(BaseComponent):
                         b = self.pop[i:i+steps].get_data(['spikes'] + vm_name + gsyn_names,clear=False)
                     else:
                         b = self.pop[i:i+steps].get_data(['spikes'] + vm_name + gsyn_names,clear=True)
-                except (NothingToWriteError, errmsg):
+                except NothingToWriteError as errmsg:
                     logger.debug(errmsg)
                 if (mozaik.mpi_comm) and (mozaik.mpi_comm.rank == mozaik.MPI_ROOT):
                     if block:
@@ -336,7 +336,7 @@ class Sheet(BaseComponent):
         else:
             try:
                 block = self.pop.get_data(['spikes'] + vm_name + gsyn_names,clear=True)
-            except (NothingToWriteError, errmsg):
+            except NothingToWriteError as errmsg:
                 logger.debug(errmsg)
 
         if (mozaik.mpi_comm) and (mozaik.mpi_comm.rank != mozaik.MPI_ROOT):
