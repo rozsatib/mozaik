@@ -9,7 +9,7 @@ from mozaik.stimuli.vision.visual_stimulus import VisualStimulus
 import math
 import imagen
 import imagen.random
-from imagen.transferfn import MaximumDynamicRange, FixedNorm
+from imagen.transferfn import MaximumDynamicRange, FixedNorm, TransferFn
 import param
 from imagen.image import BoundingBox, GenericImage
 from PIL import Image, ImageOps
