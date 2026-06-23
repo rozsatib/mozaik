@@ -155,6 +155,7 @@ class TestModel(object):
     model_run_command = ""
     result_path = ""
     ref_path = ""
+    model_run_uses_posix_spawn = False
 
     ds = None  # Model run datastore
     ds_ref = None  # Reference datastore
@@ -166,8 +167,37 @@ class TestModel(object):
         """
         # Rerun test if it already ran
         if os.path.exists(cls.result_path):
-            os.system("rm -r " + cls.result_path)
-        os.system(cls.model_run_command)
+            shutil.rmtree(cls.result_path)
+
+        if cls.model_run_uses_posix_spawn:
+            pid = os.posix_spawn(
+                "/bin/sh",
+                ["/bin/sh", "-c", cls.model_run_command],
+                os.environ.copy(),
+            )
+            _, status = os.waitpid(pid, 0)
+            returncode = os.waitstatus_to_exitcode(status)
+            stdout = stderr = ""
+        else:
+            result = subprocess.run(
+                cls.model_run_command,
+                shell=True,
+                capture_output=True,
+                text=True,
+            )
+            returncode, stdout, stderr = (
+                result.returncode,
+                result.stdout,
+                result.stderr,
+            )
+
+        if returncode != 0:
+            pytest.fail(
+                f"Model run command failed: {cls.model_run_command}\n"
+                f"Return code: {returncode}\n\n"
+                f"===== model stdout =====\n{stdout[-4000:] or '<empty>'}\n\n"
+                f"===== model stderr =====\n{stderr[-4000:] or '<empty>'}"
+            )
         # Load DataStore of recordings from the model that just ran
         cls.ds = cls.load_datastore(cls.result_path)
         # Load DataStore of reference recordings

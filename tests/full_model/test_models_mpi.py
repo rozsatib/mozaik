@@ -5,6 +5,7 @@ saved reference.
 
 import numpy as np
 import os
+import sys
 from mozaik.storage.queries import *
 from mozaik.storage.datastore import PickledDataStore
 from mozaik.tools.distribution_parametrization import PyNNDistribution
@@ -22,9 +23,14 @@ class TestLSV1MTinyMPI(TestModel):
     few neurons and the spike times of all neurons to a saved reference.
     """
 
-    model_run_command = "cd tests/full_model/models/LSV1M_tiny && mpirun -np 2 python run.py nest 1 param/defaults 'pytest' && cd ../../../.."
-    result_path = "tests/full_model/models/LSV1M_tiny/LSV1M_pytest_____"
+    model_run_command = (
+        "cd tests/full_model/models/LSV1M_tiny && "
+        f"mpirun -np 2 {sys.executable} run.py nest 1 "
+        "param/defaults 'pytest_mpi2' && cd ../../../.."
+    )
+    result_path = "tests/full_model/models/LSV1M_tiny/LSV1M_pytest_mpi2_____"
     ref_path = "tests/full_model/reference_data/LSV1M_tiny_mpi"
+    model_run_uses_posix_spawn = True
 
     ds = None  # Model run datastore
     ds_ref = None  # Reference datastore
@@ -58,9 +64,14 @@ class TestModelExplosionMonitoringMPI(TestModel):
     Tests whether the explosion monitoring works as expected
     """
 
-    model_run_command = "cd tests/full_model/models/LSV1M_tiny && mpirun -np 2 python run.py nest 1 param/defaults_explosion 'pytest' && cd ../../../.."
-    result_path = "tests/full_model/models/LSV1M_tiny/LSV1M_pytest_____"
+    model_run_command = (
+        "cd tests/full_model/models/LSV1M_tiny && "
+        f"mpirun -np 2 {sys.executable} run.py nest 1 "
+        "param/defaults_explosion 'pytest_mpi_explosion' && cd ../../../.."
+    )
+    result_path = "tests/full_model/models/LSV1M_tiny/LSV1M_pytest_mpi_explosion_____"
     ref_path = "tests/full_model/reference_data/LSV1M_tiny_mpi"
+    model_run_uses_posix_spawn = True
 
     ds = None  # Model run datastore
     ds_ref = None  # Reference datastore
@@ -102,9 +113,14 @@ class TestLSV1MTinyMPI7(TestModel):
     potentials of a few neurons and the spike times of all neurons to a saved reference.
     """
 
-    model_run_command = "cd tests/full_model/models/LSV1M_tiny && mpirun -np 7 python run.py nest 1 param/defaults 'pytest' && cd ../../../.."
-    result_path = "tests/full_model/models/LSV1M_tiny/LSV1M_pytest_____"
+    model_run_command = (
+        "cd tests/full_model/models/LSV1M_tiny && "
+        f"mpirun --oversubscribe -np 7 {sys.executable} run.py nest 1 "
+        "param/defaults 'pytest_mpi7' && cd ../../../.."
+    )
+    result_path = "tests/full_model/models/LSV1M_tiny/LSV1M_pytest_mpi7_____"
     ref_path = "tests/full_model/reference_data/LSV1M_tiny_mpi"
+    model_run_uses_posix_spawn = True
 
     ds = None  # Model run datastore
     ds_ref = None  # Reference datastore
