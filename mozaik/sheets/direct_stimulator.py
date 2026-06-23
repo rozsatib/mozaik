@@ -379,10 +379,10 @@ class Depolarization(DirectStimulator):
             self.sheet.pop.all_cells[i].inject(self.scs)
 
     def prepare_stimulation(self,duration,offset):
-        self.scs.set_parameters(times=[offset+self.sheet.dt*3], amplitudes=[self.parameters.current],copy=False)
+        self.scs.set_parameters(times=[offset], amplitudes=[self.parameters.current],copy=False)
         
     def inactivate(self,offset):
-        self.scs.set_parameters(times=[offset+self.sheet.dt*3], amplitudes=[0.0],copy=False)
+        self.scs.set_parameters(times=[offset], amplitudes=[0.0],copy=False)
 
 
 @jit()
@@ -593,7 +593,6 @@ class OpticalStimulatorArray(DirectStimulator):
         self.is_active = True
         assert hasattr(self,"mixed_signals_current"), "Child class has to implement conversion of optical stimulation to current!"
         self.times = numpy.arange(0,self.stimulation_duration,self.parameters.update_interval) + offset
-        self.times[0] = self.times[0] + 3*self.sheet.dt
 
         for scs_idx, cell_idx in enumerate(self.active_cells):
             self.scs[scs_idx].set_parameters(
@@ -605,7 +604,7 @@ class OpticalStimulatorArray(DirectStimulator):
     def inactivate(self,offset):
         self.is_active = False
         for scs in self.scs:
-            scs.set_parameters(times=[offset+3*self.sheet.dt], amplitudes=[0.0],copy=False)
+            scs.set_parameters(times=[offset], amplitudes=[0.0],copy=False)
 
 class OpticalStimulatorArrayChR(OpticalStimulatorArray):
     """
@@ -647,14 +646,16 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
     signal, the stimulation is generated online based on the activity of neurons
     in the sheet.
 
-    At each update step, the recent spiking activity of neurons is used to compute
-    the light intensity of the stimulator array. This activity-dependent light
-    signal is then transformed via the Channelrhodopsin model to produce the
-    injected current.
+    The next stimulation segment is computed slightly before it should start,
+    because NEST enforces a small minimum delay between programming a current
+    source and injecting that current into cells. The segment start time is
+    exposed as :meth:`next_actuation_time`.
 
-    The transformation from neural activity to light intensity is controlled by
-    a gain parameter, and the stimulation is updated at intervals given by
-    `update_interval`.
+    The user-supplied ``input_calculation_function`` returns one update interval
+    of dimensionless light intensities with shape
+    ``(Nx, Ny, state_update_interval / update_interval)``. The first segment
+    starts at time zero; later segments start at the delayed actuation time
+    exposed by :meth:`next_actuation_time`.
 
     Note that, as in *OpticalStimulatorArrayChR*, the current is approximated by
     ignoring the voltage dependence of the channels.
@@ -673,8 +674,22 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
         OpticalStimulatorArrayChR.__init__(self, sheet,parameters)
         self.start_time = None
         assert self.parameters.state_update_interval % self.parameters.update_interval == 0
-        self.calculate_input_function, self.update_state_function, self.state = None, None, None
+        # Program the next current segment at least NEST's min_delay, plus a
+        # small integration-step margin, before it should start.
+        self._actuation_delay = (
+            self.scs[0].min_delay if self.scs else 0
+        ) + 2 * self.sheet.dt
+        assert (
+            self._actuation_delay < self.parameters.state_update_interval
+        ), "Closed loop actuation delay must be shorter than the state update interval!"
+        self.calculate_input_function, self.update_state_function, self.state = (
+            None,
+            None,
+            None,
+        )
         self.input_signal = None
+        self._next_actuation_time = None
+        self._last_photo_sample = None
 
     # Maybe add calculate input function setter to assert its parameters, etc.?
     def current_time(self): #Maybe make this an attribute and automatically calculate it upon state update?
@@ -682,12 +697,31 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
             self.start_time = self.sheet.sim.get_current_time()
         return self.sheet.sim.get_current_time() - self.start_time
 
+    def actuation_delay(self):
+        return self._actuation_delay
+
+    def shared_update_schedule(self, stimulators):
+        state_update_interval = self.parameters.state_update_interval
+        actuation_delay = self.actuation_delay()
+        assert all(
+            stimulator.parameters.state_update_interval == state_update_interval
+            and np.isclose(stimulator.actuation_delay(), actuation_delay)
+            for stimulator in stimulators
+        ), "All co-active closed loop stimulators must have the same state update interval and actuation delay!"
+        return state_update_interval, actuation_delay
+
+    def next_actuation_time(self):
+        assert (
+            self._next_actuation_time is not None
+        ), "Stimulator input has not been initialized!"
+        return self._next_actuation_time
+
     def set_input(self, input_signal):
         # Only called before the experiment
-        self.experiment_duration = input_signal.shape[2]
+        self.start_time = self.sheet.sim.get_current_time()
+        self._next_actuation_time = 0.0
+        self._last_photo_sample = None
         self.stimulation_duration = self.parameters.state_update_interval
-        self.mixed_signals_photo = np.zeros((self.sheet.pop.size,self.parameters.state_update_interval // self.parameters.update_interval ))
-        self.mixed_signals_current = np.zeros_like(self.mixed_signals_photo)
         self.set_input_segment()
         self.set_data_recording()
 
@@ -708,7 +742,12 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
             assert len(analogsignal) == 1, "The analogsignal %s is not being recorded!" % name
             return np.array(analogsignal[0].time_slice(t_start + analogsignal[0].t_start,t_stop + analogsignal[0].t_start))
 
+    def has_sheet_recorders(self):
+        return self.sheet.to_record is not None and len(self.sheet.to_record) > 0
+
     def recorded_neuron_indices(self,recording_type=None):
+        if not self.has_sheet_recorders():
+            return list(range(self.sheet.pop.size))
         if recording_type is None:
             assert np.all(np.all([v == list(self.sheet.to_record.values())[0] for v in self.sheet.to_record.values()])), "If recording_type is None, all recorders must record from the same neurons!"
             recording_type = list(self.sheet.to_record.keys())[0]
@@ -726,12 +765,32 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
         assert self.calculate_input_function is not None, "Calculate input function not set!"
         input_signal = self.calculate_input_function(self)
         return input_signal
-    
+
+    def _advance_ChR_to_segment_start(self, first_photo_sample):
+        if self._last_photo_sample is not None:
+            # The controller provides one interval at a time. This private
+            # one-step bridge gives ChR the boundary sample it needs without
+            # exposing that bookkeeping to controller code.
+            self.calculate_ChR(
+                np.stack((self._last_photo_sample, first_photo_sample), axis=1)
+            )
+
     def set_input_segment(self):
         # Called at each closed loop iteration
         self.input_signal = self.calculate_input_signal()
+        required_samples = int(
+            self.parameters.state_update_interval // self.parameters.update_interval
+        )
+        assert (
+            self.input_signal.shape[2] == required_samples
+        ), "Closed loop input calculation returned %d samples, but %d are required!" % (
+            self.input_signal.shape[2],
+            required_samples,
+        )
         self.mixed_signals_photo = self.calculate_photo(self.input_signal)
+        self._advance_ChR_to_segment_start(self.mixed_signals_photo[:, 0])
         self.mixed_signals_current = self.calculate_ChR(self.mixed_signals_photo)
+        self._last_photo_sample = self.mixed_signals_photo[:, -1].copy()
 
     def set_data_recording(self):
         self.nest_ids = self.sheet.pop.all_cells[self.recorded_neuron_indices()].tolist()
@@ -762,10 +821,15 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
     # Interface functions
     def update_state(self):
         assert self.update_state_function is not None, "Update state function not set!"
-        if len(self.sheet.to_record.keys()) == 1 and list(self.sheet.to_record.keys())[0] == "spikes":
-            self.get_data()
-        else:
+        self.get_data()
+        if self.has_sheet_recorders() and not (
+            len(self.sheet.to_record.keys()) == 1
+            and list(self.sheet.to_record.keys())[0] == "spikes"
+        ):
             self.sheet.get_data(clear=False)
+        # At this point the controller has data up to current_time(); its output
+        # is scheduled actuation_delay later so NEST can deliver it on time.
+        self._next_actuation_time = self.current_time() + self.actuation_delay()
         self.update_state_function(self)
         self.set_input_segment()
         self.times += self.parameters.state_update_interval

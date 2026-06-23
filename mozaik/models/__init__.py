@@ -160,14 +160,16 @@ class Model(BaseComponent):
 
         active_closed_loop_stimulators = [ds for sheet in artificial_stimulators.keys() for ds in artificial_stimulators[sheet] if hasattr(ds, 'update_state' ) and callable(ds.update_state) and ds.is_active]
         if len(active_closed_loop_stimulators) > 0:
-            dt = active_closed_loop_stimulators[0].parameters.state_update_interval
-            assert all([ds.parameters.state_update_interval == dt for ds in active_closed_loop_stimulators]), "All co-active closed loop stimulators must have the same update interval!"
-            runtime_left = stimulus.duration
-            while runtime_left > 0:
-                sim_run_time += self.run(min(dt,runtime_left),stimulus.duration-runtime_left,stimulus.duration)
-                runtime_left -= dt
-                for cl_stim in active_closed_loop_stimulators:
-                    cl_stim.update_state()
+            state_update_interval, actuation_delay = active_closed_loop_stimulators[0].shared_update_schedule(active_closed_loop_stimulators)
+            simulated_time = 0.0
+            # Current injection reaches cells after an actuation delay (see the stimulator docs),
+            # so stop early enough to program each segment before its start boundary.
+            for next_stop in numpy.append(numpy.arange(state_update_interval,stimulus.duration,state_update_interval)-actuation_delay,stimulus.duration):
+                sim_run_time += self.run(next_stop-simulated_time,simulated_time,stimulus.duration)
+                simulated_time = next_stop
+                if simulated_time < stimulus.duration:
+                    for cl_stim in active_closed_loop_stimulators:
+                        cl_stim.update_state()
 
         else:
             sim_run_time += self.run(stimulus.duration)

@@ -1,7 +1,6 @@
 import pickle
 import pytest
 import numpy as np
-import quantities as qt
 from copy import deepcopy
 from mozaik.models import Model
 from parameters import ParameterSet
