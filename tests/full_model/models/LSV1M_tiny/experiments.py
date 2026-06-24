@@ -21,7 +21,7 @@ def create_experiments(model):
                     "num_orientations": 2,
                     "spatial_frequency": 0.8,
                     "temporal_frequency": 2,
-                    "grating_duration": 210,  # 15*7
+                    "grating_duration": 210,
                     "contrasts": [100],
                     "num_trials": 1,
                     "shuffle_stimuli": False,
@@ -32,7 +32,7 @@ def create_experiments(model):
             model,
             ParameterSet(
                 {
-                    "stimulus_duration": 2 * 143 * 7,
+                    "stimulus_duration":  140,
                     "num_trials": 1,
                     "size": 30,
                     "shuffle_stimuli": False,
