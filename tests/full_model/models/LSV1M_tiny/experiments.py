@@ -32,7 +32,7 @@ def create_experiments(model):
             model,
             ParameterSet(
                 {
-                    "stimulus_duration":  140,
+                    "stimulus_duration": 140,
                     "num_trials": 1,
                     "size": 30,
                     "shuffle_stimuli": False,
