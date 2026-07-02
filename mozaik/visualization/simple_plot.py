@@ -981,7 +981,11 @@ class StandardStyleLinePlot(StandardStyle):
             elif self.colors != None:
                 p['color'] = self.colors
             elif self.colors == None:
-                p['color'] = next(self.axis._get_lines.prop_cycler)['color']
+                get_next_color = getattr(self.axis._get_lines, 'get_next_color', None)
+                if get_next_color is not None:
+                    p['color'] = get_next_color()
+                else:
+                    p['color'] = next(self.axis._get_lines.prop_cycler)['color']
 
             if type(self.linestyles) == list:
                 p['linestyle'] = self.linestyles[i]

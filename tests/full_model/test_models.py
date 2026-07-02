@@ -17,6 +17,7 @@ from parameters import ParameterSet
 import pytest
 
 REPO_DIR = "tests/full_model/models/mozaik-models"
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 repo_present = os.path.isdir(os.path.join(REPO_DIR, ".git"))
 
@@ -140,14 +141,26 @@ class TestModel(object):
         """
         Runs the model and loads its result and a saved reference result
         """
+        result_path = os.path.join(PROJECT_ROOT, cls.result_path)
+        ref_path = os.path.join(PROJECT_ROOT, cls.ref_path)
+
         # Rerun test if it already ran
-        if os.path.exists(cls.result_path):
-            os.system("rm -r " + cls.result_path)
-        os.system(cls.model_run_command)
+        if os.path.exists(result_path):
+            shutil.rmtree(result_path)
+
+        # Passing an explicit env avoids inheriting C-level environment changes
+        # that can make repeated Open MPI launches fail silently under pytest.
+        subprocess.run(
+            cls.model_run_command,
+            shell=True,
+            cwd=PROJECT_ROOT,
+            env=os.environ.copy(),
+            check=True,
+        )
         # Load DataStore of recordings from the model that just ran
-        cls.ds = cls.load_datastore(cls.result_path)
+        cls.ds = cls.load_datastore(result_path)
         # Load DataStore of reference recordings
-        cls.ds_ref = cls.load_datastore(cls.ref_path)
+        cls.ds_ref = cls.load_datastore(ref_path)
 
     @staticmethod
     def load_datastore(base_dir):

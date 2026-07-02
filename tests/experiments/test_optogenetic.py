@@ -220,10 +220,10 @@ class TestOptogeneticArrayStimulusHexagonalTiling(
         ).squeeze()
         for i in range(centers.shape[0]):
             d = np.sqrt(((centers[i] - centers) ** 2).sum(axis=1))
-            d[i] = np.infty
+            d[i] = np.inf
             a = np.isclose(d, radius * np.sqrt(3))
             assert np.any(a)
-            d[a] = np.infty
+            d[a] = np.inf
             assert np.all(d >= radius * np.sqrt(3))
 
 

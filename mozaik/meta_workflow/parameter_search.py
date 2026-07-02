@@ -343,150 +343,7 @@ def _parameter_combinations_rec(combination, arrays):
 
 
 def parameter_search_run_script_distributed_slurm(
-    simulation_name, master_results_dir, run_script, core_number
-):
-    r"""
-    Scheadules the execution of *run_script*, one per each parameter combination of an existing parameter search run.
-    Each execution receives as the first commandline argument the directory in which the results for the given
-    parameter combination were stored.
-
-    Parameters
-    ----------
-
-    simulation_name : str
-        The name of the simulation.
-
-    master_results_dir : str
-        The directory where the parameter search results are stored.
-
-    run_script : str
-        The name of the script to be run. The directory name of the given parameter combination datastore will be passed to it as the first command line argument.
-
-    core_number : int
-        How many cores to reserve per process.
-
-    """
-    with open(
-        master_results_dir + "/parameter_combinations.json", "r", encoding="utf-8"
-    ) as f:
-        combinations = json.load(f)
-
-    # first check whether all parameter combinations contain the same parameter names
-    assert (
-        len(set([tuple(set(comb.keys())) for comb in combinations])) == 1
-    ), "The parameter search didn't occur over a fixed set of parameters"
-
-    from subprocess import Popen, PIPE, STDOUT
-
-    for i, combination in enumerate(combinations):
-        rdn = (
-            master_results_dir
-            + "/"
-            + result_directory_name("ParameterSearch", simulation_name, combination)
-        )
-        p = Popen(
-            ["sbatch"] + ["-o", master_results_dir + "/slurm_analysis-%j.out"],
-            stdin=PIPE,
-            stdout=PIPE,
-            stderr=PIPE,
-            text=True,
-        )
-
-        # THIS IS A BIT OF A HACK, have to add customization for other people ...
-        data = "\n".join(
-            [
-                "#!/bin/bash",
-                "#SBATCH -J MozaikParamSearchAnalysis",
-                "#SBATCH -c " + str(core_number),
-                "source /opt/software/mpi/openmpi-1.6.3-gcc/env",
-                "source /home/antolikjan/env/mozaiknew/bin/activate",
-                "cd " + os.getcwd(),
-                'echo "DSADSA"',
-                " ".join(
-                    ["mpirun", " --mca mtl ^psm python", run_script, "'" + rdn + "'"]
-                    + [">"]
-                    + ["'" + rdn + "/OUTFILE_analysis" + str(time.time()) + "'"]
-                ),
-            ]
-        )
-        print(p.communicate(input=data)[0])
-        print(data)
-        p.stdin.close()
-
-
-def parameter_search_run_script_distributed_slurm_IoV(
-    simulation_name, master_results_dir, run_script, core_number
-):
-    r"""
-    Scheadules the execution of *run_script*, one per each parameter combination of an existing parameter search run.
-    Each execution receives as the first commandline argument the directory in which the results for the given
-    parameter combination were stored.
-
-    Parameters
-    ----------
-
-    simulation_name : str
-        The name of the simulation.
-
-    master_results_dir : str
-        The directory where the parameter search results are stored.
-
-    run_script : str
-        The name of the script to be run. The directory name of the given parameter combination datastore will be passed to it as the first command line argument.
-
-    core_number : int
-        How many cores to reserve per process.
-
-    """
-    with open(
-        master_results_dir + "/parameter_combinations.json", "r", encoding="utf-8"
-    ) as f:
-        combinations = json.load(f)
-
-    # first check whether all parameter combinations contain the same parameter names
-    assert (
-        len(set([tuple(set(comb.keys())) for comb in combinations])) == 1
-    ), "The parameter search didn't occur over a fixed set of parameters"
-
-    from subprocess import Popen, PIPE, STDOUT
-
-    for i, combination in enumerate(combinations):
-        rdn = (
-            master_results_dir
-            + "/"
-            + result_directory_name("ParameterSearch", simulation_name, combination)
-        )
-        p = Popen(
-            ["sbatch"] + ["-o", master_results_dir + "/slurm_analysis-%j.out"],
-            stdin=PIPE,
-            stdout=PIPE,
-            stderr=PIPE,
-            text=True,
-        )
-
-        # THIS IS A BIT OF A HACK, have to add customization for other people ...
-        data = "\n".join(
-            [
-                "#!/bin/bash",
-                "#SBATCH -J MozaikParamSearchAnalysis",
-                "#SBATCH -c " + str(core_number),
-                "source /home/jantolik/virt_env/mozaiknew/bin/activate",
-                "cd " + os.getcwd(),
-                'echo "DSADSA"',
-                " ".join(
-                    ["python", run_script, "'" + rdn + "'"]
-                    + [">"]
-                    + ["'" + rdn + "/OUTFILE_analysis" + str(time.time()) + "'"]
-                ),
-            ]
-        )
-        print(p.communicate(input=data)[0])
-        print(data)
-        p.stdin.close()
-
-
-def parameter_search_run_script_distributed_slurm_UK(
-    simulation_name, master_results_dir, run_script, core_number
+    simulation_name, master_results_dir, run_script, core_number, path_to_mozaik_env
 ):
     r"""
     Scheadules the execution of *run_script*, one per each parameter combination of an existing parameter search run.
@@ -510,7 +367,20 @@ def parameter_search_run_script_distributed_slurm_UK(
     core_number : int
         How many cores to reserve per process.
 
+    path_to_mozaik_env : str
+        Path to the virtual environment activation script to source before running
+        the analysis script.
+
     """
+    if not path_to_mozaik_env:
+        raise ValueError("path_to_mozaik_env must be a non-empty path")
+    path_to_mozaik_env = os.path.expanduser(os.path.expandvars(path_to_mozaik_env))
+    if not os.path.isfile(path_to_mozaik_env):
+        raise FileNotFoundError(
+            "path_to_mozaik_env does not exist or is not a file: "
+            + path_to_mozaik_env
+        )
+
     with open(
         master_results_dir + "/parameter_combinations.json", "r", encoding="utf-8"
     ) as f:
@@ -544,7 +414,7 @@ def parameter_search_run_script_distributed_slurm_UK(
                 "#SBATCH -J MozaikParamSearchAnalysis",
                 "#SBATCH -c " + str(core_number),
                 "#SBATCH --hint=nomultithread",
-                "source /home/antolikjan/virt_env/mozaiknew/bin/activate",
+                "source " + path_to_mozaik_env,
                 "cd " + os.getcwd(),
                 " ".join(
                     ["python", run_script, "'" + rdn + "'"]
