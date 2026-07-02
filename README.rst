@@ -147,7 +147,7 @@ Testing, Autoformat, Continuous Integration
 -------------------------------------------
 
 Before running any tests you need to first clone the mozaik models into the test directory like this::
-git clone https://github.com/CSNG-MFF/mozaik-models.git tests/full_model/models/mozaik-models
+  git clone https://github.com/CSNG-MFF/mozaik-models.git tests/full_model/models/mozaik-models
 
 In case you want to contribute to the project, you need to make sure your code passes all unit tests and is formatted with the Black autoformatter. You can make sure this is the case by running following from the project directory::
 
