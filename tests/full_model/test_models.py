@@ -12,6 +12,7 @@ import shutil
 from mozaik.storage.queries import *
 from mozaik.storage.datastore import PickledDataStore
 from mozaik.tools.distribution_parametrization import PyNNDistribution
+from mozaik.tools.misc import result_directory_name
 from parameters import ParameterSet
 
 import pytest
@@ -52,7 +53,16 @@ class TestMozaikModelsSmoke:
                 "tests/full_model/models/mozaik-models"
             )
 
+        smoke_parameters = {
+            "sheets.l4_cortex_exc.params.density": 150,
+            "sheets.retina_lgn.params.density": 20,
+        }
+        smoke_result_dir = result_directory_name(
+            "smoketest", "SelfSustainedPushPull", smoke_parameters
+        )
+
         # Remove previous simulations
+        shutil.rmtree(os.path.join(repo_dir, smoke_result_dir), ignore_errors=True)
         shutil.rmtree(
             os.path.join(
                 repo_dir,
