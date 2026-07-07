@@ -609,16 +609,42 @@ class TestSpatioTemporalFilterRetinaLGN:
                 atol=1e-7,
             )
 
+    # Test short and long three-stimulus splits. The 63 ms third segment makes
+    # 70 + 70 + 63 ms equal the full RF kernel length in time bins.
+    kernel_duration_split_grating_durations = (70, 70, 63)
+    split_grating_durations = [
+        (first_duration, second_duration, 63)
+        for first_duration, second_duration in itertools.product(
+            [210, 70, 14],
+            [490, 280, 70, 14],
+        )
+    ]
+    split_grating_duration_cases = [
+        pytest.param(
+            durations,
+            id=(
+                "kernel-duration"
+                if durations == (70, 70, 63)
+                else "%d-%d-%d" % durations
+            ),
+        )
+        for durations in split_grating_durations
+    ]
+
     @pytest.mark.parametrize("input_space_update_interval", [7, 14])
-    @pytest.mark.parametrize("first_duration", [210, 70, 14])
-    @pytest.mark.parametrize("second_duration", [490, 280, 70, 14])
+    @pytest.mark.parametrize("durations", split_grating_duration_cases)
     def test_continuous_vs_split_grating(
-        self, first_duration, second_duration, input_space_update_interval
+        self,
+        durations,
+        input_space_update_interval,
     ):
         """
         Verify that splitting a drifting grating into consecutive
         stimuli produces the same response as presenting the same
         frame sequence continuously.
+
+        The parametrization includes a case matching the full RF kernel length
+        in time bins.
         """
 
         parameters = copy.deepcopy(load_parameters(params, ParameterSet({})))
@@ -629,13 +655,19 @@ class TestSpatioTemporalFilterRetinaLGN:
         m_cont, sh_cont = self.make_retina(parameters)
         m_split, sh_split = self.make_retina(parameters)
 
-        total_duration = first_duration + second_duration
+        assert sum(self.kernel_duration_split_grating_durations) == (
+            sh_cont.rf["X_ON"].kernel_duration * sh_cont.rf["X_ON"].temporal_resolution
+        )
+
+        total_duration = sum(durations)
 
         stim_params = {
             **base_stim_params,
             "orientation": 0.0,
             "spatial_frequency": 0.5,
-            "temporal_frequency": 1000.0 / first_duration,
+            # Use the largest period dividing all segment durations, so each
+            # restarted split stimulus begins at phase 0
+            "temporal_frequency": 1000.0 / np.gcd.reduce(durations),
             "contrast": 100.0,
         }
         stim_params["frame_duration"] = input_space_update_interval
@@ -669,13 +701,10 @@ class TestSpatioTemporalFilterRetinaLGN:
 
         split_currents = []
 
-        for name, duration in (
-            ("part1", first_duration),
-            ("part2", second_duration),
-        ):
+        for index, duration in enumerate(durations, start=1):
             m_split.input_space.clear()
             m_split.input_space.add_object(
-                name,
+                "part%d" % index,
                 make_stim(duration),
             )
 
