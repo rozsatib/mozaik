@@ -51,7 +51,7 @@ ____________
 
 Now you can install all other dependencies in this protected environment::
 
-  pip3 install numpy==2.3.5 scipy mpi4py matplotlib quantities lazyarray interval Pillow param==1.5.1 parameters neo==0.12.0 cython==3.0.10 psutil future requests elephant pytest-xdist pytest-timeout junitparser numba numpyencoder sphinx imageio scikit-image som-pbc setuptools==80.9.0
+  pip3 install numpy==2.3.5 scipy mpi4py matplotlib quantities lazyarray interval Pillow param==1.5.1 parameters neo cython==3.0.10 psutil future requests elephant pytest-xdist pytest-timeout junitparser numba numpyencoder sphinx imageio scikit-image som-pbc setuptools==80.9.0
 
 Next we will manually install several packages. It is probably the best if you create a separate directory in an appropriate
 place, where you will download and install the packages from.
@@ -182,4 +182,3 @@ There are additional useful options for pytests that you can use during developm
 
 :copyright: Copyright 2011-2025 by the *mozaik* team, see AUTHORS.
 :license: `CECILL <http://www.cecill.info/>`_, see LICENSE for details.
-

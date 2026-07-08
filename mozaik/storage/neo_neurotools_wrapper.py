@@ -11,6 +11,7 @@ import numpy
 import pickle
 import quantities as qt
 import mozaik
+from .neo_compat import fix_legacy_segment, patch_legacy_neo_copy
 
 logger = mozaik.getMozaikLogger()
 
@@ -91,7 +92,7 @@ class MozaikSegment(Segment):
             
             """
             
-            ids = [s.annotations['source_id'] for s in self.spiketrains]
+            ids = [s.annotations['channel_id'] for s in self.spiketrains]
             if isinstance(neuron_id,list) or isinstance(neuron_id,numpy.ndarray):
               return [self.spiketrains[ids.index(i)] for i in neuron_id]
             else:
@@ -119,7 +120,7 @@ class MozaikSegment(Segment):
 
             for a in self.analogsignals:
                 if a.name == 'v' or a.name == 'V_m':
-                    return a[:, a.annotations['source_ids'].tolist().index(neuron_id)]
+                    return a[:, a.annotations['channel_ids'].tolist().index(neuron_id)]
                 
         def get_syn(self,neuron_id, name):
             """
@@ -143,7 +144,7 @@ class MozaikSegment(Segment):
                 self.load_full()
             for a in self.analogsignals:
                 if a.name == name:
-                    return a[:, a.annotations['source_ids'].tolist().index(neuron_id)]
+                    return a[:, a.annotations['channel_ids'].tolist().index(neuron_id)]
                 
         def get_esyn(self,neuron_id):
             r"""
@@ -165,7 +166,7 @@ class MozaikSegment(Segment):
                 self.load_full()
             for a in self.analogsignals:
                 if a.name == 'gsyn_exc' or a.name == 'g_ex':
-                    return a[:, a.annotations['source_ids'].tolist().index(neuron_id)]
+                    return a[:, a.annotations['channel_ids'].tolist().index(neuron_id)]
 
         def get_isyn(self,neuron_id):
             r"""
@@ -188,7 +189,7 @@ class MozaikSegment(Segment):
                 self.load_full()
             for a in self.analogsignals:
                 if a.name == 'gsyn_inh' or a.name == 'g_in':
-                    return a[:, a.annotations['source_ids'].tolist().index(neuron_id)]
+                    return a[:, a.annotations['channel_ids'].tolist().index(neuron_id)]
 
         def load_full(self):
             pass
@@ -214,7 +215,7 @@ class MozaikSegment(Segment):
                 self.load_full()
             for a in self.analogsignals:
                 if a.name == name:
-                   return a.annotations['source_ids']
+                   return a.annotations['channel_ids']
                 
 
         def get_stored_isyn_ids(self):
@@ -225,7 +226,7 @@ class MozaikSegment(Segment):
                 self.load_full()
             for a in self.analogsignals:
                 if a.name == 'gsyn_inh' or a.name == 'g_in':
-                   return a.annotations['source_ids']
+                   return a.annotations['channel_ids']
         
         def get_stored_esyn_ids(self):
             """
@@ -235,7 +236,7 @@ class MozaikSegment(Segment):
                 self.load_full()
             for a in self.analogsignals:
                 if a.name == 'gsyn_exc' or a.name == 'g_ex':
-                   return a.annotations['source_ids']
+                   return a.annotations['channel_ids']
 
         def get_stored_vm_ids(self):
             """
@@ -245,7 +246,7 @@ class MozaikSegment(Segment):
                 self.load_full()
             for a in self.analogsignals:
                 if a.name == 'v' or a.name == 'V_m':
-                   return a.annotations['source_ids']
+                   return a.annotations['channel_ids']
 
         def get_stored_spike_train_ids(self):
             """
@@ -254,7 +255,7 @@ class MozaikSegment(Segment):
             
             if not self.full:
                 self.load_full()
-            return [s.annotations['source_id'] for s in self.spiketrains]
+            return [s.annotations['channel_id'] for s in self.spiketrains]
 
         def mean_rates(self,start=None,end=None):
             """
@@ -309,10 +310,13 @@ class PickledDataStoreNeoWrapper(MozaikSegment):
 
         def load_full(self):
             f = open(self.datastore_path + '/' + self.identifier + ".pickle", 'rb')
-            s = pickle.load(f)
+            with patch_legacy_neo_copy():
+                s = pickle.load(f)
             f.close()
+            s = fix_legacy_segment(s)
             self._spiketrains = s.spiketrains
             self._analogsignals = s.analogsignals
+
             self.full = True
 
         def __getstate__(self):
