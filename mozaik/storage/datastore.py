@@ -10,6 +10,7 @@ from neo.core import Segment
 import mozaik
 from mozaik.core import ParametrizedObject
 from .neo_neurotools_wrapper import MozaikSegment, PickledDataStoreNeoWrapper
+from .neo_compat import fix_legacy_block, patch_legacy_neo_copy
 from mozaik.tools.mozaik_parametrized import  MozaikParametrized,filter_query
 import pickle
 from collections import OrderedDict
@@ -604,7 +605,11 @@ class PickledDataStore(Hdf5DataStore):
 
     def load(self):
         f = open(self.parameters.root_directory + '/datastore.recordings.pickle',  'rb')
-        self.block = pickle.load(f)
+        with patch_legacy_neo_copy():
+            self.block = pickle.load(f)
+        f.close()
+        self.block = fix_legacy_block(self.block)
+
         for s in self.block.segments:
             s.full = False
             s.datastore_path = self.parameters.root_directory

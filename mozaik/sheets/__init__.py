@@ -317,7 +317,7 @@ class Sheet(BaseComponent):
                         b = self.pop[i:i+steps].get_data(['spikes'] + vm_name + gsyn_names,clear=False)
                     else:
                         b = self.pop[i:i+steps].get_data(['spikes'] + vm_name + gsyn_names,clear=True)
-                except (NothingToWriteError, errmsg):
+                except NothingToWriteError as errmsg:
                     logger.debug(errmsg)
                 if (mozaik.mpi_comm) and (mozaik.mpi_comm.rank == mozaik.MPI_ROOT):
                     if block:
@@ -336,7 +336,7 @@ class Sheet(BaseComponent):
         else:
             try:
                 block = self.pop.get_data(['spikes'] + vm_name + gsyn_names,clear=True)
-            except (NothingToWriteError, errmsg):
+            except NothingToWriteError as errmsg:
                 logger.debug(errmsg)
 
         if (mozaik.mpi_comm) and (mozaik.mpi_comm.rank != mozaik.MPI_ROOT):
@@ -347,7 +347,7 @@ class Sheet(BaseComponent):
         # lets sort spike train so that it is ordered by IDs and thus hopefully
         # population indexes
         def key(a):
-            return a.annotations['source_id']
+            return a.annotations['channel_id']
 
         self.msc = numpy.mean([len(st)/(st.t_stop-st.t_start)*1000 for st in s.spiketrains])
         s.spiketrains = sorted(s.spiketrains, key=key)
