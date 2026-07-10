@@ -1,0 +1,131 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+%help
+    Apptainer definition file for Mozaik (Optimized for Native Architecture).
+
+%environment
+    export MOZAIK_HOME=/opt/mozaik
+    export PATH="$MOZAIK_HOME/bin:$PATH"
+    export PYTHONPATH="$MOZAIK_HOME/lib/python3.10/site-packages:$PYTHONPATH"
+    export DEBIAN_FRONTEND=noninteractive
+    export NEST_INSTALL_DIR=$MOZAIK_HOME
+    # Ensure OpenBLAS uses 1 thread per process (MPI manages the parallelism)
+    export OPENBLAS_NUM_THREADS=1
+
+%files
+    # Copy the current directory to /app
+    . /app
+
+%post
+    # Setup environment variables for the build phase
+    export MOZAIK_HOME=/opt/mozaik
+    export PATH="$MOZAIK_HOME/bin:$PATH"
+    export PYTHONPATH="$MOZAIK_HOME/lib/python3.10/site-packages:$PYTHONPATH"
+    export DEBIAN_FRONTEND=noninteractive
+    export NEST_INSTALL_DIR=$MOZAIK_HOME
+
+    # 1. Install System Dependencies
+    # Crucial Change: Added 'libopenblas-dev' explicitly
+    apt-get update -y
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        cmake \
+        git \
+        subversion \
+        wget \
+        python3 \
+        python3-dev \
+        python3-pip \
+        python3-setuptools \
+        python3-tk \
+        python3-nose \
+        python3-venv \
+        libopenmpi-dev \
+        openmpi-bin \
+        libjpeg8-dev \
+        libfreetype6-dev \
+        zlib1g-dev \
+        libpng++-dev \
+        libncurses-dev \
+        libreadline-dev \
+        liblapack-dev \
+        libopenblas-dev \
+        libgsl-dev \
+        libboost-all-dev \
+        ffmpeg
+    
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+
+    # 2. Create and activate virtual environment
+    python3 -m venv $MOZAIK_HOME
+    . $MOZAIK_HOME/bin/activate
+
+    # 3. Install Python dependencies
+    pip install --upgrade pip
+    pip install numpy scipy mpi4py matplotlib quantities lazyarray interval \
+        Pillow param==1.5.1 parameters neo==0.12.0 cython==3.0.10 psutil \
+        future requests elephant pytest-xdist pytest-timeout junitparser \
+        numba numpyencoder sphinx imageio scikit-image som-pbc pandas seaborn \
+        jupyterlab tk
+
+    # 4. Install imagen
+    cd /tmp
+    git clone https://github.com/antolikjan/imagen.git
+    cd imagen
+    pip install .
+    cd /tmp && rm -rf /tmp/imagen
+
+    # 5. Install PyNN
+    cd /tmp
+    git clone https://github.com/CSNG-MFF/PyNN.git
+    cd PyNN
+    git checkout PyNNStepCurrentModule
+    pip install .
+    cd /tmp && rm -rf /tmp/PyNN
+
+    # 6. Install NEST (OPTIMIZED)
+    # Crucial Change: Added '-march=native -mtune=native' to cmake
+    cd /tmp
+    wget https://github.com/nest/nest-simulator/archive/v3.4.tar.gz
+    tar xvfz v3.4.tar.gz
+    cd nest-simulator-3.4
+    
+    cmake \
+        -Dwith-mpi=ON \
+        -Dwith-boost=ON \
+        -DCMAKE_INSTALL_PREFIX:PATH=$MOZAIK_HOME \
+        -Dwith-optimize='-O3 -march=native -mtune=native' \
+        -Dwith-gsl=ON \
+        -Dwith-python=ON \
+        ./
+
+    make -j$(nproc)
+    make -j$(nproc) install
+    cd /tmp && rm -rf /tmp/nest-simulator-3.4 /tmp/v3.4.tar.gz
+
+    # 7. Install nest-step-current-module (OPTIMIZED)
+    cd /tmp
+    git clone https://github.com/CSNG-MFF/nest-step-current-module.git
+    cd nest-step-current-module
+    
+    cmake \
+        -Dwith-mpi=ON \
+        -Dwith-boost=ON \
+        -Dwith-optimize='-O3 -march=native -mtune=native' \
+        -Dwith-nest=$MOZAIK_HOME/bin/nest-config \
+        ./
+        
+    make -j$(nproc)
+    make -j$(nproc) install
+    cd /tmp && rm -rf /tmp/nest-step-current-module
+
+    # 8. Pre-compile pyNN extensions
+    echo "Pre-compiling pyNN extensions..."
+    python -c 'import pyNN.nest'
+
+%runscript
+    . $MOZAIK_HOME/bin/activate
+    python -c 'import nest; nest.Install("stepcurrentmodule")' > /dev/null 2>&1
+    exec python "$@"
