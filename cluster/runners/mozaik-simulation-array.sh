@@ -7,11 +7,14 @@ CHUNK=${CHUNK:-0}
 # 2. Create a unique run name using trial and chunk
 RUN_NAME="trial${TRIAL}_chunk${CHUNK}"
 
-# 3. Construct the expected output directory name
-# Mozaik appends modified parameters: ModelName_RunName_____key:value
-# lgn_stepcurrentsource_noise_seed is passed as a modified parameter, so it appears in the dir name.
+# 3. Construct the expected output directory name.
+# Mozaik appends modified parameters as ModelName_RunName_____key:value, but current mozaik
+# (result_directory_name) TRUNCATES + hashes keys longer than 24 chars — and
+# lgn_stepcurrentsource_noise_seed is 32, so the real dir is ..._____lgn_stepcurre_<sha1>:N.
+# Ask mozaik for the exact name instead of reconstructing it, so cleanup matches what run.py creates
+# (and does not touch the legacy ..._____noise_seed:N datastores, which hash to a different name).
 NOISE_SEED=$(( TRIAL * 1000 + CHUNK ))
-DIR_NAME="SelfSustainedPushPull_${RUN_NAME}_____lgn_stepcurrentsource_noise_seed:${NOISE_SEED}"
+DIR_NAME=$(python -c "from mozaik.tools.misc import result_directory_name; print(result_directory_name('${RUN_NAME}','SelfSustainedPushPull',{'lgn_stepcurrentsource_noise_seed':${NOISE_SEED}}))")
 
 echo "Running simulation with name: $RUN_NAME"
 echo "Cleaning up directory: $DIR_NAME"
