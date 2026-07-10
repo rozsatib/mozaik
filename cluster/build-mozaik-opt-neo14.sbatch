@@ -41,15 +41,22 @@ if [ -e "$OUT" ]; then
   echo "REFUSE: $OUT already exists — remove or rename it first (non-destructive policy)."; exit 1
 fi
 
-# Build scratch on NODE-LOCAL NVMe (fast for the metadata/small-file-heavy work: rootfs extract,
-# apt, and the NEST `make -j` compile). SLURM sets $LOCAL_TMPDIR to a job-scoped dir on /local
-# (1.7T NVMe, auto-created, auto-cleaned). Do NOT use lustre (/mnt/lustre-grete) or the 4G tmpfs
-# /tmp here — lustre is slow for small files and would bottleneck the build; /tmp overflows.
-BUILD_TMP="${LOCAL_TMPDIR:-/local/jobs/${SLURM_JOB_ID:-$$}}/apptainer-build"
+# Build scratch — fast is critical (rootfs extract, apt, NEST `make -j` = metadata/small-file heavy).
+# Priority: (1) $BUILD_TMP override, (2) SLURM node-local NVMe $LOCAL_TMPDIR (/local, ~1.7T,
+# auto-cleaned) — the best option, (3) VAST flash fallback if run outside SLURM. NEVER use lustre
+# (/mnt/lustre-grete: slow small-file) or the 4G tmpfs /tmp (overflows).
+if [ -n "${BUILD_TMP:-}" ]; then
+    :
+elif [ -n "${LOCAL_TMPDIR:-}" ] && mkdir -p "$LOCAL_TMPDIR/apptainer-build" 2>/dev/null; then
+    BUILD_TMP="$LOCAL_TMPDIR/apptainer-build"
+else
+    BUILD_TMP="/mnt/vast-nhr/projects/nix00014/goirik/tmp/apptainer-build-${SLURM_JOB_ID:-$$}"
+    echo "WARN: \$LOCAL_TMPDIR not usable (not in a SLURM job?); falling back to VAST flash: $BUILD_TMP"
+fi
 export APPTAINER_TMPDIR="$BUILD_TMP"
 export APPTAINER_CACHEDIR="$BUILD_TMP/cache"
 mkdir -p "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR"
-echo "build scratch (node-local NVMe): $BUILD_TMP"
+echo "build scratch: $BUILD_TMP"
 df -hT "$BUILD_TMP" 2>/dev/null | tail -1
 
 echo "=== build start $(date) on $(hostname) ==="
