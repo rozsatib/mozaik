@@ -35,4 +35,4 @@ apptainer exec \
   --bind "$EXPERANTO_ROOT:/experanto" \
   --bind "$DATA_ROOT:/data" \
   "$SIF_IMAGE" \
-  bash -c "cd /project && mpirun -n $NTASKS -x OMP_NUM_THREADS -x MKL_NUM_THREADS -x OPENBLAS_NUM_THREADS -x PYTHONPATH python -u run.py nest $NTASKS param/defaults noise_seed $NOISE_SEED $RUN_NAME"
+  bash -c "cd /project && mpirun -n $NTASKS -x OMP_NUM_THREADS -x MKL_NUM_THREADS -x OPENBLAS_NUM_THREADS -x PYTHONPATH python -u run.py nest $NTASKS param/defaults lgn_stepcurrentsource_noise_seed $NOISE_SEED $RUN_NAME"
