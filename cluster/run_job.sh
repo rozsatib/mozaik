@@ -37,13 +37,14 @@ case "$WORKLOAD" in
     export TRIAL=$(( ${SLURM_ARRAY_TASK_ID:-0} / N_CHUNKS ))
     export CHUNK=$(( ${SLURM_ARRAY_TASK_ID:-0} % N_CHUNKS ))
     export CHUNK_DIR   # empty -> compose default /data/mozaik_chunk
-    echo "Sim: TRIAL=$TRIAL CHUNK=$CHUNK (N_CHUNKS=$N_CHUNKS) CHUNK_DIR=${CHUNK_DIR:-<default>}"
+    export SIF_IMAGE PARAM_FILE   # empty -> compose/runner defaults (old sif, param/defaults)
+    echo "Sim: TRIAL=$TRIAL CHUNK=$CHUNK (N_CHUNKS=$N_CHUNKS) CHUNK_DIR=${CHUNK_DIR:-<default>} SIF=${SIF_IMAGE:-<default>} PARAM=${PARAM_FILE:-<default>}"
     bash cluster/apptainer-compose-array.sh
     ;;
   export)
     export TRIAL="${SLURM_ARRAY_TASK_ID:-1}"
     # Any of these left unset by the config export as empty -> compose applies its own defaults.
-    export N_CHUNKS CHUNK_START CHUNK_END BATCH_SIZE EXPORT_MODE CHUNK_DIR OUTPUT_PREFIX DATASTORE_PREFIX MODALITY_FILTER
+    export N_CHUNKS CHUNK_START CHUNK_END BATCH_SIZE EXPORT_MODE CHUNK_DIR OUTPUT_PREFIX DATASTORE_PREFIX MODALITY_FILTER SIF_IMAGE
     echo "Export: TRIAL=$TRIAL"
     bash cluster/apptainer-compose-export.sh
     ;;

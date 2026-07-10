@@ -35,4 +35,4 @@ mpirun \
     -x MKL_NUM_THREADS \
     -x OPENBLAS_NUM_THREADS \
     -x PYTHONPATH \
-    python -u run.py nest $NTASKS param/defaults lgn_stepcurrentsource_noise_seed $NOISE_SEED "$RUN_NAME"
+    python -u run.py nest $NTASKS "${PARAM_FILE:-param/defaults}" lgn_stepcurrentsource_noise_seed $NOISE_SEED "$RUN_NAME"

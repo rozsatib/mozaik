@@ -4,7 +4,7 @@
 
 # PROJECT_ROOT="/mnt/vast-nhr/projects/nix00014/goirik/mozaik-models/Rozsa_Cagnol2024" 
 PROJECT_ROOT="$PWD/../mozaik-models/experanto" 
-SIF_IMAGE="$PWD/../mozaik-sif/mozaik-opt.sif"
+SIF_IMAGE="${SIF_IMAGE:-$PWD/../mozaik-sif/mozaik-opt.sif}"
 ENV_FILE=".env"
 MOZAIK_ROOT="$PWD"
 EXPERANTO_ROOT="$PWD/../../experanto"
@@ -37,6 +37,7 @@ apptainer exec \
  --env TRIAL="$TRIAL" \
  --env CHUNK="$CHUNK" \
  --env CHUNK_DIR="${CHUNK_DIR:-/data/mozaik_chunk}" \
+ --env PARAM_FILE="${PARAM_FILE:-param/defaults}" \
  --env OMP_NUM_THREADS=$OMP_NUM_THREADS \
  --env MKL_NUM_THREADS=$MKL_NUM_THREADS \
  --env OPENBLAS_NUM_THREADS=$OPENBLAS_NUM_THREADS \
