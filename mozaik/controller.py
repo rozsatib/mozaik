@@ -332,6 +332,8 @@ def prepare_workflow(simulation_name, model_class):
         p["mozaik_seed"] = parameters["mozaik_seed"]
     if "pynn_seed" in parameters:
         p["pynn_seed"] = parameters["pynn_seed"]
+    if "lgn_stepcurrentsource_noise_seed" in parameters:
+        p["lgn_stepcurrentsource_noise_seed"] = parameters["lgn_stepcurrentsource_noise_seed"]
 
     # Now initialize mpi with the seeds
     print("START MPI")

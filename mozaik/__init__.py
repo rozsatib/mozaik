@@ -31,21 +31,37 @@ rng = None
 pynn_rng = None
 mpi_comm = None
 MPI_ROOT = 0
+# Per-trial noise offset for the LGN step-current source. When 0 (default) behaviour is
+# identical to the un-seeded upstream. See setup_mpi / get_lgn_stepcurrentsource_noise_seeds.
+lgn_stepcurrentsource_noise_seed = 0
 
-def setup_mpi(mozaik_seed=513,pynn_seed=1023):
+def setup_mpi(mozaik_seed=513,pynn_seed=1023,lgn_stepcurrentsource_noise_seed=0):
     r"""
     Tests the presence of MPI and sets up mozaik wide random number generator.
-    
+
+    Parameters
+    ----------
+    mozaik_seed : int
+        Seed for the mozaik-wide RNG (connectivity sampling, stimulus shuffling, etc.)
+    pynn_seed : int
+        Seed for the PyNN RNG (connection patterns, neuron positions, parameter distributions)
+    lgn_stepcurrentsource_noise_seed : int
+        Per-trial offset applied to (a) the NEST kernel RNG seed and (b) the LGN step-current
+        source noise seeds. When 0 (default) the behaviour is identical to upstream (backward
+        compatible). Vary it across trials to obtain different noise realizations with an
+        identical network topology. (Renamed from `noise_seed` per CSNG-MFF review; its only
+        purpose is the LGN step-current source noise.)
+
     Notes
     -----
-    
+
     To obtain results repeatable over identical runs of mozaik
     one should use the mozaik.pynn_rng as the random noise generator passed to all pyNN
     functions that accept pynn_rng as one of their paramters
-    
+
     Any other code using random numbers should instead use the mozaik.rng that hold a numpy RandomState instance.
-    It is important to make sure that any piece of  code using this random generator draws from it 
-    exactly the same number of numbers in each process, so that once the code is executed, the rng 
+    It is important to make sure that any piece of  code using this random generator draws from it
+    exactly the same number of numbers in each process, so that once the code is executed, the rng
     is in exactly the same state in each mpi process!
 
     """
@@ -53,9 +69,11 @@ def setup_mpi(mozaik_seed=513,pynn_seed=1023):
     global rng
     global pynn_rng
     global mpi_comm
+    import mozaik
     from pyNN.random import NumpyRNG
     pynn_rng = NumpyRNG(seed=pynn_seed)
     rng = numpy.random.RandomState(mozaik_seed)
+    mozaik.lgn_stepcurrentsource_noise_seed = lgn_stepcurrentsource_noise_seed
 
     try:
         from mpi4py import MPI
@@ -86,6 +104,22 @@ def get_seeds(size=None):
 
     """
     return rng.randint(2**32-1,size=size)
+
+def get_lgn_stepcurrentsource_noise_seeds(size=None):
+    r"""
+    Returns seeds for the LGN step-current source noise, offset by
+    :data:`lgn_stepcurrentsource_noise_seed`.
+
+    Internally calls :func:`get_seeds` so the global RNG state advances identically regardless
+    of the offset value; the offset is then added to the result. When the offset is 0 the output
+    is identical to :func:`get_seeds` (backward compatible). Use this instead of :func:`get_seeds`
+    only where LGN step-current noise is seeded, so noise realizations can vary across trials
+    without affecting connectivity.
+    """
+    seeds = get_seeds(size)
+    if lgn_stepcurrentsource_noise_seed != 0:
+        seeds = (seeds.astype(numpy.int64) + lgn_stepcurrentsource_noise_seed) % (2**32 - 1)
+    return seeds
 
 def getMozaikLogger():
     r"""
