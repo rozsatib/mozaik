@@ -41,10 +41,16 @@ if [ -e "$OUT" ]; then
   echo "REFUSE: $OUT already exists — remove or rename it first (non-destructive policy)."; exit 1
 fi
 
-# Big scratch for the build (NEST compile + pip); keep it off HOME/small /tmp.
-export APPTAINER_TMPDIR="/mnt/lustre-grete/tmp/${USER}/apptainer-build"
-export APPTAINER_CACHEDIR="${APPTAINER_TMPDIR}/cache"
+# Build scratch on NODE-LOCAL NVMe (fast for the metadata/small-file-heavy work: rootfs extract,
+# apt, and the NEST `make -j` compile). SLURM sets $LOCAL_TMPDIR to a job-scoped dir on /local
+# (1.7T NVMe, auto-created, auto-cleaned). Do NOT use lustre (/mnt/lustre-grete) or the 4G tmpfs
+# /tmp here — lustre is slow for small files and would bottleneck the build; /tmp overflows.
+BUILD_TMP="${LOCAL_TMPDIR:-/local/jobs/${SLURM_JOB_ID:-$$}}/apptainer-build"
+export APPTAINER_TMPDIR="$BUILD_TMP"
+export APPTAINER_CACHEDIR="$BUILD_TMP/cache"
 mkdir -p "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR"
+echo "build scratch (node-local NVMe): $BUILD_TMP"
+df -hT "$BUILD_TMP" 2>/dev/null | tail -1
 
 echo "=== build start $(date) on $(hostname) ==="
 echo "DEF=$DEF  OUT=$OUT  TMPDIR=$APPTAINER_TMPDIR"
@@ -59,13 +65,15 @@ apptainer exec "$OUT" bash -lc '. /opt/mozaik/bin/activate 2>/dev/null; \
 echo "=== BUILD COMPLETE: $OUT ($(du -h "$OUT" | cut -f1)) $(date) ==="
 
 # --------------------------------------------------------------------------------------------------
-# Login/build-node fallback (if compute nodes lack internet). Run from the mozaik repo root:
+# Login/build-node fallback (if compute nodes lack internet). Run from the mozaik repo root.
+# Login /tmp is a 4G tmpfs (too small); use node-local NVMe /local (1.7T) for build scratch:
 #
-#   export APPTAINER_TMPDIR=/mnt/lustre-grete/tmp/$USER/apptainer-build
+#   export APPTAINER_TMPDIR=/local/$USER/apptainer-build
 #   export APPTAINER_CACHEDIR=$APPTAINER_TMPDIR/cache
 #   mkdir -p "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR"
 #   module load apptainer
 #   nohup apptainer build --fakeroot ../mozaik-sif/mozaik-opt_2026-07-10.sif \
 #         mozaik-opt-neo14_2026-07.def > mozaik-sif-build.out 2>&1 &
 #   tail -f mozaik-sif-build.out
+#   # clean up afterwards:  rm -rf /local/$USER/apptainer-build
 # --------------------------------------------------------------------------------------------------
