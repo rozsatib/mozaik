@@ -102,7 +102,8 @@ params = {
     "max_delay": 100,
     "time_step": 0.1,
     "pynn_seed": 936395,
-    "mpi_seed": 1023,
+    "mozaik_seed": 1023,
+    "lgn_stepcurrentsource_noise_seed": 0,
     "explosion_monitoring": None,
     "steps_get_data": 0,
 }
@@ -375,7 +376,7 @@ class TestSpatioTemporalFilterRetinaLGN:
         visual_field_center=(0.0, 0.0),
     ):
         mozaik.setup_mpi(
-            parameters["mpi_seed"],
+            parameters["mozaik_seed"],
             parameters["pynn_seed"],
         )
 
