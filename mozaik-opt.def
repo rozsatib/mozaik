@@ -66,7 +66,7 @@ From: ubuntu:22.04
     pip install --upgrade pip
     pip install numpy scipy mpi4py matplotlib quantities lazyarray interval \
         Pillow param==1.5.1 parameters neo==0.12.0 cython==3.0.10 psutil \
-        future requests elephant pytest-xdist pytest-timeout junitparser \
+        future requests PyYAML elephant pytest-xdist pytest-timeout junitparser \
         numba numpyencoder sphinx imageio scikit-image som-pbc pandas seaborn \
         jupyterlab tk
 
