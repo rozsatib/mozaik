@@ -51,9 +51,17 @@ def test_env(request):
     opt_array_params = load_parameters(test_dir + "/sheets/opt_array_params")
     opt_array_params["transfection_proportion"] = 1.0
 
+    stimulator_component = getattr(
+        request.cls,
+        "stimulator_component",
+        "mozaik.sheets.direct_stimulator.OpticalStimulatorArrayChR",
+    )
+    if stimulator_component.endswith("ClosedLoopOpticalStimulatorArray"):
+        opt_array_params["state_update_interval"] = 6.0
+
     sheet_params.artificial_stimulators = {
         "stimulator": {
-            "component": "mozaik.sheets.direct_stimulator.OpticalStimulatorArrayChR",
+            "component": stimulator_component,
             "params": opt_array_params,
         }
     }
@@ -70,18 +78,6 @@ def test_env(request):
     request.cls.sheet_params = sheet_params
     request.cls.duration = 150
     request.cls.test_dir = test_dir
-
-    """
-    The first recording in a simulation lasts one min_delay longer for some
-    reason, which messes up recording comparisons, so we do a short dummy
-    recording in the beginning.
-    TODO: Remove once this Github issue is resolved:
-    https://github.com/NeuralEnsemble/PyNN/issues/759
-    """
-    request.cls.record_and_retrieve_data(ds, 1)
-
-    yield
-    model.sheets.clear()
 
 
 @pytest.mark.usefixtures("test_env")
@@ -195,3 +191,49 @@ class TestOpticalStimulatorArrayChR:
         plt.plot(d1[:, idx])
         plt.plot(d2[:, idx])
         plt.show()
+
+
+@pytest.mark.usefixtures("test_env")
+class TestClosedLoopOpticalStimulatorArray:
+    stimulator_component = (
+        "mozaik.sheets.direct_stimulator.ClosedLoopOpticalStimulatorArray"
+    )
+
+    @pytest.mark.parametrize(
+        ("center", "radius"),
+        [([0.0, 0.0], 50.0), ([80.0, -60.0], 100.0)],
+    )
+    def test_recorded_neuron_positions(self, center, radius):
+        """Check that reported neuron positions match where the optogenetic
+        stimulation was applied."""
+        signal = mozaik.sheets.direct_stimulator.stimulating_pattern_flash(
+            self.sheet,
+            self.ds.stimulator_coords_x,
+            self.ds.stimulator_coords_y,
+            self.ds.parameters.update_interval,
+            ParameterSet(
+                {
+                    "shape": "circle",
+                    "coords": [center],
+                    "radius": radius,
+                    "intensity": [1.0],
+                    "onset_time": 0.0,
+                    "offset_time": 2.0,
+                    "duration": 2.0,
+                }
+            ),
+        )
+        photo = self.ds.calculate_photo(signal)
+        indices = self.ds.recorded_neuron_indices("v")
+        positions = self.ds.recorded_neuron_positions("v")
+
+        assert positions.shape == (3, len(indices))
+        np.testing.assert_allclose(positions[2], self.sheet.pop[indices].positions[2])
+
+        stimulated = np.any(photo[indices] > 0, axis=1)
+        assert np.any(stimulated)
+        distances = np.sqrt(
+            (positions[0, stimulated] - center[0]) ** 2
+            + (positions[1, stimulated] - center[1]) ** 2
+        )
+        assert np.all(distances <= radius + self.ds.parameters.spacing)
