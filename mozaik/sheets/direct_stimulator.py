@@ -757,9 +757,15 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
         idx = self.recorded_neuron_indices(recording_type)
         return np.array([a['LGNAfferentOrientation'] for a in self.sheet.get_neuron_annotations()])[idx]
 
-    def recorded_neuron_positions(self,recording_type=None):
+    def recorded_neuron_positions(self, recording_type=None):
         idx = self.recorded_neuron_indices(recording_type)
-        return self.sheet.vf_2_cs(self.sheet.pop[idx].positions[0],self.sheet.pop[idx].positions[1])
+        positions = self.sheet.pop[idx].positions
+        assert (
+            positions.shape[0] == 3
+        ), "Closed loop optical stimulation requires a 3D sheet!"
+        # The stored x and y coordinates are in visual field degrees, while z is in µm.
+        x, y = self.sheet.vf_2_cs(positions[0], positions[1])
+        return np.vstack((x, y, positions[2]))
 
     def calculate_input_signal(self):
         assert self.calculate_input_function is not None, "Calculate input function not set!"
