@@ -17,6 +17,24 @@ from builtins import zip
 logger = mozaik.getMozaikLogger()
 
 
+def _lognormal_event_weight_sums(base_weight_distribution, sigma, counts, seed):
+    counts = numpy.array(counts, dtype=int)
+    if numpy.any(counts < 0):
+        raise ValueError("Connection counts must be non-negative.")
+
+    total_count = int(numpy.sum(counts))
+    if total_count == 0:
+        return numpy.array([])
+
+    base_weights = base_weight_distribution.copy(seed).next(total_count)
+    mu = -0.5 * sigma * sigma
+    rng_seed = (int(seed) + 7919) % (2**32)
+    rng = numpy.random.RandomState(rng_seed)
+    lognormal_factors = rng.lognormal(mean=mu, sigma=sigma, size=total_count)
+    event_weights = numpy.multiply(base_weights, lognormal_factors)
+    return numpy.add.reduceat(event_weights, numpy.r_[0, numpy.cumsum(counts)[:-1]])
+
+
 class ExpVisitor(ast.NodeVisitor):
     r"""
     AST tree visitor used for determining list of variables in the delay or weight expresions
@@ -278,6 +296,12 @@ class ModularSamplingProbabilisticConnector(VariableNumSamplesConnector):
         'base_weight' : PyNNDistribution,
     })
 
+    def _sample_connection_weights(self, counts, seed):
+        return numpy.multiply(
+            self.parameters.base_weight.copy(seed).next(len(counts)),
+            counts
+        )
+
 
     def _connect(self):
         # Generates a splitted and of cells indices to be passed to each subprocesses
@@ -312,15 +336,13 @@ class ModularSamplingProbabilisticConnector(VariableNumSamplesConnector):
 
                 vi = vi + numpy.sum(list(co.values()))
                 k = list(co.keys())
+                counts = list(co.values())
                 a = numpy.array(
                     [
                         k,
                         numpy.zeros(len(k)) + indices[i],
                         self.weight_scaler
-                        * numpy.multiply(
-                            self.parameters.base_weight.copy(seeds[i]).next(len(k)),
-                            list(co.values())
-                        ),
+                        * self._sample_connection_weights(counts, seeds[i]),
                         numpy.array(delays)[k],
                     ]
                 )
@@ -374,6 +396,25 @@ class ModularSamplingProbabilisticConnector(VariableNumSamplesConnector):
                                 receptor_type=self.parameters.target_synapses)
         else:
             logger.warning("%s(%s): empty projection - pyNN projection not created." % (self.name,self.__class__.__name__))
+
+
+class LogNormalModularSamplingProbabilisticConnector(ModularSamplingProbabilisticConnector):
+    r"""
+    ModularSamplingProbabilisticConnector variant that samples each realized
+    synaptic event from a log-normal distribution with mean base_weight.
+    """
+
+    required_parameters = ParameterSet({
+        'lognormal_weight_sigma': float,
+    })
+
+    def _sample_connection_weights(self, counts, seed):
+        return _lognormal_event_weight_sums(
+            self.parameters.base_weight,
+            self.parameters.lognormal_weight_sigma,
+            counts,
+            seed
+        )
 
 
 class ModularSingleWeightProbabilisticConnector(ModularConnector):
@@ -437,6 +478,12 @@ class ModularSamplingProbabilisticConnectorAnnotationSamplesCount(VariableNumSam
         'samples_coeff': float,
     })
 
+    def _sample_connection_weights(self, counts, seed):
+        return numpy.multiply(
+            self.parameters.base_weight.copy(seed).next(len(counts)),
+            counts
+        )
+
     def _connect(self):
         # Check if the delay function is incompatible with multiprocessing
         cl = []
@@ -493,15 +540,13 @@ class ModularSamplingProbabilisticConnectorAnnotationSamplesCount(VariableNumSam
 
                 vi = vi + numpy.sum(list(co.values()))
                 k = list(co.keys())
+                counts = list(co.values())
                 a = numpy.array(
                     [
                         k,
                         numpy.zeros(len(k)) + indices[i],
                         self.weight_scaler
-                        * numpy.multiply(
-                            self.parameters.base_weight.copy(seeds[i]).next(len(k)),
-                            list(co.values())
-                        ),
+                        * self._sample_connection_weights(counts, seeds[i]),
                         numpy.array(delays)[k],
                     ]
                 )
@@ -555,3 +600,23 @@ class ModularSamplingProbabilisticConnectorAnnotationSamplesCount(VariableNumSam
                                 receptor_type=self.parameters.target_synapses)
         else:
             logger.warning("%s(%s): empty projection - pyNN projection not created." % (self.name,self.__class__.__name__))
+
+
+class LogNormalModularSamplingProbabilisticConnectorAnnotationSamplesCount(
+    ModularSamplingProbabilisticConnectorAnnotationSamplesCount
+):
+    r"""
+    Annotation-sample connector variant with log-normal realized synaptic weights.
+    """
+
+    required_parameters = ParameterSet({
+        'lognormal_weight_sigma': float,
+    })
+
+    def _sample_connection_weights(self, counts, seed):
+        return _lognormal_event_weight_sums(
+            self.parameters.base_weight,
+            self.parameters.lognormal_weight_sigma,
+            counts,
+            seed
+        )

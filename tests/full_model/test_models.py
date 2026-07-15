@@ -18,6 +18,7 @@ from parameters import ParameterSet
 import pytest
 
 REPO_DIR = "tests/full_model/models/mozaik-models"
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SMOKE_MODEL_NAME = "SelfSustainedPushPull"
 SMOKE_RUN_NAME = "smoketest"
 SMOKE_MODEL_OVERRIDES = {
@@ -58,10 +59,18 @@ class TestMozaikModelsSmoke:
                 "tests/full_model/models/mozaik-models"
             )
 
+        smoke_parameters = {
+            "sheets.l4_cortex_exc.params.density": 150,
+            "sheets.retina_lgn.params.density": 20,
+        }
+        smoke_result_dir = result_directory_name(
+            "smoketest", "SelfSustainedPushPull", smoke_parameters
+        )
         l4_density = SMOKE_MODEL_OVERRIDES["sheets.l4_cortex_exc.params.density"]
         retina_lgn_density = SMOKE_MODEL_OVERRIDES["sheets.retina_lgn.params.density"]
 
         # Remove previous simulations
+        shutil.rmtree(os.path.join(repo_dir, smoke_result_dir), ignore_errors=True)
         shutil.rmtree(
             os.path.join(
                 repo_dir,
@@ -165,38 +174,62 @@ class TestModel(object):
         """
         Runs the model and loads its result and a saved reference result
         """
-        # Rerun test if it already ran
-        if os.path.exists(cls.result_path):
-            shutil.rmtree(cls.result_path)
+        result_path = os.path.join(PROJECT_ROOT, cls.result_path)
+        ref_path = os.path.join(PROJECT_ROOT, cls.ref_path)
+
+        # Rerun the test if it already ran.
+        if os.path.exists(result_path):
+            shutil.rmtree(result_path)
+
+        env = os.environ.copy()
 
         if cls.model_run_uses_posix_spawn:
+            # os.posix_spawn() has no cwd argument, so change directory in the
+            # spawned shell before executing the model command.
             pid = os.posix_spawn(
                 "/bin/sh",
-                ["/bin/sh", "-c", cls.model_run_command],
-                os.environ.copy(),
+                [
+                    "/bin/sh",
+                    "-c",
+                    'cd "$1" && exec /bin/sh -c "$2"',
+                    "model-runner",
+                    PROJECT_ROOT,
+                    cls.model_run_command,
+                ],
+                env,
             )
             _, status = os.waitpid(pid, 0)
             returncode = os.waitstatus_to_exitcode(status)
-            stdout = stderr = ""
+            stdout = stderr = None
         else:
             result = subprocess.run(
                 cls.model_run_command,
                 shell=True,
+                cwd=PROJECT_ROOT,
+                env=env,
                 capture_output=True,
                 text=True,
             )
-            returncode, stdout, stderr = (
-                result.returncode,
-                result.stdout,
-                result.stderr,
-            )
+            returncode = result.returncode
+            stdout = result.stdout
+            stderr = result.stderr
 
         if returncode != 0:
+            if stdout is None:
+                stdout_summary = (
+                    "<not captured by the posix_spawn execution path; "
+                    "see pytest's captured output>"
+                )
+                stderr_summary = stdout_summary
+            else:
+                stdout_summary = stdout[-4000:] or "<empty>"
+                stderr_summary = stderr[-4000:] or "<empty>"
+
             pytest.fail(
                 f"Model run command failed: {cls.model_run_command}\n"
                 f"Return code: {returncode}\n\n"
-                f"===== model stdout =====\n{stdout[-4000:] or '<empty>'}\n\n"
-                f"===== model stderr =====\n{stderr[-4000:] or '<empty>'}"
+                f"===== model stdout =====\n{stdout_summary}\n\n"
+                f"===== model stderr =====\n{stderr_summary}"
             )
         # Load DataStore of recordings from the model that just ran
         cls.ds = cls.load_datastore(cls.result_path)
@@ -335,8 +368,6 @@ class TestModel(object):
         max_neurons : maximum number of neurons to check voltages for
         """
 
-        print(len(self.get_voltages(ds0, sheet_name, max_neurons)), flush=True)
-        print(len(self.get_voltages(ds1, sheet_name, max_neurons)), flush=True)
         np.testing.assert_equal(
             self.get_voltages(ds0, sheet_name, max_neurons),
             self.get_voltages(ds1, sheet_name, max_neurons),

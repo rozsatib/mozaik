@@ -690,9 +690,9 @@ class MeasureSizeTuning(VisualExperiment):
         # linear or logarithmic spaced sizes
         if self.parameters.log_spacing:
             base2max = numpy.log2(self.parameters.max_size)
-            sizes = numpy.logspace(start=-3.0, stop=base2max, num=self.parameters.num_sizes, base=2.0)
+            sizes = [float(s) for s in numpy.logspace(start=-3.0, stop=base2max, num=self.parameters.num_sizes, base=2.0)]
         else:
-            sizes = numpy.linspace(0, self.parameters.max_size,self.parameters.num_sizes)
+            sizes = [float(s) for s in numpy.linspace(0, self.parameters.max_size,self.parameters.num_sizes)]
 
         stimulus_parameters = []
         # stimuli creation        
@@ -785,8 +785,9 @@ class MeasureSizeTuningRing(VisualExperiment):
             base2max = numpy.log2(self.parameters.outer_radius)
             inner_radius = numpy.logspace(start=-3.0, stop=base2max, num=self.parameters.num_inner_radius, base=2.0)
             inner_radius[-1] = self.parameters.outer_radius
+            inner_radius = [float(r) for r in inner_radius]
         else:
-            inner_radius = numpy.linspace(0, self.parameters.outer_radius,self.parameters.num_inner_radius)
+            inner_radius = [float(r) for r in numpy.linspace(0, self.parameters.outer_radius,self.parameters.num_inner_radius)]
 
         # stimuli creation        
         for c in self.parameters.contrasts:
@@ -1769,9 +1770,9 @@ class MeasureTextureSizeTuning(VisualExperiment):
         # linear or logarithmic spaced sizes
         if self.parameters.log_spacing:
             base2max = numpy.log2(self.parameters.max_size)
-            sizes = numpy.logspace(start=-3.0, stop=base2max, num=self.parameters.num_sizes, base=2.0) 
+            sizes = [float(s) for s in numpy.logspace(start=-3.0, stop=base2max, num=self.parameters.num_sizes, base=2.0)]
         else:
-            sizes = numpy.linspace(0, self.parameters.max_size,self.parameters.num_sizes)                     
+            sizes = [float(s) for s in numpy.linspace(0, self.parameters.max_size,self.parameters.num_sizes)]
             
         # stimuli creation        
         for image in self.parameters.images:

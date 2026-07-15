@@ -51,7 +51,7 @@ ____________
 
 Now you can install all other dependencies in this protected environment::
 
-  pip3 install numpy==2.3.5 scipy mpi4py matplotlib quantities lazyarray interval Pillow param==1.5.1 parameters neo cython==3.0.10 psutil future requests elephant pytest-xdist pytest-timeout junitparser numba numpyencoder sphinx imageio scikit-image som-pbc setuptools==80.9.0
+  pip3 install "numpy<2" scipy mpi4py matplotlib quantities lazyarray interval Pillow param==1.5.1 parameters neo cython==3.0.10 psutil future requests elephant pytest-xdist pytest-timeout junitparser numba numpyencoder sphinx imageio pandas scikit-image som-pbc setuptools==80.9.0
 
 Next we will manually install several packages. It is probably the best if you create a separate directory in an appropriate
 place, where you will download and install the packages from.
@@ -146,11 +146,15 @@ This will launch the example with the nest simulator running 2 MPI processes, ea
 Testing, Autoformat, Continuous Integration
 -------------------------------------------
 
+Before running any tests you need to first clone the mozaik models into the test directory like this::
+
+  git clone https://github.com/CSNG-MFF/mozaik-models.git tests/full_model/models/mozaik-models
+
 In case you want to contribute to the project, you need to make sure your code passes all unit tests and is formatted with the Black autoformatter. You can make sure this is the case by running following from the project directory::
 
   pytest -m 'not mpi' && black --check .
 
-This command will run all tests that it can find recursively under the current directory, as well as check all non-blacklisted files for formatting. Travis-CI will run the same steps for your pull request once you submit it to the project. To install pytest and black::
+This command will run all tests that it can find recursively under the current directory, as well as check all non-blacklisted files for formatting. GitHub Actions will run the relevant test workflows for your pull request once you submit it to the project. To install pytest and black::
 
   pip3 install pytest pytest-cov pytest-randomly coverage black
 

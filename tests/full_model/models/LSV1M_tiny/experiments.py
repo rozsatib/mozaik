@@ -1,6 +1,9 @@
 #!/usr/local/bin/ipython -i
 from mozaik.experiments import NoStimulation
-from mozaik.experiments.vision import MeasureOrientationTuningFullfield
+from mozaik.experiments.vision import (
+    MeasureOrientationTuningFullfield,
+    MeasureNaturalImagesWithEyeMovement,
+)
 from mozaik.sheets.population_selector import RCRandomPercentage
 from parameters import ParameterSet
 
@@ -18,9 +21,20 @@ def create_experiments(model):
                     "num_orientations": 2,
                     "spatial_frequency": 0.8,
                     "temporal_frequency": 2,
-                    "grating_duration": 210,  # 15*7
+                    "grating_duration": 210,
                     "contrasts": [100],
                     "num_trials": 1,
+                    "shuffle_stimuli": False,
+                }
+            ),
+        ),
+        MeasureNaturalImagesWithEyeMovement(
+            model,
+            ParameterSet(
+                {
+                    "stimulus_duration": 140,
+                    "num_trials": 1,
+                    "size": 30,
                     "shuffle_stimuli": False,
                 }
             ),
