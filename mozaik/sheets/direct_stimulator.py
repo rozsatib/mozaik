@@ -694,6 +694,7 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
         self.input_signal = None
         self._next_actuation_time = None
         self._last_photo_sample = None
+        self._sheet_data_cache = {}
 
     # Maybe add calculate input function setter to assert its parameters, etc.?
     def current_time(self): #Maybe make this an attribute and automatically calculate it upon state update?
@@ -725,6 +726,7 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
         self.start_time = self.sheet.sim.get_current_time()
         self._next_actuation_time = 0.0
         self._last_photo_sample = None
+        self._sheet_data_cache.clear()
         self.stimulation_duration = self.parameters.state_update_interval
         self.set_input_segment()
         self.set_data_recording()
@@ -732,44 +734,133 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
     def set_target_signal(self, target_signal):
         self.target_signal = target_signal
 
-    def get_recording(self, name, t_start=None, t_stop=None):
-        allowed_names = ["v","gsyn_exc","gsyn_inh","spikes"]
-        assert name in allowed_names, "Reqested recording must be one of %s" % (str(allowed_names))
+    def _cortical_sheets(self):
+        return {
+            name: sheet
+            for name, sheet in self.sheet.model.sheets.items()
+            if callable(getattr(sheet, "vf_2_cs", None))
+        }
+
+    def _get_cortical_sheet(self, sheet_name=None):
+        if sheet_name is None:
+            return self.sheet
+        cortical_sheets = self._cortical_sheets()
+        assert sheet_name in cortical_sheets, "Unknown cortical sheet: %s" % sheet_name
+        return cortical_sheets[sheet_name]
+
+    @staticmethod
+    def _time_slice(recording, t_start, t_stop):
+        start = recording.t_start if t_start is None else recording.t_start + t_start
+        stop = recording.t_stop if t_stop is None else recording.t_start + t_stop
+        return recording.time_slice(start, stop)
+
+    def get_recording(self, name, t_start=None, t_stop=None, sheet_name=None):
+        allowed_names = ["v", "gsyn_exc", "gsyn_inh", "spikes"]
+        assert name in allowed_names, "Requested recording must be one of %s" % str(allowed_names)
+        sheet = self._get_cortical_sheet(sheet_name)
+        if not self.has_sheet_recorders(sheet) or name not in sheet.to_record:
+            return []
+        assert sheet.last_recording is not None, "No data have been retrieved for sheet %s!" % sheet.name
         if t_start is not None:
             t_start *= qt.ms
         if t_stop is not None:
             t_stop *= qt.ms
         if name == "spikes":
-            return [st.time_slice(t_start + st.t_start,t_stop + st.t_start) for st in self.sheet.last_recording.spiketrains]
-        else:
-            analogsignal = [s for s in self.sheet.last_recording.analogsignals if s.name == name]
-            assert len(analogsignal) == 1, "The analogsignal %s is not being recorded!" % name
-            return np.array(analogsignal[0].time_slice(t_start + analogsignal[0].t_start,t_stop + analogsignal[0].t_start))
+            if t_start is None and t_stop is None:
+                return list(sheet.last_recording.spiketrains)
+            return [
+                self._time_slice(st, t_start, t_stop)
+                for st in sheet.last_recording.spiketrains
+            ]
+        analogsignals = [
+            signal for signal in sheet.last_recording.analogsignals
+            if signal.name == name
+        ]
+        assert len(analogsignals) == 1, "The analogsignal %s is not being recorded!" % name
+        analogsignal = analogsignals[0]
+        if t_start is None and t_stop is None:
+            return np.array(analogsignal)
+        return np.array(self._time_slice(analogsignal, t_start, t_stop))
 
-    def has_sheet_recorders(self):
-        return self.sheet.to_record is not None and len(self.sheet.to_record) > 0
+    def has_sheet_recorders(self, sheet=None):
+        sheet = self.sheet if sheet is None else sheet
+        return bool(getattr(sheet, "to_record", None))
 
-    def recorded_neuron_indices(self,recording_type=None):
-        if not self.has_sheet_recorders():
-            return list(range(self.sheet.pop.size))
+    def recorded_neuron_indices(self,recording_type=None, sheet_name=None):
+        sheet = self._get_cortical_sheet(sheet_name)
+        if not self.has_sheet_recorders(sheet):
+            return list(range(sheet.pop.size))
         if recording_type is None:
-            assert np.all(np.all([v == list(self.sheet.to_record.values())[0] for v in self.sheet.to_record.values()])), "If recording_type is None, all recorders must record from the same neurons!"
-            recording_type = list(self.sheet.to_record.keys())[0]
-        return sorted(self.sheet.to_record[recording_type])
+            first_recording = next(iter(sheet.to_record.values()))
+            assert all(
+                v == first_recording for v in sheet.to_record.values()
+            ), "If recording_type is None, all recorders must record from the same neurons!"
+            recording_type = next(iter(sheet.to_record))
+        return sorted(sheet.to_record.get(recording_type, []))
 
-    def recorded_neuron_orientations(self,recording_type=None):
-        idx = self.recorded_neuron_indices(recording_type)
-        return np.array([a['LGNAfferentOrientation'] for a in self.sheet.get_neuron_annotations()])[idx]
+    def recorded_neuron_orientations(self,recording_type=None, sheet_name=None):
+        sheet = self._get_cortical_sheet(sheet_name)
+        idx = self.recorded_neuron_indices(recording_type, sheet_name)
+        if len(idx) == 0:
+            return np.array([])
+        annotations = sheet.get_neuron_annotations()
+        assert all(
+            "LGNAfferentOrientation" in annotation for annotation in annotations
+        ), "Sheet %s has no LGNAfferentOrientation annotations!" % sheet.name
+        return np.array([a['LGNAfferentOrientation'] for a in annotations])[idx]
 
-    def recorded_neuron_positions(self, recording_type=None):
-        idx = self.recorded_neuron_indices(recording_type)
-        positions = self.sheet.pop[idx].positions
-        assert (
-            positions.shape[0] == 3
-        ), "Closed loop optical stimulation requires a 3D sheet!"
+    def recorded_neuron_positions(self, recording_type=None, sheet_name=None):
+        sheet = self._get_cortical_sheet(sheet_name)
+        idx = self.recorded_neuron_indices(recording_type, sheet_name)
+        positions = sheet.pop.positions
+        assert positions.shape[0] == 3, "Closed loop optical stimulation requires a 3D sheet!"
+        if len(idx) == 0:
+            return np.empty((3, 0))
+        positions = positions[:, idx]
         # The stored x and y coordinates are in visual field degrees, while z is in µm.
-        x, y = self.sheet.vf_2_cs(positions[0], positions[1])
+        x, y = sheet.vf_2_cs(positions[0], positions[1])
         return np.vstack((x, y, positions[2]))
+
+    def recorded_neuron_positions_all_sheets(self, recording_type=None):
+        return {
+            name: self.recorded_neuron_positions(recording_type, name)
+            for name in self._cortical_sheets()
+        }
+
+    def recorded_neuron_orientations_all_sheets(self, recording_type=None):
+        return {
+            name: self.recorded_neuron_orientations(recording_type, name)
+            for name in self._cortical_sheets()
+        }
+
+    def _retrieve_sheet_data(self, sheet):
+        if not self.has_sheet_recorders(sheet):
+            return []
+        current_time = self.sheet.sim.get_current_time()
+        cached = self._sheet_data_cache.get(sheet.name)
+        if cached is not None and np.isclose(cached[0], current_time):
+            return cached[1]
+        data = sheet.get_data(clear=False)
+        self._sheet_data_cache[sheet.name] = (current_time, data)
+        return data
+
+    def get_data_all_sheets(self):
+        return {
+            name: self._retrieve_sheet_data(sheet)
+            for name, sheet in self._cortical_sheets().items()
+        }
+
+    def get_recording_all_sheets(
+        self, name, t_start=None, t_stop=None, retrieve=True
+    ):
+        if retrieve:
+            self.get_data_all_sheets()
+        return {
+            sheet_name: self.get_recording(
+                name, t_start, t_stop, sheet_name=sheet_name
+            )
+            for sheet_name in self._cortical_sheets()
+        }
 
     def calculate_input_signal(self):
         assert self.calculate_input_function is not None, "Calculate input function not set!"
@@ -836,7 +927,7 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
             len(self.sheet.to_record.keys()) == 1
             and list(self.sheet.to_record.keys())[0] == "spikes"
         ):
-            self.sheet.get_data(clear=False)
+            self._retrieve_sheet_data(self.sheet)
         # At this point the controller has data up to current_time(); its output
         # is scheduled actuation_delay later so NEST can deliver it on time.
         self._next_actuation_time = self.current_time() + self.actuation_delay()

@@ -8,11 +8,15 @@ from mozaik.sheets.vision import VisualCorticalUniformSheet3D
 import mozaik
 from mozaik.stimuli import InternalStimulus
 import copy
+import pathlib
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+from neo.core import AnalogSignal
 from mozaik.tools.distribution_parametrization import (
     load_parameters,
     MozaikExtendedParameterSet,
 )
-import pathlib
 
 
 class TestDirectStimulator:
@@ -237,3 +241,126 @@ class TestClosedLoopOpticalStimulatorArray:
             + (positions[1, stimulated] - center[1]) ** 2
         )
         assert np.all(distances <= radius + self.ds.parameters.spacing)
+
+    @staticmethod
+    def _fake_sheet(name, to_record, data=None):
+        return SimpleNamespace(
+            name=name,
+            to_record=to_record,
+            last_recording=data,
+            vf_2_cs=lambda x, y: (x, y),
+            get_data=Mock(return_value=data),
+        )
+
+    @staticmethod
+    def _analog_recording(value):
+        return SimpleNamespace(
+            analogsignals=[
+                AnalogSignal(
+                    np.full((3, 1), value),
+                    units=qt.mV,
+                    sampling_period=1 * qt.ms,
+                    name="v",
+                )
+            ],
+            spiketrains=[],
+        )
+
+    def _set_sheets(self, monkeypatch, *sheets):
+        monkeypatch.setattr(
+            self.model, "sheets", {sheet.name: sheet for sheet in sheets}
+        )
+
+    @pytest.fixture(autouse=True)
+    def _clear_sheet_data_cache(self):
+        self.ds._sheet_data_cache.clear()
+
+    def test_get_data_all_sheets_selects_and_retrieves_cortical_sheets(
+        self, monkeypatch
+    ):
+        first_data, second_data = object(), object()
+        first = self._fake_sheet("cortex_1", {"spikes": [0]}, first_data)
+        unrecorded = self._fake_sheet("unrecorded", {})
+        second = self._fake_sheet("cortex_2", {"v": [0]}, second_data)
+        lgn = SimpleNamespace(name="X_ON", to_record={"spikes": [0]}, get_data=Mock())
+        self._set_sheets(monkeypatch, first, lgn, unrecorded, second)
+
+        data = self.ds.get_data_all_sheets()
+
+        assert list(data) == [first.name, unrecorded.name, second.name]
+        assert data[first.name] is first_data
+        assert data[unrecorded.name] == []
+        assert data[second.name] is second_data
+        first.get_data.assert_called_once_with(clear=False)
+        second.get_data.assert_called_once_with(clear=False)
+        unrecorded.get_data.assert_not_called()
+        lgn.get_data.assert_not_called()
+
+    def test_get_data_all_sheets_caches_by_simulator_time(self, monkeypatch):
+        current_time = [10.0]
+        sheet = self._fake_sheet("recorded", {"spikes": [0]})
+        sheet.get_data.side_effect = [object(), object()]
+        self._set_sheets(monkeypatch, sheet)
+        monkeypatch.setattr(self.sheet.sim, "get_current_time", lambda: current_time[0])
+
+        first = self.ds.get_data_all_sheets()[sheet.name]
+        second = self.ds.get_data_all_sheets()[sheet.name]
+
+        assert first is second
+        sheet.get_data.assert_called_once_with(clear=False)
+
+        current_time[0] = 11.0
+        third = self.ds.get_data_all_sheets()[sheet.name]
+
+        assert third is not first
+        assert sheet.get_data.call_count == 2
+
+    @pytest.mark.parametrize(
+        ("retrieve_all", "expected_other_calls"), [(True, 1), (False, 0)]
+    )
+    def test_update_state_retrieval_paths(
+        self, monkeypatch, retrieve_all, expected_other_calls
+    ):
+        attached_data = object()
+        attached_get_data = Mock(return_value=attached_data)
+        other = self._fake_sheet("other_cortex", {"v": [0]}, object())
+        fast_get_data = Mock()
+        monkeypatch.setattr(self.sheet, "get_data", attached_get_data)
+        monkeypatch.setattr(self.ds, "get_data", fast_get_data)
+        monkeypatch.setattr(self.ds, "set_input_segment", Mock())
+        monkeypatch.setattr(self.ds, "active_cells", np.array([], dtype=int))
+        monkeypatch.setattr(self.ds, "times", np.array([0.0]), raising=False)
+        monkeypatch.setattr(
+            self.ds,
+            "_cortical_sheets",
+            lambda: {self.sheet.name: self.sheet, other.name: other},
+        )
+        retrieved = {}
+
+        def update_controller(stimulator):
+            if retrieve_all:
+                retrieved.update(stimulator.get_data_all_sheets())
+
+        monkeypatch.setattr(self.ds, "update_state_function", update_controller)
+
+        self.ds.update_state()
+
+        fast_get_data.assert_called_once_with()
+        attached_get_data.assert_called_once_with(clear=False)
+        assert other.get_data.call_count == expected_other_calls
+        if retrieve_all:
+            assert retrieved[self.sheet.name] is attached_data
+
+    def test_get_recording_selects_sheet_and_handles_missing_data(self, monkeypatch):
+        first = self._fake_sheet("cortex_1", {"v": [0]}, self._analog_recording(1.0))
+        second = self._fake_sheet("cortex_2", {"v": [0]}, self._analog_recording(2.0))
+        unrecorded = self._fake_sheet("unrecorded", {}, None)
+        self._set_sheets(monkeypatch, first, second, unrecorded)
+
+        for sheet, value in [(first, 1.0), (second, 2.0)]:
+            np.testing.assert_array_equal(
+                self.ds.get_recording("v", sheet_name=sheet.name),
+                np.full((3, 1), value),
+            )
+        assert self.ds.get_recording("spikes", sheet_name=first.name) == []
+        assert self.ds.get_recording("v", sheet_name=unrecorded.name) == []
