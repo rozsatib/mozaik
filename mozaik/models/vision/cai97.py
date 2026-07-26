@@ -78,3 +78,45 @@ def G(t, K1, K2, c1, c2, t1, t2, n1, n2):
 
 def F_2d(x, y, A, sigma):
     return A * exp(-(x**2 + y**2) / (2*sigma**2))
+
+
+def dog_optimal_spatial_frequency(Ac, As, sigma_c, sigma_s):
+    r"""Return the nonzero optimum of the Cai97 spatial DoG.
+
+    ``F_2d`` uses peak Gaussian amplitudes and conventional standard
+    deviations.  Consequently the returned frequency is in cycles per unit of
+    ``sigma_c`` and ``sigma_s`` (cycles/degree when the sigmas are in degrees).
+    """
+
+    values = {
+        "Ac": Ac,
+        "As": As,
+        "sigma_c": sigma_c,
+        "sigma_s": sigma_s,
+    }
+    for name, value in values.items():
+        try:
+            value = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("%s must be a positive finite scalar" % name) from exc
+        if not numpy.isfinite(value) or value <= 0.0:
+            raise ValueError("%s must be a positive finite scalar" % name)
+        values[name] = value
+
+    Ac = values["Ac"]
+    As = values["As"]
+    sigma_c = values["sigma_c"]
+    sigma_s = values["sigma_s"]
+    if sigma_c == sigma_s:
+        raise ValueError("sigma_c and sigma_s must be unequal")
+
+    frequency_squared = (
+        numpy.log(As)
+        - numpy.log(Ac)
+        + 4.0 * (numpy.log(sigma_s) - numpy.log(sigma_c))
+    ) / (2.0 * numpy.pi**2 * (sigma_s**2 - sigma_c**2))
+    if not numpy.isfinite(frequency_squared) or frequency_squared <= 0.0:
+        raise ValueError(
+            "Cai97 DoG parameters do not define a positive real nonzero optimum"
+        )
+    return float(numpy.sqrt(frequency_squared))
