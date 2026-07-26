@@ -5,13 +5,10 @@ fit is an area density with respect to ``dx dy``; it contains no polar
 Jacobian.  The receptive-field fit returns the conventional Gaussian standard
 deviation used by :func:`mozaik.models.vision.cai97.F_2d`.
 
-The formulas and constants in this module are reproduced from the reviewed
-eccentricity-mode design.  They are evaluated directly and do not depend on an
-external lookup table or development checkout.  The density fit is
-empirically poorly constrained above approximately 60 degrees, and the RF-size
-fit was reported below 25 degrees.  Larger supported eccentricities are
-extrapolated without clipping and are reported once when the provider is
-initialized.
+The density fit is empirically poorly constrained above approximately 60
+degrees, and the RF-size fit was reported below 25 degrees.  Larger supported
+eccentricities are extrapolated without clipping and are reported once when
+the provider is initialized.
 """
 
 import numbers
@@ -231,13 +228,13 @@ def _topography_parameters(parameters):
 
 
 class RadiallySymmetricLGNTopography:
-    """Immutable Phase 1 provider for eccentricity-dependent LGN properties.
+    """Immutable provider for eccentricity-dependent LGN properties.
 
     The visual domain is a fixation-centred rectangle, while modelled LGN RF
     centres occupy the inscribed disk with radius ``max_eccentricity_deg``.
     An explicit cap plateaus both density and centre sigma.  ``None`` leaves
-    these retinal functions uncapped, although the empirical mapping cap is
-    still resolved and stored privately for Phase 2.
+    these retinal functions uncapped; an independently resolved empirical cap
+    is retained for cortical mapping.
     """
 
     __slots__ = (
