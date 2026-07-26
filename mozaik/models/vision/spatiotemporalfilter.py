@@ -8,11 +8,13 @@ import numpy
 import os.path
 import pickle
 import mozaik
+import numbers
 from pyNN import space
 from mozaik.models.vision import cai97
+from mozaik.models.vision.topography import RadiallySymmetricLGNTopography
 from mozaik.space import VisualSpace, VisualRegion
 from mozaik.core import SensoryInputComponent
-from mozaik.sheets.vision import RetinalUniformSheet
+from mozaik.sheets.vision import RetinalInhomogeneousDiskSheet, RetinalUniformSheet
 from mozaik.sheets.vision import VisualCorticalUniformSheet
 from mozaik.tools.mozaik_parametrized import MozaikParametrized
 from mozaik.tools.pyNN import *
@@ -23,6 +25,48 @@ from dataclasses import dataclass
 import copy
 
 logger = mozaik.getMozaikLogger()
+
+
+def _sample_lgn_positions(topography, number, rng):
+    """Sample fixed-count Cartesian RF centres from the radial area density."""
+
+    maximum_eccentricity = topography.max_eccentricity_deg
+    maximum_density = topography.relative_density_at_eccentricity(
+        topography.user_cap_eccentricity_deg
+        if topography.user_cap_eccentricity_deg is not None
+        else 0.0
+    )
+    accepted_x = []
+    accepted_y = []
+    accepted_count = 0
+
+    while accepted_count < number:
+        remaining = number - accepted_count
+        proposal_count = max(1024, 2 * remaining)
+        uniform_radius = rng.uniform(size=proposal_count)
+        uniform_angle = rng.uniform(size=proposal_count)
+        uniform_acceptance = rng.uniform(size=proposal_count)
+
+        radius = maximum_eccentricity * numpy.sqrt(uniform_radius)
+        angle = 2.0 * numpy.pi * uniform_angle - numpy.pi
+        density = topography.relative_density_at_eccentricity(radius)
+        accepted = uniform_acceptance < density / maximum_density
+        accepted_indices = numpy.flatnonzero(accepted)[:remaining]
+        accepted_x.append(radius[accepted_indices] * numpy.cos(angle[accepted_indices]))
+        accepted_y.append(radius[accepted_indices] * numpy.sin(angle[accepted_indices]))
+        accepted_count += len(accepted_indices)
+
+    positions = numpy.vstack(
+        (
+            numpy.concatenate(accepted_x),
+            numpy.concatenate(accepted_y),
+        )
+    )
+    if positions.shape != (2, number):
+        raise AssertionError("LGN position sampling did not produce the requested count")
+    if numpy.any(numpy.hypot(positions[0], positions[1]) >= maximum_eccentricity):
+        raise AssertionError("LGN position sampling produced a point outside the disk")
+    return positions
 
 
 def meshgrid3D(x, y, z):
@@ -1077,3 +1121,200 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                 )
             ]
         return input_currents
+
+
+class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
+    """Fixed-count eccentricity-dependent LGN population.
+
+    Phase 1 Stage 2 establishes the global ON/OFF positions and current-source
+    infrastructure. Per-cell receptive fields are added in Stage 3.
+    """
+
+    required_parameters = ParameterSet(
+        {
+            "number_per_polarity": int,
+            "minimum_samples_per_center_sigma": float,
+            "topography": ParameterSet(
+                {
+                    "cap_eccentricity": (float, type(None)),
+                    "full_max_eccentricity": float,
+                    "beta": float,
+                }
+            ),
+            "linear_scaler": float,
+            "mpi_reproducible_noise": bool,
+            "recorders": ParameterSet,
+            "recording_interval": float,
+            "receptive_field": ParameterSet(
+                {
+                    "func": str,
+                    "func_params": ParameterSet,
+                    "width": float,
+                    "height": float,
+                    "temporal_resolution": float,
+                    "duration": float,
+                }
+            ),
+            "original_2024_lgn_mode": bool,
+            "cell": ParameterSet(
+                {
+                    "model": str,
+                    "params": ParameterSet,
+                    "receptors": ParameterSet,
+                    "native_nest": bool,
+                    "initial_values": ParameterSet,
+                }
+            ),
+            "gain_control": {
+                "gain": float,
+                "non_linear_gain": ParameterSet(
+                    {
+                        "luminance_gain": float,
+                        "luminance_scaler": float,
+                        "contrast_gain": float,
+                        "contrast_scaler": float,
+                    }
+                ),
+            },
+            "noise": ParameterSet(
+                {
+                    "mean": float,
+                    "stdev": float,
+                }
+            ),
+        }
+    )
+
+    def __init__(self, model, parameters):
+        SensoryInputComponent.__init__(self, model, parameters)
+        self._validate_stage_2_parameters()
+        if not hasattr(model, "visual_field"):
+            raise ValueError(
+                "model.visual_field must exist before constructing eccentricity "
+                "LGN input; eccentricity mode currently requires a "
+                "fixation-centred visual rectangle"
+            )
+
+        self.topography = RadiallySymmetricLGNTopography(
+            model.visual_field, self.parameters.topography
+        )
+        self.rf_types = ("X_ON", "X_OFF")
+        self.sheets = OrderedDict()
+        self.pops = OrderedDict()
+        self.ncs_rng = OrderedDict()
+        self.internal_stimulus_cache = OrderedDict()
+
+        if self.parameters.cell.model[-6:] == "_sc_nc":
+            self.integrated_cs = True
+            cell = copy.deepcopy(self.parameters.cell)
+            cell.params.update(
+                [
+                    ("mean", self.parameters.noise.mean * 1000),
+                    ("std", self.parameters.noise.stdev * 1000),
+                    ("dt", self.model.sim.get_time_step()),
+                ]
+            )
+        else:
+            self.integrated_cs = False
+            self.scs = OrderedDict()
+            self.ncs = OrderedDict()
+            cell = self.parameters.cell
+
+        position_seeds = mozaik.get_seeds(2)
+        positions_by_type = OrderedDict()
+        for index, rf_type in enumerate(self.rf_types):
+            positions_by_type[rf_type] = _sample_lgn_positions(
+                self.topography,
+                self.parameters.number_per_polarity,
+                numpy.random.RandomState(seed=position_seeds[index]),
+            )
+
+        for rf_type in self.rf_types:
+            self.sheets[rf_type] = RetinalInhomogeneousDiskSheet(
+                model,
+                ParameterSet(
+                    {
+                        "cell": cell,
+                        "name": rf_type,
+                        "artificial_stimulators": OrderedDict(),
+                        "recorders": self.parameters.recorders,
+                        "recording_interval": self.parameters.recording_interval,
+                        "mpi_safe": False,
+                    }
+                ),
+                positions_by_type[rf_type],
+                self.topography,
+            )
+
+        self._initialize_noise_sources()
+
+    def _validate_stage_2_parameters(self):
+        number = self.parameters.number_per_polarity
+        if (
+            isinstance(number, bool)
+            or not isinstance(number, numbers.Integral)
+            or number <= 0
+        ):
+            raise ValueError("number_per_polarity must be an integer greater than zero")
+        if self.parameters.original_2024_lgn_mode:
+            raise ValueError(
+                "original_2024_lgn_mode=True is incompatible with "
+                "eccentricity-dependent LGN input"
+            )
+
+        positive_finite_parameters = (
+            (
+                "minimum_samples_per_center_sigma",
+                self.parameters.minimum_samples_per_center_sigma,
+            ),
+            ("receptive_field.width", self.parameters.receptive_field.width),
+            ("receptive_field.height", self.parameters.receptive_field.height),
+            (
+                "receptive_field.temporal_resolution",
+                self.parameters.receptive_field.temporal_resolution,
+            ),
+            ("receptive_field.duration", self.parameters.receptive_field.duration),
+        )
+        for name, value in positive_finite_parameters:
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, numbers.Real)
+                or not numpy.isfinite(value)
+                or value <= 0.0
+            ):
+                raise ValueError(f"{name} must be positive and finite")
+
+    def _initialize_noise_sources(self):
+        sim = self.model.sim
+        for rf_type in self.rf_types:
+            sheet = self.sheets[rf_type]
+            self.ncs_rng[rf_type] = []
+            seeds = mozaik.get_seeds((sheet.pop.size,))
+
+            if self.integrated_cs:
+                for index, _ in enumerate(sheet.pop.all_cells):
+                    if sheet.pop._mask_local[index]:
+                        self.ncs_rng[rf_type].append(
+                            numpy.random.RandomState(seed=seeds[index])
+                        )
+                continue
+
+            self.scs[rf_type] = []
+            self.ncs[rf_type] = []
+            for index, lgn_cell in enumerate(sheet.pop.all_cells):
+                step_source = sim.StepCurrentSource(times=[0.0], amplitudes=[0.0])
+                if self.parameters.mpi_reproducible_noise:
+                    noise_source = sim.StepCurrentSource(
+                        times=[0.0], amplitudes=[0.0]
+                    )
+                else:
+                    noise_source = sim.NoisyCurrentSource(**self.parameters.noise)
+
+                if sheet.pop._mask_local[index]:
+                    self.ncs_rng[rf_type].append(
+                        numpy.random.RandomState(seed=seeds[index])
+                    )
+                    self.scs[rf_type].append(step_source)
+                    self.ncs[rf_type].append(noise_source)
+                lgn_cell.inject(step_source)
+                lgn_cell.inject(noise_source)

@@ -12,6 +12,34 @@ from mozaik.sheets import Sheet
         
 logger = mozaik.getMozaikLogger()
 
+
+class ExplicitPositions(space.BaseStructure):
+    """PyNN structure backed by a fixed global position array."""
+
+    parameter_names = ()
+
+    def __init__(self, positions):
+        try:
+            positions = numpy.asarray(positions, dtype=float)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("positions must be a finite array with shape (3, N)") from exc
+        if positions.ndim != 2 or positions.shape[0] != 3:
+            raise ValueError("positions must be a finite array with shape (3, N)")
+        if not numpy.all(numpy.isfinite(positions)):
+            raise ValueError("positions must contain only finite values")
+        if not numpy.array_equal(positions[2], numpy.zeros(positions.shape[1])):
+            raise ValueError("the third row of positions must contain only zeros")
+        self._positions = positions.copy()
+
+    def generate_positions(self, n):
+        if n != self._positions.shape[1]:
+            raise ValueError(
+                "ExplicitPositions contains %d positions, but PyNN requested %d"
+                % (self._positions.shape[1], n)
+            )
+        return self._positions.copy()
+
+
 class RetinalUniformSheet(Sheet):
     r"""
     Retinal sheet corresponds to a sheet of retinal cells (retinal ganglion cells or photoreceptors). 
@@ -60,6 +88,81 @@ class RetinalUniformSheet(Sheet):
 
     def size_in_degrees(self):
         return (self.parameters.sx, self.parameters.sy)
+
+
+class RetinalInhomogeneousDiskSheet(Sheet):
+    """Retinal sheet with explicit Cartesian RF centres in visual degrees."""
+
+    def __init__(self, model, parameters, positions_deg, topography):
+        try:
+            positions_deg = numpy.asarray(positions_deg, dtype=float)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "positions_deg must be a finite array with shape (2, N)"
+            ) from exc
+        if positions_deg.ndim != 2 or positions_deg.shape[0] != 2:
+            raise ValueError("positions_deg must be a finite array with shape (2, N)")
+        if positions_deg.shape[1] == 0:
+            raise ValueError("RetinalInhomogeneousDiskSheet requires at least one cell")
+        if not numpy.all(numpy.isfinite(positions_deg)):
+            raise ValueError("positions_deg must contain only finite values")
+
+        topography.validate_visual_position(positions_deg[0], positions_deg[1])
+        if numpy.any(
+            numpy.hypot(positions_deg[0], positions_deg[1])
+            >= topography.max_eccentricity_deg
+        ):
+            raise ValueError(
+                "retinal RF centres must satisfy hypot(x, y) < E_max"
+            )
+
+        Sheet.__init__(
+            self,
+            model,
+            2.0 * topography.max_eccentricity_deg,
+            2.0 * topography.max_eccentricity_deg,
+            parameters,
+        )
+        self.topography = topography
+        self.canonical_positions_deg = positions_deg.copy()
+        self.canonical_positions_deg.setflags(write=False)
+
+        positions = numpy.vstack(
+            (self.canonical_positions_deg, numpy.zeros(positions_deg.shape[1]))
+        )
+        structure = ExplicitPositions(positions)
+        logger.info(
+            "Creating %s with %d neurons."
+            % (self.__class__.__name__, positions_deg.shape[1])
+        )
+        if self.parameters.cell.native_nest:
+            cell_type = self.sim.native_cell_type(self.parameters.cell.model)(
+                **self.parameters.cell.params
+            )
+        else:
+            cell_type = getattr(self.model.sim, self.parameters.cell.model)(
+                **self.parameters.cell.params
+            )
+        self.pop = self.sim.Population(
+            positions_deg.shape[1],
+            cell_type,
+            structure=structure,
+            initial_values=self.parameters.cell.initial_values,
+            label=self.name,
+        )
+
+        realized_positions = self.pop.positions
+        if not numpy.array_equal(
+            realized_positions[:2], self.canonical_positions_deg
+        ):
+            raise AssertionError(
+                "PyNN realized retinal positions differ from the canonical "
+                "global position array"
+            )
+
+    def size_in_degrees(self):
+        diameter = 2.0 * self.topography.max_eccentricity_deg
+        return (diameter, diameter)
 
 
 class SheetWithMagnificationFactor(Sheet):
