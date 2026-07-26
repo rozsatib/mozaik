@@ -20,8 +20,9 @@ configurations and legacy numerical results are a hard compatibility boundary.
 This document is normative. Words such as "must", "require", and "do not"
 define implementation requirements. Names declared under
 [Required production API](#required-production-api) are final for this
-implementation unless the document is updated in the same change that alters
-them.
+implementation unless an accepted design change updates this document and the
+affected implementation within the same maintainer-reviewed change or commit
+series.
 
 An implementation session must not rely on the previous design conversation
 or on files under `/home/tibor/cuni/dev/log_polar_retina`. All required
@@ -38,6 +39,147 @@ current code:
 
 The intentionally failing full-neuron spatial-frequency test is the only
 planned test failure. All other tests introduced by this work must pass.
+
+## Design changes during implementation
+
+Implementation may reveal that an approved requirement is feasible but no
+longer preferred. Such preference changes are permitted, but they must not be
+implemented as undocumented deviations from this document.
+
+### Unconstrained implementation details
+
+An implementation detail may change without a design amendment only when the
+change does not alter any requirement stated by this document, including:
+
+- public or required internal APIs;
+- configuration schemas or validation behavior;
+- numerical or scientific behavior;
+- coordinate conventions or units;
+- random-number consumption or seeded draw order;
+- MPI reproducibility;
+- legacy compatibility;
+- phase or stage ownership;
+- performance or memory requirements explicitly stated here;
+- tests, regression anchors, or acceptance criteria.
+
+Examples include private local-variable names, equivalent internal control
+flow, and private helper extraction that leaves all specified behavior
+unchanged.
+
+When it is unclear whether a detail is constrained, treat it as constrained
+until the impact has been reviewed.
+
+### Changes to approved requirements
+
+A change to an approved requirement must follow this procedure:
+
+1. Stop implementation of the affected requirement before implementing the
+   alternative.
+2. Record the proposed change under
+   [Implementation design change log](#implementation-design-change-log).
+3. Identify every affected normative section, production API, configuration
+   key, test, regression anchor, stage, and later-stage dependency.
+4. Decide whether to accept, reject, or defer the proposal.
+5. If accepted, update all affected normative sections so that the main body
+   describes one coherent current design.
+6. Update the relevant tests and acceptance criteria.
+7. Rerun every earlier stage or phase gate whose contract or observable
+   behavior may have changed.
+8. Resume dependent implementation only after the document no longer contains
+   unresolved contradictions.
+
+The implementation design change log records history and rationale. It does
+not override the normative body of this document. When a logged decision and
+the normative body disagree, implementation remains blocked until the
+normative text is reconciled.
+
+An unresolved proposal may remain open without blocking unrelated work only
+when its affected stages and dependencies are explicitly identified and none
+of them includes the current implementation work.
+
+### Impact analysis
+
+Every accepted or open design-change entry must explicitly check the following
+categories:
+
+- scientific assumptions and formulas;
+- API and configuration contracts;
+- coordinate systems, units, and domains;
+- cap semantics;
+- random streams and deterministic draw order;
+- MPI and cross-rank reproducibility;
+- legacy numerical compatibility;
+- Phase 1 contracts consumed by Phase 2;
+- test expectations and regression anchors;
+- memory and runtime behavior;
+- documentation elsewhere in this file.
+
+Writing only that downstream conflicts "should be checked" is insufficient.
+The entry must list the specific sections, stages, and tests examined,
+including an explicit statement when no impact was found.
+
+## Implementation design change log
+
+This log is append-only. Superseded requirements must still be removed or
+rewritten in the normative sections; retaining history here is not a reason to
+leave contradictory requirements in the main document.
+
+Use the following template for each proposed change:
+
+```text
+Change ID:
+Status: Proposed | Accepted | Rejected | Deferred
+Date:
+Discovered during stage:
+Requested by:
+Original requirement:
+Proposed change:
+Reason:
+Alternatives considered:
+Affected normative sections:
+Affected production APIs or configuration:
+Affected stages:
+Affected tests and regression anchors:
+Phase 1 / Phase 2 compatibility impact:
+Randomness or MPI impact:
+Scientific or numerical impact:
+Required acceptance-gate reruns:
+Normative sections reconciled: Yes | No | Not applicable
+Implementation may continue: Yes | No
+Resolution:
+```
+
+A proposal is accepted only after explicit maintainer approval. Codex may
+identify a discrepancy, propose alternatives, and edit this document when
+instructed, but it must not infer approval from implementation convenience.
+
+## Version-control ownership
+
+The human maintainer owns all version-control operations.
+
+Codex must not:
+
+- create, amend, squash, or delete commits;
+- create, switch, reset, rebase, or merge branches;
+- modify tags;
+- push, force-push, fetch, pull, or otherwise change a remote repository;
+- discard or overwrite unrelated working-tree changes.
+
+Codex may modify requested working-tree files, run tests, inspect diffs, and
+recommend logical commit boundaries. At each stage stopping point it must
+report:
+
+- files modified;
+- tests and commands run;
+- exact test outcomes;
+- unresolved design issues;
+- deviations proposed or accepted;
+- earlier acceptance gates that must be rerun;
+- a suggested division of the changes into human-created commits.
+
+A reference in this document to the "same change" or "same implementation
+chunk" means the same maintainer-reviewed working-tree change or commit series.
+It does not authorize Codex to create or publish commits.
 
 ## Two-phase implementation boundary
 
@@ -2789,5 +2931,7 @@ The following later scientific decisions are deliberately deferred:
 - whether the corrected luminance normalization should eventually become a
   separate general mode or replace legacy behavior in a future migration.
 
-Any change to these deferred decisions must update this document before or in
-the same implementation chunk.
+Any change to these deferred decisions must follow
+[Design changes during implementation](#design-changes-during-implementation).
+Dependent implementation must not begin until the accepted decision has been
+incorporated into the normative sections of this document.
