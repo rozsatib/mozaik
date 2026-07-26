@@ -153,6 +153,53 @@ A proposal is accepted only after explicit maintainer approval. Codex may
 identify a discrepancy, propose alternatives, and edit this document when
 instructed, but it must not infer approval from implementation convenience.
 
+```text
+Change ID: ECC-P1-S0-001
+Status: Accepted
+Date: 2026-07-26
+Discovered during stage: Phase 1 Stage 0
+Requested by: Human maintainer
+Original requirement: Record exact fixed-seed legacy LGN behavior for the
+single-process and two-rank acceptance matrix.
+Proposed change: Document that the separately recorded one-rank and two-rank
+post-presentation contrast-tail hashes reflect a known bug in the PyNN version
+used by the current Mozaik. If a later PyNN version fixes the bug, retain both
+anchors until the human maintainer explicitly identifies which legacy
+recording is valid.
+Reason: A backend fix may make the rank-count-specific hashes converge between
+implementation stages, but that does not itself determine which historical
+recording is the required compatibility target.
+Alternatives considered: Silently choose the result produced by the newer
+backend; accept either hash; remove or normalize the contrast-tail anchor.
+All were rejected because they would relax or redefine the legacy boundary
+without maintainer approval.
+Affected normative sections: Acceptance criteria and tolerances / Gabor,
+connectivity, and legacy behavior; Implementation sequence / Stage 0.
+Affected production APIs or configuration: None.
+Affected stages: Stage 0 and every later Phase 1 or Phase 2 stage that reruns
+the legacy LGN acceptance anchors.
+Affected tests and regression anchors:
+tests/models/vision/test_legacy_lgn_regression.py one-rank and two-rank
+post-presentation contrast-response SHA-256 fixtures.
+Phase 1 / Phase 2 compatibility impact: Both phases must retain the separately
+recorded anchors unless the maintainer explicitly selects the valid legacy
+recording after a PyNN fix.
+Randomness or MPI impact: The known difference is rank-count-specific. Seeded
+positions, kernels, luminance responses, and injected-current traces remain
+separately covered and are not relaxed by this clarification.
+Scientific or numerical impact: None; this records an existing backend bug and
+does not change LGN formulas, currents, or scientific behavior.
+Required acceptance-gate reruns: After a PyNN change affecting the bug, rerun
+the Stage 0 one-rank and two-rank legacy LGN tests. After the maintainer selects
+the valid recording, rerun every already completed later-stage gate that
+checks legacy LGN behavior.
+Normative sections reconciled: Yes
+Implementation may continue: Yes
+Resolution: Accepted by explicit maintainer instruction. A future agent must
+stop for an explicit user decision if the PyNN fix changes these anchors and
+must not relax, replace, normalize, or delete them independently.
+```
+
 ## Version-control ownership
 
 The human maintainer owns all version-control operations.
@@ -2644,6 +2691,13 @@ the design conversation.
   nearest existing regression test; if none exists, record and justify backend
   precision before choosing one. No legacy tolerance may be loosened as part
   of this work.
+- The Phase 1 Stage 0 post-presentation contrast-response tail has separate
+  one-rank and two-rank SHA-256 anchors because of a known bug in the PyNN
+  version used by the current Mozaik. If a later PyNN version fixes that bug,
+  do not infer a new compatibility target from the changed output. Stop and
+  obtain explicit user instruction identifying which recorded legacy result
+  is valid. Until then, do not relax, replace, normalize, or delete either
+  anchor.
 - All existing tests must pass unchanged. The new passing eccentricity suite
   must pass in full before running the deliberately unfinished SF
   characterization.
@@ -2771,6 +2825,12 @@ Stages 0 through 4 constitute Phase 1. Stages 5 through 7 constitute Phase 2.
   lists to the regression anchors.
 - Do not make a phase's production changes until that phase's regression
   anchors exist.
+- The Stage 0 one-rank and two-rank post-presentation contrast-tail hashes are
+  intentionally distinct records of a known PyNN bug. A future PyNN fix does
+  not authorize an agent to select one, make the assertion accept both, or
+  regenerate the expected value. The agent must stop and obtain explicit user
+  instruction defining the valid legacy recording before continuing with an
+  affected stage.
 
 Phase 1 exit criterion: legacy LGN behavior can be compared exactly after
 every later stage. Phase 2 extends that criterion to cortical behavior.
