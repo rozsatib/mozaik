@@ -6,7 +6,8 @@ This document is the implementation anchor for an optional
 eccentricity-dependent visual topography in Mozaik.
 
 The design has been reviewed at the architectural and scientific-assumption
-level. Implementation has not started. The work is split by
+level. Implementation is in progress: Phase 1 Stages 0 and 1 are complete,
+and Stage 2 has not started. The work is split by
 [Two-phase implementation boundary](#two-phase-implementation-boundary), with
 the smaller stages listed in [Implementation sequence](#implementation-sequence).
 This document prevents later stages or Phase 2 from silently changing
@@ -2817,6 +2818,9 @@ Stages 0 through 4 constitute Phase 1. Stages 5 through 7 constitute Phase 2.
 
 ### Stage 0: legacy characterization
 
+Phase 1 status: complete. The Phase 2 extension remains part of the Phase 2
+acceptance gate.
+
 - Before Phase 1 production changes, capture deterministic legacy LGN counts,
   positions, kernels, currents, stimulus resolution, and relevant
   single-process/MPI behavior.
@@ -2836,6 +2840,8 @@ Phase 1 exit criterion: legacy LGN behavior can be compared exactly after
 every later stage. Phase 2 extends that criterion to cortical behavior.
 
 ### Stage 1: mathematical provider
+
+Status: complete.
 
 - Add the production topography module.
 - Port density, cap, and RF-size formulas.
