@@ -9,6 +9,7 @@ import os.path
 import pickle
 import mozaik
 import numbers
+from decimal import Decimal, ROUND_FLOOR
 from pyNN import space
 from mozaik.models.vision import cai97
 from mozaik.models.vision.topography import RadiallySymmetricLGNTopography
@@ -25,6 +26,38 @@ from dataclasses import dataclass
 import copy
 
 logger = mozaik.getMozaikLogger()
+
+
+_CAI97_RF_NUMERIC_PARAMETERS = (
+    "Ac",
+    "As",
+    "K1",
+    "K2",
+    "c1",
+    "c2",
+    "n1",
+    "n2",
+    "t1",
+    "t2",
+    "td",
+    "sigma_c",
+    "sigma_s",
+)
+
+
+def _round_down_to_two_significant_digits(value):
+    """Round a positive finite value downward to two significant digits."""
+
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, numbers.Real)
+        or not numpy.isfinite(value)
+        or value <= 0.0
+    ):
+        raise ValueError("value must be positive and finite")
+    decimal_value = Decimal(str(value))
+    quantum = Decimal(1).scaleb(decimal_value.adjusted() - 1)
+    return float(decimal_value.quantize(quantum, rounding=ROUND_FLOOR))
 
 
 def _sample_lgn_positions(topography, number, rng):
@@ -333,9 +366,7 @@ class CellWithReceptiveField(object):
         # do the separation there in a different way - multiplicatively, where
         # the partial kernels themselves change with luminance and contrast
         rf = self.receptive_field
-        assert (
-            rf.kernel.shape[0] == rf.kernel.shape[1]
-        ), "With the current implementation, receptive fields must be symmetric!"
+        self._validate_receptive_field_shape(rf.kernel.shape)
         # Luminance component is the spatial mean of the kernel
         rf.kernel_luminance_component = rf.kernel.mean(axis=(0, 1))
         # Contrast component is the remaining part of the kernel
@@ -368,6 +399,11 @@ class CellWithReceptiveField(object):
         self.starting_luminance_kernel_state = self.starting_luminance * (
             kernel_cumsum[-1] - kernel_cumsum[:-1]
         )
+
+    def _validate_receptive_field_shape(self, kernel_shape):
+        assert (
+            kernel_shape[0] == kernel_shape[1]
+        ), "With the current implementation, receptive fields must be symmetric!"
 
     def initialize(self, stimulus_duration):
         r"""
@@ -522,6 +558,13 @@ class CellWithReceptiveField(object):
                 luminance=kernel_response.luminance[-kdur:].copy(),
             )
         return {"times": time_points, "amplitudes": response}
+
+
+class EccentricityDependentCellWithReceptiveField(CellWithReceptiveField):
+    """Per-cell eccentricity RF path, including rectangular scaled support."""
+
+    def _validate_receptive_field_shape(self, kernel_shape):
+        pass
 
 
 class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
@@ -750,6 +793,12 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                     self.parameters.original_2024_lgn_mode,
                 )
                 self.input_cells[rf_type].append(cell)
+
+    @property
+    def visual_space_resolution_deg(self):
+        """Return the configured legacy visual-space pixel size in degrees."""
+
+        return self.parameters.receptive_field.spatial_resolution
 
     def process_input(self, visual_space, stimulus, duration=None, offset=0):
         r"""
@@ -1083,7 +1132,7 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                     size_y=self.model.visual_field.size_y,
                 )
                 im = visual_space.view(
-                    visual_region, pixel_size=self.rf["X_ON"].spatial_resolution
+                    visual_region, pixel_size=self.visual_space_resolution_deg
                 )
             else:
                 im = None
@@ -1126,8 +1175,9 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
 class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
     """Fixed-count eccentricity-dependent LGN population.
 
-    Phase 1 Stage 2 establishes the global ON/OFF positions and current-source
-    infrastructure. Per-cell receptive fields are added in Stage 3.
+    Global ON/OFF positions are sampled independently, while each locally
+    owned relay cell receives a complete Cai97 kernel whose spatial scale is
+    derived from its eccentricity.
     """
 
     required_parameters = ParameterSet(
@@ -1188,6 +1238,7 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
     def __init__(self, model, parameters):
         SensoryInputComponent.__init__(self, model, parameters)
         self._validate_stage_2_parameters()
+        self._validate_receptive_field_parameters()
         if not hasattr(model, "visual_field"):
             raise ValueError(
                 "model.visual_field must exist before constructing eccentricity "
@@ -1247,6 +1298,7 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
             )
 
         self._initialize_noise_sources()
+        self._initialize_receptive_fields()
 
     def _validate_stage_2_parameters(self):
         number = self.parameters.number_per_polarity
@@ -1284,6 +1336,52 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
             ):
                 raise ValueError(f"{name} must be positive and finite")
 
+    def _validate_receptive_field_parameters(self):
+        receptive_field = self.parameters.receptive_field
+        try:
+            rf_function = eval(receptive_field.func)
+        except (AttributeError, NameError, SyntaxError, TypeError) as exc:
+            raise ValueError(
+                "eccentricity-dependent LGN input requires "
+                "receptive_field.func to resolve to cai97.stRF_2d"
+            ) from exc
+        if rf_function is not cai97.stRF_2d:
+            raise ValueError(
+                "eccentricity-dependent LGN input supports only cai97.stRF_2d"
+            )
+
+        function_parameters = receptive_field.func_params
+        missing = [
+            name
+            for name in (*_CAI97_RF_NUMERIC_PARAMETERS, "subtract_mean")
+            if name not in function_parameters
+        ]
+        if missing:
+            raise ValueError(
+                "Cai97 receptive_field.func_params is missing required "
+                f"parameters: {missing}"
+            )
+        for name in _CAI97_RF_NUMERIC_PARAMETERS:
+            value = function_parameters[name]
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, numbers.Real)
+                or not numpy.isfinite(value)
+            ):
+                raise ValueError(
+                    f"receptive_field.func_params.{name} must be finite"
+                )
+        for name in ("sigma_c", "sigma_s"):
+            if function_parameters[name] <= 0.0:
+                raise ValueError(
+                    f"receptive_field.func_params.{name} must be positive and finite"
+                )
+        if function_parameters.subtract_mean is not False:
+            raise ValueError(
+                "eccentricity-dependent LGN input requires "
+                "receptive_field.func_params.subtract_mean=False"
+            )
+
     def _initialize_noise_sources(self):
         sim = self.model.sim
         for rf_type in self.rf_types:
@@ -1318,3 +1416,221 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                     self.ncs[rf_type].append(noise_source)
                 lgn_cell.inject(step_source)
                 lgn_cell.inject(noise_source)
+
+    def _initialize_receptive_fields(self):
+        receptive_field = self.parameters.receptive_field
+        function_parameters = receptive_field.func_params
+        reference_center_sigma = float(function_parameters.sigma_c)
+        reference_surround_sigma = float(function_parameters.sigma_s)
+
+        rf_parameters = OrderedDict()
+        all_center_sigmas = []
+        all_eccentricities = []
+        for rf_type in self.rf_types:
+            positions = self.sheets[rf_type].canonical_positions_deg
+            eccentricities = numpy.hypot(positions[0], positions[1])
+            center_sigmas = numpy.asarray(
+                self.topography.center_sigma_deg(eccentricities), dtype=float
+            )
+            scales = center_sigmas / reference_center_sigma
+            parameters = {
+                "eccentricities_deg": eccentricities,
+                "center_sigmas_deg": center_sigmas,
+                "surround_sigmas_deg": scales * reference_surround_sigma,
+                "scales": scales,
+                "widths_deg": scales * receptive_field.width,
+                "heights_deg": scales * receptive_field.height,
+            }
+            for values in parameters.values():
+                values.setflags(write=False)
+            rf_parameters[rf_type] = parameters
+            all_center_sigmas.append(center_sigmas)
+            all_eccentricities.append(eccentricities)
+        self._rf_parameters = rf_parameters
+
+        minimum_center_sigma = min(
+            float(numpy.min(values)) for values in all_center_sigmas
+        )
+        raw_resolution = (
+            minimum_center_sigma
+            / self.parameters.minimum_samples_per_center_sigma
+        )
+        self.visual_space_resolution_deg = (
+            _round_down_to_two_significant_digits(raw_resolution)
+        )
+        for center_sigmas in all_center_sigmas:
+            samples_per_sigma = center_sigmas / self.visual_space_resolution_deg
+            if numpy.any(
+                samples_per_sigma
+                + 1e-12
+                < self.parameters.minimum_samples_per_center_sigma
+            ):
+                raise AssertionError(
+                    "derived visual-space resolution violates the configured "
+                    "minimum samples per centre sigma"
+                )
+
+        temporal_samples = int(
+            numpy.ceil(
+                receptive_field.duration / receptive_field.temporal_resolution
+            )
+        )
+        global_shapes = []
+        estimated_local_bytes = 0
+        for rf_type in self.rf_types:
+            parameters = rf_parameters[rf_type]
+            horizontal_samples = numpy.ceil(
+                parameters["widths_deg"] / self.visual_space_resolution_deg
+            ).astype(int)
+            vertical_samples = numpy.ceil(
+                parameters["heights_deg"] / self.visual_space_resolution_deg
+            ).astype(int)
+            shapes = numpy.column_stack(
+                (
+                    vertical_samples,
+                    horizontal_samples,
+                    numpy.full(len(horizontal_samples), temporal_samples),
+                )
+            )
+            global_shapes.extend(map(tuple, shapes))
+            local_mask = self.sheets[rf_type].pop._mask_local
+            # CellWithReceptiveField retains both the quantized kernel and its
+            # complete contrast component.
+            estimated_local_bytes += int(
+                2
+                * numpy.sum(numpy.prod(shapes[local_mask], axis=1))
+                * numpy.dtype(float).itemsize
+            )
+
+        all_surround_sigmas = [
+            values["surround_sigmas_deg"] for values in rf_parameters.values()
+        ]
+        global_counts = {
+            rf_type: int(self.sheets[rf_type].pop.size)
+            for rf_type in self.rf_types
+        }
+        local_counts = {
+            rf_type: int(numpy.count_nonzero(self.sheets[rf_type].pop._mask_local))
+            for rf_type in self.rf_types
+        }
+        logger.info(
+            "Eccentricity LGN RF plan: E_max=%g deg; user cap=%s; "
+            "resolved mapping cap=%g deg; eccentricity range=[%g, %g] "
+            "deg; centre sigma range=[%g, %g] deg; surround sigma "
+            "range=[%g, %g] deg; resolution=%g deg/pixel; kernel shape "
+            "range=%s..%s; estimated local kernel/contrast memory=%.3f MiB; "
+            "global counts=%s; local counts=%s",
+            self.topography.max_eccentricity_deg,
+            self.topography.user_cap_eccentricity_deg,
+            self.topography._resolved_mapping_cap_eccentricity_deg,
+            min(float(numpy.min(values)) for values in all_eccentricities),
+            max(float(numpy.max(values)) for values in all_eccentricities),
+            min(float(numpy.min(values)) for values in all_center_sigmas),
+            max(float(numpy.max(values)) for values in all_center_sigmas),
+            min(float(numpy.min(values)) for values in all_surround_sigmas),
+            max(float(numpy.max(values)) for values in all_surround_sigmas),
+            self.visual_space_resolution_deg,
+            min(global_shapes),
+            max(global_shapes),
+            estimated_local_bytes / 2**20,
+            global_counts,
+            local_counts,
+        )
+
+        self.input_cells = OrderedDict()
+        rf_function = cai97.stRF_2d
+        for rf_type in self.rf_types:
+            self.input_cells[rf_type] = []
+            parameters = rf_parameters[rf_type]
+            positions = self.sheets[rf_type].canonical_positions_deg
+            for global_index in numpy.flatnonzero(
+                self.sheets[rf_type].pop._mask_local
+            ):
+                per_cell_parameters = copy.deepcopy(function_parameters)
+                per_cell_parameters.sigma_c = float(
+                    parameters["center_sigmas_deg"][global_index]
+                )
+                per_cell_parameters.sigma_s = float(
+                    parameters["surround_sigmas_deg"][global_index]
+                )
+                if rf_type == "X_ON":
+                    per_cell_function = rf_function
+                else:
+                    per_cell_function = (
+                        lambda x, y, t, p: -1.0 * rf_function(x, y, t, p)
+                    )
+                receptive_field_for_cell = SpatioTemporalReceptiveField(
+                    per_cell_function,
+                    per_cell_parameters,
+                    parameters["widths_deg"][global_index],
+                    parameters["heights_deg"][global_index],
+                    receptive_field.duration,
+                )
+                # TODO: Benchmark full per-cell kernels before choosing exact
+                # factorization, kernel banks, lazy/streaming allocation,
+                # recursive filtering, image pyramids, scale-space
+                # convolution, log-polar pretransformation, or
+                # scale-dependent stimulus resampling.
+                receptive_field_for_cell.quantize(
+                    self.visual_space_resolution_deg,
+                    self.visual_space_resolution_deg,
+                    receptive_field.temporal_resolution,
+                )
+                expected_shape = (
+                    int(
+                        numpy.ceil(
+                            parameters["heights_deg"][global_index]
+                            / self.visual_space_resolution_deg
+                        )
+                    ),
+                    int(
+                        numpy.ceil(
+                            parameters["widths_deg"][global_index]
+                            / self.visual_space_resolution_deg
+                        )
+                    ),
+                    temporal_samples,
+                )
+                if receptive_field_for_cell.kernel.shape != expected_shape:
+                    raise AssertionError(
+                        "per-cell RF quantization did not produce the "
+                        "documented ceil-derived kernel shape"
+                    )
+                self.input_cells[rf_type].append(
+                    EccentricityDependentCellWithReceptiveField(
+                        positions[0, global_index],
+                        positions[1, global_index],
+                        receptive_field_for_cell,
+                        self.parameters.gain_control,
+                        self.model.input_space,
+                        False,
+                    )
+                )
+
+    def process_input(self, visual_space, stimulus, duration=None, offset=0):
+        return SpatioTemporalFilterRetinaLGN.process_input(
+            self, visual_space, stimulus, duration, offset
+        )
+
+    def inject_currents(self, input_currents, duration=None, offset=0):
+        return SpatioTemporalFilterRetinaLGN.inject_currents(
+            self, input_currents, duration, offset
+        )
+
+    def calculate_null_input(self, duration=None):
+        return SpatioTemporalFilterRetinaLGN.calculate_null_input(self, duration)
+
+    def provide_null_input(self, visual_space, duration=None, offset=0):
+        return SpatioTemporalFilterRetinaLGN.provide_null_input(
+            self, visual_space, duration, offset
+        )
+
+    def calculate_kernel_responses(self, visual_space, duration):
+        return SpatioTemporalFilterRetinaLGN.calculate_kernel_responses(
+            self, visual_space, duration
+        )
+
+    def _calculate_input_currents(self, kernel_responses=None):
+        return SpatioTemporalFilterRetinaLGN._calculate_input_currents(
+            self, kernel_responses
+        )

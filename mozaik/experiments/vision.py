@@ -19,7 +19,7 @@ class VisualExperiment(Experiment):
     r"""
     Visual experiment. On top of Experiment class it defines a new variable background_luminance, 
     that it sets to be the background luminance of the model's input space, and new variable density
-    which is set to over the spatial_resolution of the input layer's receptive field spatial resolution.
+    which is the reciprocal of the input layer's visual-space resolution.
     All experiments in the visual sensory domain should be derived from this class.
     
     Parameters
@@ -47,7 +47,9 @@ class VisualExperiment(Experiment):
       
         #JAHACK: This is kind of a hack now. There needs to be generally defined interface of what is the spatial and temporal resolution of a visual input layer
         # possibly in the future we could force the visual_space to have resolution, perhaps something like native_resolution parameter!?
-        self.density  = 1/self.model.input_layer.parameters.receptive_field.spatial_resolution # in pixels per degree of visual space 
+        self.density = (
+            1 / self.model.input_layer.visual_space_resolution_deg
+        )  # in pixels per degree of visual space
         self.frame_duration = self.model.input_space.parameters.update_interval # in pixels per degree of visual space 
 
         self.generate_stimuli()

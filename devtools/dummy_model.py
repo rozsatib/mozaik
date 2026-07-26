@@ -15,12 +15,14 @@ class DummyModel:
         self.input_space.parameters.update_interval = frame_duration
         self.input_layer = DummyObject(2)
         self.input_layer.parameters.receptive_field.spatial_resolution = 1 / density
+        self.input_layer.visual_space_resolution_deg = 1 / density
 
 
 class DummyObject:
     """
     Optionally recursive dummy object, to mimic specific structure of the model,
-    such as input_layer.parameters.receptive_field.spatial_resolution
+    such as input_layer.parameters.receptive_field.spatial_resolution and the
+    common input_layer.visual_space_resolution_deg property
     """
 
     def __init__(self, recursion_level=0):

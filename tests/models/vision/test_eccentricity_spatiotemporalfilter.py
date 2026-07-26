@@ -1,4 +1,4 @@
-"""Phase 1 Stage 2 tests for eccentricity-dependent LGN positions."""
+"""Phase 1 Stage 2/3 tests for eccentricity-dependent LGN input."""
 
 import copy
 import hashlib
@@ -16,17 +16,23 @@ from scipy.integrate import quad
 from scipy.stats import chisquare, kstest
 
 from mozaik.models.vision.spatiotemporalfilter import (
+    EccentricityDependentCellWithReceptiveField,
     EccentricityDependentSpatioTemporalFilterRetinaLGN,
+    SpatioTemporalFilterRetinaLGN,
+    _round_down_to_two_significant_digits,
     _sample_lgn_positions,
 )
 from mozaik.models.vision.topography import RadiallySymmetricLGNTopography
+from mozaik.space import VisualSpace
 from mozaik.sheets.vision import ExplicitPositions
+from devtools.dummy_model import DummyModel
+from mozaik.experiments.vision import VisualExperiment
 from tests.models.vision.test_legacy_lgn_regression import LEGACY_MODEL_PARAMETERS
 
 
 RF_TYPES = ("X_ON", "X_OFF")
-PROBE_ARGUMENT = "--eccentricity-stage-2-probe"
-SIGNATURE_PREFIX = "ECCENTRICITY_STAGE_2_SIGNATURE="
+PROBE_ARGUMENT = "--eccentricity-stage-3-probe"
+SIGNATURE_PREFIX = "ECCENTRICITY_STAGE_3_SIGNATURE="
 
 
 def visual_field(size_x=16.0, size_y=20.0):
@@ -317,6 +323,11 @@ class TestEccentricityComponentConfiguration:
             "RetinalInhomogeneousDiskSheet",
             FakeSheet,
         )
+        monkeypatch.setattr(
+            EccentricityDependentSpatioTemporalFilterRetinaLGN,
+            "_initialize_receptive_fields",
+            lambda self: None,
+        )
         model = SimpleNamespace(sim=FakeSim(), visual_field=visual_field())
         retina = EccentricityDependentSpatioTemporalFilterRetinaLGN(
             model, eccentricity_parameters(number_per_polarity=3)
@@ -331,13 +342,389 @@ class TestEccentricityComponentConfiguration:
         assert retina.sheets["X_OFF"].topography is retina.topography
 
 
+def _rf_only_component(
+    positions_by_type,
+    cap_eccentricity=None,
+    minimum_samples=4.0,
+    width=6.0,
+    height=4.0,
+):
+    component = object.__new__(
+        EccentricityDependentSpatioTemporalFilterRetinaLGN
+    )
+    parameters = eccentricity_parameters(
+        number_per_polarity=positions_by_type["X_ON"].shape[1],
+        minimum_samples_per_center_sigma=minimum_samples,
+    )
+    parameters.topography.cap_eccentricity = cap_eccentricity
+    parameters.receptive_field.width = width
+    parameters.receptive_field.height = height
+    component.parameters = parameters
+    component.topography = provider(cap_eccentricity)
+    component.rf_types = RF_TYPES
+    component.sheets = {}
+    for rf_type in RF_TYPES:
+        positions = np.asarray(positions_by_type[rf_type], dtype=float)
+        component.sheets[rf_type] = SimpleNamespace(
+            canonical_positions_deg=positions,
+            pop=SimpleNamespace(
+                size=positions.shape[1],
+                _mask_local=np.ones(positions.shape[1], dtype=bool),
+            ),
+        )
+    component.model = SimpleNamespace(
+        input_space=VisualSpace(
+            ParameterSet(
+                {
+                    "update_interval": 7.0,
+                    "background_luminance": 45.0,
+                }
+            )
+        )
+    )
+    component._validate_stage_2_parameters()
+    component._validate_receptive_field_parameters()
+    component._initialize_receptive_fields()
+    return component
+
+
+class TestReceptiveFieldConfiguration:
+    @pytest.mark.parametrize(
+        "func",
+        [
+            "cai97.F_2d",
+            "not_a_receptive_field",
+        ],
+    )
+    def test_only_cai97_spatiotemporal_rf_is_supported(self, func):
+        component = object.__new__(
+            EccentricityDependentSpatioTemporalFilterRetinaLGN
+        )
+        component.parameters = eccentricity_parameters()
+        component.parameters.receptive_field.func = func
+
+        with pytest.raises(ValueError, match="cai97.stRF_2d"):
+            component._validate_receptive_field_parameters()
+
+    def test_subtract_mean_is_rejected(self):
+        component = object.__new__(
+            EccentricityDependentSpatioTemporalFilterRetinaLGN
+        )
+        component.parameters = eccentricity_parameters()
+        component.parameters.receptive_field.func_params.subtract_mean = True
+
+        with pytest.raises(ValueError, match="subtract_mean=False"):
+            component._validate_receptive_field_parameters()
+
+    @pytest.mark.parametrize(
+        "name,value,error",
+        [
+            ("Ac", np.nan, "Ac"),
+            ("K1", np.inf, "K1"),
+            ("sigma_c", 0.0, "sigma_c"),
+            ("sigma_s", -1.0, "sigma_s"),
+        ],
+    )
+    def test_cai97_parameters_must_be_finite_and_sigmas_positive(
+        self, name, value, error
+    ):
+        component = object.__new__(
+            EccentricityDependentSpatioTemporalFilterRetinaLGN
+        )
+        component.parameters = eccentricity_parameters()
+        component.parameters.receptive_field.func_params[name] = value
+
+        with pytest.raises(ValueError, match=error):
+            component._validate_receptive_field_parameters()
+
+    def test_missing_cai97_parameter_is_rejected(self):
+        component = object.__new__(
+            EccentricityDependentSpatioTemporalFilterRetinaLGN
+        )
+        component.parameters = eccentricity_parameters()
+        del component.parameters.receptive_field.func_params["td"]
+
+        with pytest.raises(ValueError, match="missing.*td"):
+            component._validate_receptive_field_parameters()
+
+
+class TestResolutionQuantization:
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            (0.151218, 0.15),
+            (0.1, 0.1),
+            (np.nextafter(0.1, 0.0), 0.099),
+            (np.nextafter(0.1, np.inf), 0.1),
+            (1.0, 1.0),
+            (np.nextafter(1.0, 0.0), 0.99),
+            (np.nextafter(1.0, np.inf), 1.0),
+            (0.001, 0.001),
+        ],
+    )
+    def test_rounds_down_at_decimal_boundaries(self, value, expected):
+        assert _round_down_to_two_significant_digits(value) == expected
+
+    @pytest.mark.parametrize("value", [0.0, -1.0, np.nan, np.inf, True])
+    def test_rounding_rejects_invalid_values(self, value):
+        with pytest.raises(ValueError, match="positive and finite"):
+            _round_down_to_two_significant_digits(value)
+
+    def test_smallest_actual_sigma_controls_resolution(self):
+        positions = {
+            "X_ON": np.array([[2.0, 4.0], [0.0, 0.0]]),
+            "X_OFF": np.array([[3.0, 5.0], [0.0, 0.0]]),
+        }
+        component = _rf_only_component(positions, minimum_samples=4.0)
+        expected_raw = component.topography.center_sigma_deg(2.0) / 4.0
+
+        assert component.visual_space_resolution_deg == (
+            _round_down_to_two_significant_digits(expected_raw)
+        )
+        for rf_type in RF_TYPES:
+            assert np.all(
+                component._rf_parameters[rf_type]["center_sigmas_deg"]
+                / component.visual_space_resolution_deg
+                >= 4.0 - 1e-12
+            )
+
+    def test_higher_sampling_requirement_reduces_pixel_size(self):
+        positions = {
+            "X_ON": np.array([[1.0], [0.0]]),
+            "X_OFF": np.array([[1.0], [0.0]]),
+        }
+        coarse = _rf_only_component(positions, minimum_samples=4.0)
+        fine = _rf_only_component(positions, minimum_samples=8.0)
+
+        assert fine.visual_space_resolution_deg < coarse.visual_space_resolution_deg
+        assert (
+            fine.input_cells["X_ON"][0].receptive_field.kernel.shape[0]
+            > coarse.input_cells["X_ON"][0].receptive_field.kernel.shape[0]
+        )
+
+    def test_higher_sampling_requirements_converge_complete_kernel_response(self):
+        positions = {
+            "X_ON": np.array([[1.0], [0.0]]),
+            "X_OFF": np.array([[1.0], [0.0]]),
+        }
+        complete_kernel_responses = []
+        for minimum_samples in (4.0, 8.0, 16.0):
+            component = _rf_only_component(
+                positions, minimum_samples=minimum_samples
+            )
+            complete_kernel_responses.append(
+                component.input_cells["X_ON"][0].receptive_field.kernel.sum()
+            )
+
+        coarse_change = abs(
+            complete_kernel_responses[1] - complete_kernel_responses[0]
+        )
+        fine_change = abs(
+            complete_kernel_responses[2] - complete_kernel_responses[1]
+        )
+        assert fine_change < coarse_change
+
+
+class TestPerCellReceptiveFields:
+    def test_sigmas_support_and_complete_kernels_follow_position(self, caplog):
+        caplog.set_level("INFO", logger="Mozaik")
+        positions = {
+            "X_ON": np.array([[0.0, 3.0], [0.0, 0.0]]),
+            "X_OFF": np.array([[0.0, 3.0], [0.0, 0.0]]),
+        }
+        component = _rf_only_component(positions)
+        reference = component.parameters.receptive_field.func_params
+
+        for rf_type in RF_TYPES:
+            cells = component.input_cells[rf_type]
+            assert len(cells) == 2
+            assert all(
+                isinstance(
+                    cell, EccentricityDependentCellWithReceptiveField
+                )
+                for cell in cells
+            )
+            for cell in cells:
+                rf = cell.receptive_field
+                eccentricity = np.hypot(cell.x, cell.y)
+                expected_center = component.topography.center_sigma_deg(
+                    eccentricity
+                )
+                expected_scale = expected_center / reference.sigma_c
+
+                np.testing.assert_allclose(
+                    rf.func_params.sigma_c,
+                    expected_center,
+                    rtol=1e-12,
+                    atol=1e-12,
+                )
+                np.testing.assert_allclose(
+                    rf.func_params.sigma_s,
+                    expected_scale * reference.sigma_s,
+                    rtol=1e-12,
+                    atol=1e-12,
+                )
+                np.testing.assert_allclose(
+                    rf.width,
+                    expected_scale * component.parameters.receptive_field.width,
+                    rtol=1e-12,
+                    atol=1e-12,
+                )
+                np.testing.assert_allclose(
+                    rf.height,
+                    expected_scale * component.parameters.receptive_field.height,
+                    rtol=1e-12,
+                    atol=1e-12,
+                )
+                assert rf.kernel.shape == (
+                    int(np.ceil(rf.height / component.visual_space_resolution_deg)),
+                    int(np.ceil(rf.width / component.visual_space_resolution_deg)),
+                    int(
+                        np.ceil(
+                            component.parameters.receptive_field.duration
+                            / component.parameters.receptive_field.temporal_resolution
+                        )
+                    ),
+                )
+                assert rf.func_params.Ac == reference.Ac
+                assert rf.func_params.As == reference.As
+                assert rf.func_params.K1 == reference.K1
+                assert rf.func_params.td == reference.td
+                assert rf.temporal_resolution == (
+                    component.parameters.receptive_field.temporal_resolution
+                )
+                assert cell.visual_region.size_x == rf.width
+                assert cell.visual_region.size_y == rf.height
+
+        for on_cell, off_cell in zip(
+            component.input_cells["X_ON"], component.input_cells["X_OFF"]
+        ):
+            assert on_cell.receptive_field is not off_cell.receptive_field
+            assert np.array_equal(
+                off_cell.receptive_field.kernel,
+                -on_cell.receptive_field.kernel,
+            )
+        assert "rf" not in component.__dict__
+        assert any(
+            "estimated local kernel/contrast memory" in record.getMessage()
+            for record in caplog.records
+        )
+
+    def test_explicit_cap_plateaus_center_surround_and_support(self):
+        positions = {
+            "X_ON": np.array([[0.0, 1.0, 3.0], [0.0, 0.0, 0.0]]),
+            "X_OFF": np.array([[0.0, 1.0, 3.0], [0.0, 0.0, 0.0]]),
+        }
+        component = _rf_only_component(positions, cap_eccentricity=2.0)
+
+        for rf_type in RF_TYPES:
+            parameters = component._rf_parameters[rf_type]
+            assert parameters["center_sigmas_deg"][0] == (
+                parameters["center_sigmas_deg"][1]
+            )
+            assert parameters["surround_sigmas_deg"][0] == (
+                parameters["surround_sigmas_deg"][1]
+            )
+            assert parameters["widths_deg"][0] == parameters["widths_deg"][1]
+            assert parameters["heights_deg"][0] == parameters["heights_deg"][1]
+            assert parameters["center_sigmas_deg"][2] > (
+                parameters["center_sigmas_deg"][1]
+            )
+
+    def test_uncapped_fixation_and_periphery_have_different_scales(self):
+        positions = {
+            "X_ON": np.array([[0.0, 4.0], [0.0, 0.0]]),
+            "X_OFF": np.array([[0.0, 4.0], [0.0, 0.0]]),
+        }
+        component = _rf_only_component(positions)
+        parameters = component._rf_parameters["X_ON"]
+
+        assert parameters["center_sigmas_deg"][0] < parameters["center_sigmas_deg"][1]
+        assert parameters["surround_sigmas_deg"][0] < (
+            parameters["surround_sigmas_deg"][1]
+        )
+        np.testing.assert_allclose(
+            parameters["surround_sigmas_deg"]
+            / parameters["center_sigmas_deg"],
+            component.parameters.receptive_field.func_params.sigma_s
+            / component.parameters.receptive_field.func_params.sigma_c,
+            rtol=1e-12,
+            atol=1e-12,
+        )
+        np.testing.assert_allclose(
+            parameters["widths_deg"] / parameters["center_sigmas_deg"],
+            np.full(
+                2,
+                component.parameters.receptive_field.width
+                / component.parameters.receptive_field.func_params.sigma_c,
+            ),
+            rtol=1e-12,
+            atol=1e-12,
+        )
+
+    def test_rf_near_disk_rim_keeps_rectangular_background_semantics(self):
+        positions = {
+            "X_ON": np.array([[7.99], [0.0]]),
+            "X_OFF": np.array([[7.99], [0.0]]),
+        }
+        component = _rf_only_component(positions)
+        cell = component.input_cells["X_ON"][0]
+        cell.initialize(7.0)
+        cell.view()
+
+        assert cell.va.shape == cell.receptive_field.kernel.shape[:2]
+        assert np.all(cell.va == component.model.input_space.background_luminance)
+        assert (
+            cell.visual_region.location_x + cell.visual_region.size_x / 2.0
+            > component.topography.max_eccentricity_deg
+        )
+
+
+class TestCommonVisualResolution:
+    def test_legacy_component_returns_configured_resolution(self):
+        component = object.__new__(SpatioTemporalFilterRetinaLGN)
+        component.parameters = ParameterSet(
+            copy.deepcopy(LEGACY_MODEL_PARAMETERS["sheets"]["retina_lgn"]["params"])
+        )
+        assert component.visual_space_resolution_deg == 0.1
+
+    def test_dummy_model_exposes_common_property(self):
+        model = DummyModel(
+            density=12.5,
+            background_luminance=45.0,
+            frame_duration=7.0,
+            size_x=8.0,
+            size_y=8.0,
+        )
+        assert model.input_layer.visual_space_resolution_deg == 0.08
+        assert model.input_layer.parameters.receptive_field.spatial_resolution == 0.08
+
+    def test_visual_experiment_reads_common_property(self):
+        class EmptyVisualExperiment(VisualExperiment):
+            def generate_stimuli(self):
+                self.stimuli = []
+
+        model = DummyModel(
+            density=20.0,
+            background_luminance=45.0,
+            frame_duration=7.0,
+            size_x=8.0,
+            size_y=8.0,
+        )
+        del model.input_layer.parameters.receptive_field.spatial_resolution
+        experiment = EmptyVisualExperiment(
+            model, ParameterSet({"shuffle_stimuli": False})
+        )
+        assert experiment.density == 20.0
+
+
 def _sha256_positions(positions):
     canonical = np.array(positions, dtype=np.dtype("<f8"), order="C", copy=True)
     canonical[canonical == 0.0] = 0.0
     return hashlib.sha256(canonical.tobytes()).hexdigest()
 
 
-def _collect_stage_2_signature():
+def _collect_stage_3_signature():
     import mozaik
     from mozaik.models import Model
     from mozaik.space import VisualRegion
@@ -362,7 +749,12 @@ def _collect_stage_2_signature():
         retina = EccentricityDependentSpatioTemporalFilterRetinaLGN(
             model, parameters.sheets.retina_lgn.params
         )
-        signature = {}
+        resolution = float(retina.visual_space_resolution_deg)
+        assert all(
+            rank_resolution == resolution
+            for rank_resolution in comm.allgather(resolution)
+        )
+        signature = {"visual_space_resolution_deg": resolution}
         hashes = {}
         for rf_type in RF_TYPES:
             sheet = retina.sheets[rf_type]
@@ -386,11 +778,43 @@ def _collect_stage_2_signature():
                 for rank_hash in comm.allgather(position_hash)
             )
             assert comm.allreduce(int(np.count_nonzero(sheet.pop._mask_local))) == 16
+            local_rf_parameters = []
+            local_index = 0
+            for global_index, is_local in enumerate(sheet.pop._mask_local):
+                if not is_local:
+                    continue
+                cell = retina.input_cells[rf_type][local_index]
+                rf = cell.receptive_field
+                local_rf_parameters.append(
+                    (
+                        global_index,
+                        {
+                            "center_sigma_deg": float(rf.func_params.sigma_c),
+                            "surround_sigma_deg": float(rf.func_params.sigma_s),
+                            "width_deg": float(rf.width),
+                            "height_deg": float(rf.height),
+                            "kernel_shape": list(rf.kernel.shape),
+                            "kernel_sha256": _sha256_positions(rf.kernel),
+                        },
+                    )
+                )
+                local_index += 1
+            gathered_rf_parameters = comm.gather(local_rf_parameters, root=0)
             hashes[rf_type] = position_hash
             signature[rf_type] = {
                 "count": int(sheet.pop.size),
                 "positions_sha256": position_hash,
             }
+            if comm.rank == 0:
+                global_rf_parameters = {}
+                for rank_parameters in gathered_rf_parameters:
+                    for global_index, rf_parameters in rank_parameters:
+                        assert global_index not in global_rf_parameters
+                        global_rf_parameters[global_index] = rf_parameters
+                assert sorted(global_rf_parameters) == list(range(16))
+                signature[rf_type]["rf_parameters"] = [
+                    global_rf_parameters[index] for index in range(16)
+                ]
         assert hashes["X_ON"] != hashes["X_OFF"]
         return signature if comm.rank == 0 else None
     finally:
@@ -416,7 +840,7 @@ def _run_probe(process_count):
         pytest.fail(
             "\n".join(
                 [
-                    f"Stage 2 LGN probe failed with {process_count} rank(s)",
+                    f"Stage 3 LGN probe failed with {process_count} rank(s)",
                     f"Return code: {result.returncode}",
                     "===== stdout =====",
                     result.stdout or "<empty>",
@@ -434,8 +858,11 @@ def _run_probe(process_count):
 
 def test_eccentricity_lgn_single_process_construction():
     signature = _run_probe(process_count=1)
+    assert signature["visual_space_resolution_deg"] > 0.0
     assert signature["X_ON"]["count"] == 16
     assert signature["X_OFF"]["count"] == 16
+    assert len(signature["X_ON"]["rf_parameters"]) == 16
+    assert len(signature["X_OFF"]["rf_parameters"]) == 16
     assert (
         signature["X_ON"]["positions_sha256"]
         != signature["X_OFF"]["positions_sha256"]
@@ -448,6 +875,6 @@ def test_eccentricity_lgn_positions_match_between_one_and_two_ranks():
 
 
 if __name__ == "__main__" and PROBE_ARGUMENT in sys.argv:
-    probe_signature = _collect_stage_2_signature()
+    probe_signature = _collect_stage_3_signature()
     if probe_signature is not None:
         print(SIGNATURE_PREFIX + json.dumps(probe_signature, sort_keys=True))
