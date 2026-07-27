@@ -121,6 +121,24 @@ base_stim_params = {
 }
 
 
+def test_receptive_field_quantization_preserves_ceil_sample_count():
+    pixel_size = 0.072
+    sample_count = 58
+    receptive_field = SpatioTemporalReceptiveField(
+        lambda x, y, t, parameters: np.zeros_like(x),
+        ParameterSet({}),
+        sample_count * pixel_size,
+        sample_count * pixel_size,
+        14.0,
+    )
+
+    # This product divided by pixel_size is 57.99999999999999 in float64.
+    assert int((sample_count * pixel_size) / pixel_size) == sample_count - 1
+    receptive_field.quantize(pixel_size, pixel_size, 7.0)
+
+    assert receptive_field.kernel.shape == (sample_count, sample_count, 2)
+
+
 class TestCellWithReceptiveField:
     receptive_field_on = None
     receptive_field_off = None

@@ -1,4 +1,4 @@
-"""Phase 1 Stage 2/3 tests for eccentricity-dependent LGN input."""
+"""Phase 1 Stage 2/3/4 tests for eccentricity-dependent LGN input."""
 
 import copy
 import hashlib
@@ -15,9 +15,13 @@ import pytest
 from scipy.integrate import quad
 from scipy.stats import chisquare, kstest
 
+from mozaik.models.vision import cai97
 from mozaik.models.vision.spatiotemporalfilter import (
+    CellWithReceptiveField,
     EccentricityDependentCellWithReceptiveField,
     EccentricityDependentSpatioTemporalFilterRetinaLGN,
+    KernelResponse,
+    SpatioTemporalReceptiveField,
     SpatioTemporalFilterRetinaLGN,
     _round_down_to_two_significant_digits,
     _sample_lgn_positions,
@@ -31,8 +35,8 @@ from tests.models.vision.test_legacy_lgn_regression import LEGACY_MODEL_PARAMETE
 
 
 RF_TYPES = ("X_ON", "X_OFF")
-PROBE_ARGUMENT = "--eccentricity-stage-3-probe"
-SIGNATURE_PREFIX = "ECCENTRICITY_STAGE_3_SIGNATURE="
+PROBE_ARGUMENT = "--eccentricity-stage-4-probe"
+SIGNATURE_PREFIX = "ECCENTRICITY_STAGE_4_SIGNATURE="
 
 
 def visual_field(size_x=16.0, size_y=20.0):
@@ -680,6 +684,451 @@ class TestPerCellReceptiveFields:
         )
 
 
+class _StaticVisualSpace:
+    def __init__(self, renderer=None, background_luminance=45.0):
+        self.update_interval = 7.0
+        self.background_luminance = background_luminance
+        self._renderer = renderer
+
+    def view(self, visual_region, pixel_size):
+        horizontal_samples = int(np.ceil(visual_region.size_x / pixel_size))
+        vertical_samples = int(np.ceil(visual_region.size_y / pixel_size))
+        width = horizontal_samples * pixel_size
+        height = vertical_samples * pixel_size
+        x = (
+            np.linspace(0.0, width - pixel_size, horizontal_samples)
+            + pixel_size / 2.0
+            - width / 2.0
+            + visual_region.location_x
+        )
+        y = (
+            np.linspace(0.0, height - pixel_size, vertical_samples)
+            + pixel_size / 2.0
+            - height / 2.0
+            + visual_region.location_y
+        )
+        x_grid, y_grid = np.meshgrid(x, y)
+        if self._renderer is None:
+            return np.full(
+                (vertical_samples, horizontal_samples),
+                self.background_luminance,
+            )
+        return self._renderer(x_grid, y_grid)
+
+
+def _scaled_eccentricity_cell(
+    scale,
+    rf_type,
+    pixel_size=0.00625,
+    support=0.6,
+    visual_space=None,
+):
+    parameters = eccentricity_parameters()
+    function_parameters = copy.deepcopy(
+        parameters.receptive_field.func_params
+    )
+    function_parameters.Ac = 1.0
+    function_parameters.As = 0.2
+    function_parameters.sigma_c = 0.1 * scale
+    function_parameters.sigma_s = 0.2 * scale
+    function_parameters.subtract_mean = False
+    rf_function = cai97.stRF_2d
+    if rf_type == "X_OFF":
+        rf_function = lambda x, y, t, p: -cai97.stRF_2d(x, y, t, p)
+    receptive_field = SpatioTemporalReceptiveField(
+        rf_function,
+        function_parameters,
+        support * scale,
+        support * scale,
+        70.0,
+    )
+    receptive_field.quantize(pixel_size, pixel_size, 7.0)
+    return EccentricityDependentCellWithReceptiveField(
+        0.0,
+        0.0,
+        receptive_field,
+        parameters.gain_control,
+        visual_space or _StaticVisualSpace(),
+        False,
+    )
+
+
+def _scaled_stimulus_metrics(cell, scale, stimulus_name):
+    rf = cell.receptive_field
+    vertical_samples, horizontal_samples = rf.kernel.shape[:2]
+    pixel_size = rf.spatial_resolution
+    width = horizontal_samples * pixel_size
+    height = vertical_samples * pixel_size
+    x = (
+        np.linspace(0.0, width - pixel_size, horizontal_samples)
+        + pixel_size / 2.0
+        - width / 2.0
+    )
+    y = (
+        np.linspace(0.0, height - pixel_size, vertical_samples)
+        + pixel_size / 2.0
+        - height / 2.0
+    )
+    x_grid, y_grid = np.meshgrid(x, y)
+    background = cell.background_luminance
+    if stimulus_name == "uniform":
+        image = np.full_like(x_grid, 1.5 * background)
+    elif stimulus_name == "gaussian":
+        image = background * (
+            1.0
+            + np.exp(
+                -(x_grid**2 + y_grid**2)
+                / (2.0 * (0.12 * scale) ** 2)
+            )
+        )
+    elif stimulus_name == "grating":
+        image = background * (
+            1.0 + np.cos(2.0 * np.pi * x_grid / (0.4 * scale))
+        )
+    else:
+        raise ValueError(stimulus_name)
+
+    direct = np.sum(rf.kernel * image[:, :, np.newaxis], axis=(0, 1))
+    contrast = np.dot(
+        rf.kernel_contrast_component,
+        image.reshape(-1) / background,
+    )
+    luminance = rf.kernel_luminance_component * np.mean(image)
+    combined = contrast + luminance
+    gain = cell.gain_control.non_linear_gain
+    current = cell.gain_function(
+        contrast, gain.contrast_gain, gain.contrast_scaler
+    ) + cell.gain_function(
+        luminance, gain.luminance_gain, gain.luminance_scaler
+    )
+    return {
+        "direct": float(np.max(np.abs(direct))),
+        "contrast": float(np.max(np.abs(contrast))),
+        "luminance": float(np.max(np.abs(luminance))),
+        "combined": float(np.max(np.abs(combined))),
+        "current": float(np.max(np.abs(current))),
+    }
+
+
+class TestEccentricityLuminanceCorrection:
+    def test_kernel_components_and_all_luminance_states_use_spatial_sum(self):
+        positions = {
+            "X_ON": np.array([[0.0], [0.0]]),
+            "X_OFF": np.array([[0.0], [0.0]]),
+        }
+        component = _rf_only_component(positions)
+
+        for rf_type in RF_TYPES:
+            cell = component.input_cells[rf_type][0]
+            rf = cell.receptive_field
+            spatial_sum = rf.kernel.sum(axis=(0, 1))
+            np.testing.assert_allclose(
+                rf.kernel_luminance_component,
+                spatial_sum,
+                rtol=1e-12,
+                atol=1e-12,
+            )
+            np.testing.assert_allclose(
+                rf.kernel_contrast_component.sum(axis=1),
+                0.0,
+                rtol=0.0,
+                atol=1e-12,
+            )
+            np.testing.assert_allclose(
+                cell.null_response.luminance,
+                spatial_sum.sum() * cell.background_luminance,
+                rtol=1e-12,
+                atol=1e-12,
+            )
+            kernel_cumsum = np.cumsum(spatial_sum)
+            np.testing.assert_allclose(
+                cell.starting_luminance_kernel_state,
+                cell.background_luminance
+                * (kernel_cumsum[-1] - kernel_cumsum[:-1]),
+                rtol=1e-12,
+                atol=1e-12,
+            )
+            np.testing.assert_allclose(
+                cell.luminance_step_response,
+                np.concatenate(
+                    [[0.0], cell.background_luminance * kernel_cumsum]
+                ),
+                rtol=1e-12,
+                atol=1e-12,
+            )
+
+            cell.initialize(14.0)
+            before_view = cell.kernel_response.luminance.copy()
+            cell.view()
+            np.testing.assert_allclose(
+                cell.kernel_response.luminance[: rf.kernel_duration]
+                - before_view[: rf.kernel_duration],
+                spatial_sum * cell.background_luminance,
+                rtol=1e-12,
+                atol=1e-12,
+            )
+            cell.response_current(cell.kernel_response)
+            carried_state = copy.deepcopy(cell.filter_state)
+            cell.initialize(14.0)
+            assert np.array_equal(
+                cell.kernel_response.contrast[: rf.kernel_duration],
+                carried_state.contrast,
+            )
+            assert np.array_equal(
+                cell.kernel_response.luminance[: rf.kernel_duration],
+                carried_state.luminance,
+            )
+
+    def test_blank_input_uses_corrected_luminance_step(self):
+        positions = {
+            "X_ON": np.array([[0.0], [0.0]]),
+            "X_OFF": np.array([[0.0], [0.0]]),
+        }
+        component = _rf_only_component(positions)
+        captured = {}
+        for rf_type in RF_TYPES:
+            cell = component.input_cells[rf_type][0]
+            original_response_current = cell.response_current
+
+            def capture_response(
+                response,
+                rf_type=rf_type,
+                original=original_response_current,
+            ):
+                captured[rf_type] = KernelResponse(
+                    contrast=response.contrast.copy(),
+                    luminance=response.luminance.copy(),
+                )
+                return original(response)
+
+            cell.response_current = capture_response
+
+        component.calculate_null_input(14.0)
+        for rf_type in RF_TYPES:
+            cell = component.input_cells[rf_type][0]
+            kernel_duration = cell.receptive_field.kernel_duration
+            num_frames = 2
+            response_length = num_frames + kernel_duration
+            initial = np.pad(
+                cell.starting_luminance_kernel_state,
+                (0, response_length - len(cell.starting_luminance_kernel_state)),
+            )
+            step_on = np.concatenate(
+                [
+                    cell.luminance_step_response[1:],
+                    np.full(num_frames, cell.luminance_steady_state),
+                ]
+            )
+            step_off = np.concatenate(
+                [
+                    np.zeros(num_frames),
+                    cell.luminance_step_response[1:kernel_duration],
+                ]
+            )
+            added = step_on[: response_length - 1] - step_off[: response_length - 1]
+            expected = initial + np.pad(added, (0, 1))
+            np.testing.assert_allclose(
+                captured[rf_type].luminance,
+                expected,
+                rtol=1e-12,
+                atol=1e-12,
+            )
+
+    def test_legacy_cell_keeps_bitwise_mean_luminance_kernel(self):
+        parameters = eccentricity_parameters()
+        function_parameters = copy.deepcopy(
+            parameters.receptive_field.func_params
+        )
+        receptive_field = SpatioTemporalReceptiveField(
+            cai97.stRF_2d,
+            function_parameters,
+            6.0,
+            6.0,
+            70.0,
+        )
+        receptive_field.quantize(0.1, 0.1, 7.0)
+        kernel = receptive_field.kernel.copy()
+        expected_mean = kernel.mean(axis=(0, 1))
+        expected_contrast = kernel - expected_mean
+        CellWithReceptiveField(
+            0.0,
+            0.0,
+            receptive_field,
+            parameters.gain_control,
+            _StaticVisualSpace(),
+            False,
+        )
+
+        assert np.array_equal(
+            receptive_field.kernel_luminance_component,
+            expected_mean,
+        )
+        assert np.array_equal(
+            receptive_field.kernel_contrast_component,
+            expected_contrast.reshape(-1, expected_contrast.shape[2]).T,
+        )
+
+    def test_geometric_rf_rescaling_is_response_invariant(
+        self, record_property
+    ):
+        scales = (0.5, 1.0, 2.0, 4.0)
+        stimulus_names = ("uniform", "gaussian", "grating")
+        pixel_size = 0.00625
+        boundary_free_window_size = 0.6 * max(scales) + 2.0 * pixel_size
+        metrics = {}
+        for rf_type in RF_TYPES:
+            for scale in scales:
+                cell = _scaled_eccentricity_cell(
+                    scale,
+                    rf_type,
+                    pixel_size=pixel_size,
+                )
+                assert (
+                    cell.receptive_field.func_params.sigma_c / pixel_size
+                    >= 8.0
+                )
+                assert (
+                    cell.visual_region.size_x + 2.0 * pixel_size
+                    <= boundary_free_window_size
+                )
+                assert (
+                    cell.visual_region.size_y + 2.0 * pixel_size
+                    <= boundary_free_window_size
+                )
+                for stimulus_name in stimulus_names:
+                    metrics[(rf_type, scale, stimulus_name)] = (
+                        _scaled_stimulus_metrics(
+                            cell, scale, stimulus_name
+                        )
+                    )
+
+        for rf_type in RF_TYPES:
+            for stimulus_name in stimulus_names:
+                reference = metrics[(rf_type, 1.0, stimulus_name)]
+                for scale in scales:
+                    actual = metrics[(rf_type, scale, stimulus_name)]
+                    for metric_name, reference_value in reference.items():
+                        relative_error = abs(
+                            actual[metric_name] - reference_value
+                        ) / max(abs(reference_value), 1e-12)
+                        record_property(
+                            (
+                                f"{rf_type}_{stimulus_name}_{metric_name}_"
+                                f"scale_{scale:g}_relative_error"
+                            ),
+                            relative_error,
+                        )
+                        assert relative_error <= 0.01
+
+    def test_corrected_current_change_is_reported_without_gain_compensation(
+        self, record_property
+    ):
+        corrected_cell = _scaled_eccentricity_cell(1.0, "X_ON")
+        corrected_rf = corrected_cell.receptive_field
+        legacy_rf = SpatioTemporalReceptiveField(
+            cai97.stRF_2d,
+            copy.deepcopy(corrected_rf.func_params),
+            corrected_rf.width,
+            corrected_rf.height,
+            corrected_rf.duration,
+        )
+        legacy_rf.quantize(
+            corrected_rf.spatial_resolution,
+            corrected_rf.spatial_resolution,
+            corrected_rf.temporal_resolution,
+        )
+        legacy_cell = CellWithReceptiveField(
+            0.0,
+            0.0,
+            legacy_rf,
+            corrected_cell.gain_control,
+            _StaticVisualSpace(),
+            False,
+        )
+
+        corrected_current = _scaled_stimulus_metrics(
+            corrected_cell, 1.0, "uniform"
+        )["current"]
+        legacy_current = _scaled_stimulus_metrics(
+            legacy_cell, 1.0, "uniform"
+        )["current"]
+        relative_change = abs(corrected_current - legacy_current) / max(
+            abs(legacy_current), 1e-12
+        )
+        record_property(
+            "corrected_vs_legacy_uniform_current_relative_change",
+            relative_change,
+        )
+        assert corrected_cell.gain_control is legacy_cell.gain_control
+        assert relative_change > 0.0
+
+    def test_support_truncation_is_reported_separately(self, record_property):
+        responses = {}
+        for support in (0.5, 0.6, 0.8):
+            cell = _scaled_eccentricity_cell(
+                1.0,
+                "X_ON",
+                support=support,
+            )
+            responses[support] = _scaled_stimulus_metrics(
+                cell, 1.0, "uniform"
+            )["direct"]
+        relative_deviation = abs(responses[0.5] - responses[0.8]) / abs(
+            responses[0.8]
+        )
+        record_property(
+            "support_truncation_relative_deviation",
+            relative_deviation,
+        )
+        assert relative_deviation > 0.0
+
+    def test_stimulus_boundary_effect_is_reported_separately(
+        self, record_property
+    ):
+        background = 45.0
+
+        def renderer(x_grid, y_grid):
+            inside_stimulus = (np.abs(x_grid) <= 0.35) & (
+                np.abs(y_grid) <= 0.35
+            )
+            pattern = background * (
+                1.0
+                + np.exp(
+                    -(x_grid**2 + y_grid**2)
+                    / (2.0 * 0.12**2)
+                )
+            )
+            return np.where(inside_stimulus, pattern, background)
+
+        visual_space = _StaticVisualSpace(renderer=renderer)
+        center_cell = _scaled_eccentricity_cell(
+            1.0, "X_ON", visual_space=visual_space
+        )
+        edge_cell = _scaled_eccentricity_cell(
+            1.0, "X_ON", visual_space=visual_space
+        )
+        edge_cell.x = 0.35
+        edge_cell.visual_region.location_x = 0.35
+
+        responses = []
+        for cell in (center_cell, edge_cell):
+            cell.initialize(7.0)
+            cell.view()
+            combined = (
+                cell.kernel_response.contrast
+                + cell.kernel_response.luminance
+            )
+            responses.append(float(np.max(np.abs(combined))))
+        relative_deviation = abs(responses[1] - responses[0]) / abs(
+            responses[0]
+        )
+        record_property(
+            "stimulus_boundary_relative_deviation",
+            relative_deviation,
+        )
+        assert relative_deviation > 0.0
+
+
 class TestCommonVisualResolution:
     def test_legacy_component_returns_configured_resolution(self):
         component = object.__new__(SpatioTemporalFilterRetinaLGN)
@@ -724,7 +1173,7 @@ def _sha256_positions(positions):
     return hashlib.sha256(canonical.tobytes()).hexdigest()
 
 
-def _collect_stage_3_signature():
+def _collect_stage_4_signature():
     import mozaik
     from mozaik.models import Model
     from mozaik.space import VisualRegion
@@ -795,6 +1244,12 @@ def _collect_stage_3_signature():
                             "height_deg": float(rf.height),
                             "kernel_shape": list(rf.kernel.shape),
                             "kernel_sha256": _sha256_positions(rf.kernel),
+                            "luminance_kernel_sha256": _sha256_positions(
+                                rf.kernel_luminance_component
+                            ),
+                            "contrast_kernel_sha256": _sha256_positions(
+                                rf.kernel_contrast_component
+                            ),
                         },
                     )
                 )
@@ -840,7 +1295,7 @@ def _run_probe(process_count):
         pytest.fail(
             "\n".join(
                 [
-                    f"Stage 3 LGN probe failed with {process_count} rank(s)",
+                    f"Stage 4 LGN probe failed with {process_count} rank(s)",
                     f"Return code: {result.returncode}",
                     "===== stdout =====",
                     result.stdout or "<empty>",
@@ -875,6 +1330,6 @@ def test_eccentricity_lgn_positions_match_between_one_and_two_ranks():
 
 
 if __name__ == "__main__" and PROBE_ARGUMENT in sys.argv:
-    probe_signature = _collect_stage_3_signature()
+    probe_signature = _collect_stage_4_signature()
     if probe_signature is not None:
         print(SIGNATURE_PREFIX + json.dumps(probe_signature, sort_keys=True))

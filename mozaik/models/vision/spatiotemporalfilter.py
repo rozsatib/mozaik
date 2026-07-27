@@ -182,9 +182,9 @@ class SpatioTemporalReceptiveField(object):
 
         """
         assert dx == dy  # For now, at least
-        nx = numpy.ceil(self.width / dx)
-        ny = numpy.ceil(self.height / dy)
-        nt = numpy.ceil(self.duration / dt)
+        nx = int(numpy.ceil(self.width / dx))
+        ny = int(numpy.ceil(self.height / dy))
+        nt = int(numpy.ceil(self.duration / dt))
         width = nx * dx
         height = ny * dy
         duration = nt * dt
@@ -194,8 +194,8 @@ class SpatioTemporalReceptiveField(object):
         # x = numpy.arange(0.0, width, dx)  + dx/2.0 - width/2.0
         # y = numpy.arange(0.0, height, dy) + dy/2.0 - height/2.0
 
-        x = numpy.linspace(0.0, width - dx, int(width / dx)) + dx / 2.0 - width / 2.0
-        y = numpy.linspace(0.0, height - dy, int(height / dy)) + dx / 2.0 - height / 2.0
+        x = numpy.linspace(0.0, width - dx, nx) + dx / 2.0 - width / 2.0
+        y = numpy.linspace(0.0, height - dy, ny) + dx / 2.0 - height / 2.0
 
         # t is the time at the beginning of each timestep
         t = numpy.arange(0.0, duration, dt)
@@ -367,10 +367,14 @@ class CellWithReceptiveField(object):
         # the partial kernels themselves change with luminance and contrast
         rf = self.receptive_field
         self._validate_receptive_field_shape(rf.kernel.shape)
-        # Luminance component is the spatial mean of the kernel
-        rf.kernel_luminance_component = rf.kernel.mean(axis=(0, 1))
-        # Contrast component is the remaining part of the kernel
-        rf.kernel_contrast_component = rf.kernel - rf.kernel_luminance_component
+        spatial_mean = rf.kernel.mean(axis=(0, 1))
+        rf.kernel_luminance_component = (
+            self._luminance_kernel_from_spatial_mean(
+                spatial_mean, rf.kernel.shape
+            )
+        )
+        # Contrast construction always subtracts the unchanged spatial mean.
+        rf.kernel_contrast_component = rf.kernel - spatial_mean
         # Reshape from space x space x time to space x time
         rf.kernel_contrast_component = rf.kernel_contrast_component.reshape(
             -1, numpy.shape(rf.kernel_contrast_component)[2]
@@ -404,6 +408,11 @@ class CellWithReceptiveField(object):
         assert (
             kernel_shape[0] == kernel_shape[1]
         ), "With the current implementation, receptive fields must be symmetric!"
+
+    def _luminance_kernel_from_spatial_mean(self, spatial_mean, kernel_shape):
+        """Return the legacy mean-normalized temporal luminance kernel."""
+
+        return spatial_mean
 
     def initialize(self, stimulus_duration):
         r"""
@@ -565,6 +574,11 @@ class EccentricityDependentCellWithReceptiveField(CellWithReceptiveField):
 
     def _validate_receptive_field_shape(self, kernel_shape):
         pass
+
+    def _luminance_kernel_from_spatial_mean(self, spatial_mean, kernel_shape):
+        """Return the temporal kernel produced by a full spatial sum."""
+
+        return spatial_mean * kernel_shape[0] * kernel_shape[1]
 
 
 class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
