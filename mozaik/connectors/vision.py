@@ -433,7 +433,9 @@ class CoCircularModularConnectorFunction(ModularConnectorFunction):
                     dy = numpy.sin(phi)*d   
                     pylab.plot([x+dx,x-dx],[y+dy,y-dy],c=color)
 	
-                idx = mozaik.rng.choice(numpy.arange(len(phi)), size=500)
+                idx = mozaik.simulation_rng.choice(
+                    numpy.arange(len(phi)), size=500
+                )
                 for i in idx:
                    plot_or(self.source.pop.positions[0][i],self.source.pop.positions[1][i],2*phi[i]-or_target,'k')
 
@@ -457,5 +459,4 @@ class CoCircularModularConnectorFunction(ModularConnectorFunction):
                 pylab.savefig(Global.root_directory+'aaa'+str(index)+'.png')
 
             return prob
-
 

@@ -82,9 +82,9 @@ class Model(BaseComponent):
         'max_delay' : float,
         'time_step' : float,
         'sheets' : ParameterSet, # can be none - in which case input_space_type is ignored
-        'mozaik_seed' : int,
-        'pynn_seed' : int,
-        'lgn_stepcurrentsource_noise_seed' : int,
+        'model_seed' : int,
+        'simulation_seed' : int,
+        'experiment_seed' : int,
         'explosion_monitoring': ParameterSet, # Can be None. Strucutured as follows:
                                               #            {
                                               #                 sheet_name : str,
@@ -97,21 +97,13 @@ class Model(BaseComponent):
         BaseComponent.__init__(self, self, parameters)
         self.first_time = True
         self.sim = sim
-        # Derive the NEST kernel RNG seed from pynn_seed + the LGN step-current noise offset, so
-        # the LGN step-current source produces a different noise realization per trial while
-        # connectivity (which uses mozaik.pynn_rng) is unaffected. When the offset is 0 we leave
-        # rng_seed unset, so the run is byte-identical to an un-seeded (upstream) run.
-        setup_kwargs = dict(
+        self.node = sim.setup(
             timestep=self.parameters.time_step,
             min_delay=self.parameters.min_delay,
             max_delay=self.parameters.max_delay,
             threads=num_threads,
+            rng_seed=self.parameters.simulation_seed,
         )
-        if mozaik.lgn_stepcurrentsource_noise_seed != 0:
-            setup_kwargs["rng_seed"] = (
-                self.parameters.pynn_seed + mozaik.lgn_stepcurrentsource_noise_seed
-            )
-        self.node = sim.setup(**setup_kwargs)
         self.sheets = OrderedDict()
         self.connectors = OrderedDict()
         self.num_threads = num_threads

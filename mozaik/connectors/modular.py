@@ -305,7 +305,7 @@ class ModularSamplingProbabilisticConnector(VariableNumSamplesConnector):
 
     def _connect(self):
         # Generates a splitted and of cells indices to be passed to each subprocesses
-        seeds = mozaik.get_seeds(len(self.target.pop))[numpy.nonzero(self.target.pop._mask_local)[0]]
+        seeds = mozaik.get_model_seeds(len(self.target.pop))[numpy.nonzero(self.target.pop._mask_local)[0]]
         splitted_seeds = numpy.array_split(seeds, int(self.model.num_threads))
         splitted_cell_indices = numpy.array_split(
             numpy.nonzero(self.target.pop._mask_local)[0], int(self.model.num_threads)
@@ -437,7 +437,10 @@ class ModularSingleWeightProbabilisticConnector(ModularConnector):
             weights = self._obtain_weights(i)
             delays = self._obtain_delays(i)
             conections_probabilities = weights/numpy.sum(weights)*self.parameters.connection_probability*len(weights)
-            connection_indices = numpy.flatnonzero(conections_probabilities > numpy.random.rand(len(conections_probabilities)))
+            connection_indices = numpy.flatnonzero(
+                conections_probabilities
+                > mozaik.model_rng.rand(len(conections_probabilities))
+            )
             cl.extend([(k,i,self.weight_scaler*self.parameters.base_weight.next(),delays[k]) for k in connection_indices])
 
         method = self.sim.FromListConnector(cl)
@@ -489,7 +492,7 @@ class ModularSamplingProbabilisticConnectorAnnotationSamplesCount(VariableNumSam
         cl = []
         v = 0
         # Generates a splitted and of cells indices to be passed to each subprocesses
-        seeds = mozaik.get_seeds(len(self.target.pop))[numpy.nonzero(self.target.pop._mask_local)[0]]
+        seeds = mozaik.get_model_seeds(len(self.target.pop))[numpy.nonzero(self.target.pop._mask_local)[0]]
 
         splitted_seeds = numpy.array_split(seeds, int(self.model.num_threads))
         splitted_cell_indices = numpy.array_split(

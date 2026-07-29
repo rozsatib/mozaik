@@ -18,7 +18,8 @@ from parameters import ParameterSet
 import copy
 from mozaik.models.vision.spatiotemporalfilter import KernelResponse
 import itertools
-import matplotlib.pyplot as plt
+
+PARAM_RNG = np.random.RandomState(1729)
 
 params = {
     "input_space_type": "mozaik.space.VisualSpace",
@@ -101,9 +102,9 @@ params = {
     "min_delay": 0.1,
     "max_delay": 100,
     "time_step": 0.1,
-    "pynn_seed": 936395,
-    "mozaik_seed": 1023,
-    "lgn_stepcurrentsource_noise_seed": 0,
+    "model_seed": 936395,
+    "simulation_seed": 1023,
+    "experiment_seed": 0,
     "explosion_monitoring": None,
     "steps_get_data": 0,
 }
@@ -185,8 +186,8 @@ class TestCellWithReceptiveField:
             original_2024_lgn_mode,
         )
 
-    @pytest.mark.parametrize("x", np.random.randint(0, 30, size=5))
-    @pytest.mark.parametrize("y", np.random.randint(0, 30, size=5))
+    @pytest.mark.parametrize("x", PARAM_RNG.randint(0, 30, size=5))
+    @pytest.mark.parametrize("y", PARAM_RNG.randint(0, 30, size=5))
     @pytest.mark.parametrize("on", [True, False])
     def test_impulse_response(self, x, y, on):
         """
@@ -375,10 +376,12 @@ class TestSpatioTemporalFilterRetinaLGN:
         visual_field_size=(7.0, 7.0),
         visual_field_center=(0.0, 0.0),
     ):
-        mozaik.setup_mpi(
-            parameters["mozaik_seed"],
-            parameters["pynn_seed"],
+        mozaik.setup_seeds(
+            model_seed=parameters["model_seed"],
+            simulation_seed=parameters["simulation_seed"],
+            experiment_seed=parameters["experiment_seed"],
         )
+        mozaik.setup_mpi()
 
         model = Model(nest, 2, parameters)
 

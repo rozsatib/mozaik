@@ -60,7 +60,7 @@ class VisualExperiment(Experiment):
         self.generate_stimuli()
 
         if self.parameters.shuffle_stimuli:
-            mozaik.rng.shuffle(self.stimuli)
+            mozaik.experiment_rng.shuffle(self.stimuli)
 
     def generate_stimuli(self):
         """

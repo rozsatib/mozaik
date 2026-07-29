@@ -327,19 +327,16 @@ def prepare_workflow(simulation_name, model_class):
 
     # First we load the parameters just to retrieve seeds. We will throw them away, because at this stage the PyNNDistribution values were not yet initialized correctly.
     parameters = load_parameters(parameters_url, model_modified_parameters)
-    p = OrderedDict()
-    if "mozaik_seed" in parameters:
-        p["mozaik_seed"] = parameters["mozaik_seed"]
-    if "pynn_seed" in parameters:
-        p["pynn_seed"] = parameters["pynn_seed"]
-    if "lgn_stepcurrentsource_noise_seed" in parameters:
-        p["lgn_stepcurrentsource_noise_seed"] = parameters[
-            "lgn_stepcurrentsource_noise_seed"
-        ]
+    mozaik.setup_seeds(
+        model_seed=parameters["model_seed"],
+        simulation_seed=parameters["simulation_seed"],
+        experiment_seed=parameters["experiment_seed"],
+        prevent_reinitialization=True,
+    )
 
-    # Now initialize mpi with the seeds
+    # Now initialize mpi
     print("START MPI")
-    mozaik.setup_mpi(**p)
+    mozaik.setup_mpi()
 
     # Now really load parameters
     print("Loading parameters")
@@ -592,7 +589,9 @@ def run_experiments(
 
     # Adding the state (represented by a randomly generated number) of the rng of every MPI process to the datastore
     if mozaik.mpi_comm:
-        rngs_state = mozaik.mpi_comm.gather(float(mozaik.rng.rand(1)), root=0)
+        rngs_state = mozaik.mpi_comm.gather(
+            float(mozaik.simulation_rng.rand(1)), root=0
+        )
         log = {"rngs_state": rngs_state, "explosion_detected": model_exploded}
     else:
         log = {"explosion_detected": model_exploded}
