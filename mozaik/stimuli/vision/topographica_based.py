@@ -1395,12 +1395,12 @@ class RadialGaborApparentMotion(GaborStimulus):
 
         if self.random:
             # Shuffle x, y, angles arrays identically
-            rng_state = np.random.get_state()
-            np.random.shuffle(x_pos.flat)
-            np.random.set_state(rng_state)
-            np.random.shuffle(y_pos.flat)
-            np.random.set_state(rng_state)
-            np.random.shuffle(angles_mat.flat)
+            permutation = mozaik.experiment_rng.permutation(x_pos.size)
+            x_pos = x_pos.reshape(-1)[permutation].reshape(x_pos.shape)
+            y_pos = y_pos.reshape(-1)[permutation].reshape(y_pos.shape)
+            angles_mat = angles_mat.reshape(-1)[permutation].reshape(
+                angles_mat.shape
+            )
 
         if self.centrifugal:
             # Reverse order of positions

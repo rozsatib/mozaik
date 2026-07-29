@@ -20,6 +20,7 @@ from numpy import pi
 from parameters import ParameterSet
 from quantities import Hz, rad, degrees, ms, dimensionless
 import mozaik.stimuli.vision.topographica_based as topo
+import mozaik
 from collections import namedtuple
 import pytest
 
@@ -719,6 +720,9 @@ default_apparent_motion = {
 
 class TestRadialGaborApparentMotion(TestGabor):
     num_tests = 100
+
+    def setup_method(self):
+        mozaik.experiment_rng = np.random.RandomState(0)
 
     def generate_frame_params(length=1):
         """

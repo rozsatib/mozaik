@@ -3,7 +3,6 @@ from parameters import ParameterSet
 import mozaik.stimuli.vision.topographica_based as topo
 import numpy
 import numpy as np
-import random
 import mozaik
 
 
@@ -575,7 +574,7 @@ class MeasureGaborFlashDuration(VisualExperiment):
                     self.parameters.step,
                 )
             ]
-            random.shuffle(trial_stims)
+            mozaik.experiment_rng.shuffle(trial_stims)
             self.stimuli.extend(trial_stims)
 
     def do_analysis(self, data_store):
@@ -1048,7 +1047,7 @@ class RunApparentMotionConfigurations(VisualExperiment):
                 )
 
             if self.parameters.random_order:
-                random.shuffle(trial_stims)
+                mozaik.experiment_rng.shuffle(trial_stims)
 
             self.stimuli.extend(trial_stims)
 
