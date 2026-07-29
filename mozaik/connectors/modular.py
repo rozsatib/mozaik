@@ -111,7 +111,11 @@ class ModularConnector(Connector):
         evaled = OrderedDict()
        
         for k in self.weight_function_names:
-            evaled[k] = self.weight_functions[k].evaluate(i) if not seed else self.weight_functions[k].evaluate(i,seed=seed)
+            evaled[k] = (
+                self.weight_functions[k].evaluate(i)
+                if seed is None
+                else self.weight_functions[k].evaluate(i, seed=seed)
+            )
         weights = numpy.zeros((self.source.pop.size,)) + eval(self.parameters.weight_expression,globals(),evaled)
         if not self.parameters.self_connections and self.target.name == self.source.name:
             weights[i] = 0
@@ -123,7 +127,11 @@ class ModularConnector(Connector):
         """
         evaled = OrderedDict()
         for k in self.delay_function_names:
-            evaled[k] = self.delay_functions[k].evaluate(i) if not seed else self.delay_functions[k].evaluate(i,seed=seed)
+            evaled[k] = (
+                self.delay_functions[k].evaluate(i)
+                if seed is None
+                else self.delay_functions[k].evaluate(i, seed=seed)
+            )
         
         delays = numpy.zeros((self.source.pop.size,)) + eval(self.parameters.delay_expression,globals(),evaled)
         delays = numpy.rint(delays / self.simulator_time_step) * self.simulator_time_step
