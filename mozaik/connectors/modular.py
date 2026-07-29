@@ -433,19 +433,50 @@ class ModularSingleWeightProbabilisticConnector(ModularConnector):
 
     def _connect(self):
         cl = []
-        for i in numpy.nonzero(self.target.pop._mask_local)[0]:
-            weights = self._obtain_weights(i)
-            delays = self._obtain_delays(i)
+        local_target_indices = numpy.nonzero(self.target.pop._mask_local)[0]
+        target_seeds = mozaik.get_model_seeds(self.target.pop.size)
+
+        for i in local_target_indices:
+            seed = target_seeds[i]
+            weights = self._obtain_weights(i, seed)
+            delays = self._obtain_delays(i, seed)
             conections_probabilities = weights/numpy.sum(weights)*self.parameters.connection_probability*len(weights)
+            rng = numpy.random.RandomState(seed)
             connection_indices = numpy.flatnonzero(
                 conections_probabilities
-                > mozaik.model_rng.rand(len(conections_probabilities))
+                > rng.rand(len(conections_probabilities))
             )
-            cl.extend([(k,i,self.weight_scaler*self.parameters.base_weight.next(),delays[k]) for k in connection_indices])
+            connection_weights = self.parameters.base_weight.copy(seed).next(
+                len(connection_indices)
+            )
+            cl.extend(
+                [
+                    (
+                        k,
+                        i,
+                        self.weight_scaler * connection_weights[j],
+                        delays[k],
+                    )
+                    for j, k in enumerate(connection_indices)
+                ]
+            )
 
         method = self.sim.FromListConnector(cl)
-        logger.warning("%s: %g %g",self.name,min(conections_probabilities),max(conections_probabilities))
-        logger.warning("%s: %d connections  [,%g,%g,%g]",self.name,len(cl),self.parameters.connection_probability,numpy.sum(weights),len(weights))
+        if len(local_target_indices) > 0:
+            logger.warning(
+                "%s: %g %g",
+                self.name,
+                min(conections_probabilities),
+                max(conections_probabilities),
+            )
+            logger.warning(
+                "%s: %d connections  [,%g,%g,%g]",
+                self.name,
+                len(cl),
+                self.parameters.connection_probability,
+                numpy.sum(weights),
+                len(weights),
+            )
         
         if len(cl) > 0:
             self.proj = self.sim.Projection(
