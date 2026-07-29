@@ -432,8 +432,8 @@ class CoCircularModularConnectorFunction(ModularConnectorFunction):
                     dx = numpy.cos(phi)*d
                     dy = numpy.sin(phi)*d   
                     pylab.plot([x+dx,x-dx],[y+dy,y-dy],c=color)
-	
-                idx = mozaik.simulation_rng.choice(
+
+                idx = mozaik.model_rng.choice(
                     numpy.arange(len(phi)), size=500
                 )
                 for i in idx:
