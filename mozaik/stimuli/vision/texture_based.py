@@ -12,7 +12,6 @@ import param
 from imagen.image import BoundingBox
 import pickle
 import numpy
-import mozaik
 from mozaik.tools.mozaik_parametrized import SNumber, SString, SInteger
 from mozaik.tools.units import cpd
 from mozaik.controller import Global
@@ -178,9 +177,7 @@ class VictorUninformativeSyntheticStimulus(VisualStimulus):
         fieldsize_x = self.size_x * self.density
         fieldsize_y = self.size_y * self.density
         pixel_spatial_frequency = int(self.spatial_frequency * self.density)
-        rng = numpy.random.RandomState(
-            int(self.seed) ^ int(mozaik.experiment_rng.randint(2**32 - 1))
-        )
+        rng = numpy.random.RandomState(int(self.seed))
         im = numpy.zeros((int(fieldsize_x), int(fieldsize_y)))
 
         for y in range(0,int(fieldsize_y),pixel_spatial_frequency):
@@ -234,9 +231,7 @@ class VictorInformativeSyntheticStimulus(VisualStimulus):
         fieldsize_x = self.size_x * self.density
         fieldsize_y = self.size_y * self.density
         pixel_spatial_frequency = int(self.spatial_frequency * self.density)
-        rng = numpy.random.RandomState(
-            int(self.seed) ^ int(mozaik.experiment_rng.randint(2**32 - 1))
-        )
+        rng = numpy.random.RandomState(int(self.seed))
         im = numpy.zeros((int(fieldsize_x), int(fieldsize_y)))
 
         for y in range(0,int(fieldsize_y),pixel_spatial_frequency):

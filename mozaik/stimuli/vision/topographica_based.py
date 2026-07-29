@@ -1327,6 +1327,7 @@ class RadialGaborApparentMotion(GaborStimulus):
     symmetric = SNumber(dimensionless, doc = "Boolean string - if True, draw a centrally symmetric pair for each patch.")
     surround_gabor_orientation_radial = SNumber(dimensionless, doc = "Boolean string - if True, the orientation of surround Gabor patches is radial, otherwise tangential.")
     random = SNumber(dimensionless, default=False, doc = "Boolean string - if True, random shuffle the locations and flash times of Gabor patches.")
+    random_seed = SNumber(dimensionless, doc="Seed used to shuffle Gabor locations and flash times. Required when random is True.")
     flash_center = SNumber(dimensionless, doc = "Boolean string, flash in center or not")
     centrifugal = SNumber(dimensionless, default=False, doc = "Boolean string - if True, patches move out from the center, rather than towards it.")
     identifier = SString(default="", doc="Stimulus identifier, can be used for grouping stimuli at the analysis stage.")
@@ -1395,7 +1396,13 @@ class RadialGaborApparentMotion(GaborStimulus):
 
         if self.random:
             # Shuffle x, y, angles arrays identically
-            permutation = mozaik.experiment_rng.permutation(x_pos.size)
+            if self.random_seed is None:
+                raise ValueError(
+                    "RadialGaborApparentMotion.random_seed is required "
+                    "when random is True"
+                )
+            rng = numpy.random.RandomState(int(self.random_seed))
+            permutation = rng.permutation(x_pos.size)
             x_pos = x_pos.reshape(-1)[permutation].reshape(x_pos.shape)
             y_pos = y_pos.reshape(-1)[permutation].reshape(y_pos.shape)
             angles_mat = angles_mat.reshape(-1)[permutation].reshape(

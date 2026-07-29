@@ -1039,6 +1039,9 @@ class RunApparentMotionConfigurations(VisualExperiment):
                     params["end_angle"] += np.pi / 2
                 elif c2 == "RND":
                     params["random"] = True
+                    params["random_seed"] = int(
+                        mozaik.experiment_rng.randint(2**32 - 1)
+                    )
                 elif c2 == "CF":
                     params["centrifugal"] = True
                 params["identifier"] = configuration

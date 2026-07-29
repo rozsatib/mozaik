@@ -1866,7 +1866,9 @@ class MeasureInformativePixelCorrelationStatisticsResponse(VisualExperiment):
                             spatial_frequency=self.parameters.spatial_frequency/2,
                             pixel_statistics = value,
                             correlation_type = i,
-                            seed = 523+5113*(i+1))
+                            seed=int(
+                                mozaik.experiment_rng.randint(2**32 - 1)
+                            ))
                     self.stimuli.append(im)
 
     def do_analysis(self, data_store):
@@ -1928,7 +1930,9 @@ class MeasureUninformativePixelCorrelationStatisticsResponse(VisualExperiment):
                             spatial_frequency=self.parameters.spatial_frequency/2,
                             pixel_statistics = value,
                             correlation_type = i,
-                            seed = 523+5113*(i+1))
+                            seed=int(
+                                mozaik.experiment_rng.randint(2**32 - 1)
+                            ))
                     self.stimuli.append(im)
 
     def do_analysis(self, data_store):
