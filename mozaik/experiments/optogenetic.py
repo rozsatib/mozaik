@@ -248,12 +248,12 @@ class SingleOptogeneticArrayStimulus(CorticalStimulationWithOptogeneticArray):
 
     def __init__(self, model, parameters):
         CorticalStimulationWithOptogeneticArray.__init__(self, model, parameters)
-        self.parameters.stimulator_array_parameters[
-            "stimulating_signal"
-        ] = self.parameters.stimulating_signal
-        self.parameters.stimulator_array_parameters[
-            "stimulating_signal_parameters"
-        ] = self.parameters.stimulating_signal_parameters
+        self.parameters.stimulator_array_parameters["stimulating_signal"] = (
+            self.parameters.stimulating_signal
+        )
+        self.parameters.stimulator_array_parameters["stimulating_signal_parameters"] = (
+            self.parameters.stimulating_signal_parameters
+        )
 
         self.append_direct_stim(model, self.parameters.stimulator_array_parameters)
 
@@ -365,9 +365,9 @@ class OptogeneticArrayStimulusCircles(CorticalStimulationWithOptogeneticArray):
     def __init__(self, model, parameters):
         CorticalStimulationWithOptogeneticArray.__init__(self, model, parameters)
         sap = self.parameters.stimulator_array_parameters
-        sap[
-            "stimulating_signal"
-        ] = "mozaik.sheets.direct_stimulator.stimulating_pattern_flash"
+        sap["stimulating_signal"] = (
+            "mozaik.sheets.direct_stimulator.stimulating_pattern_flash"
+        )
         sap["stimulating_signal_parameters"] = ParameterSet(
             {
                 "shape": "circle",
@@ -492,9 +492,9 @@ class OptogeneticArrayStimulusHexagonalTiling(CorticalStimulationWithOptogenetic
     def __init__(self, model, parameters):
         CorticalStimulationWithOptogeneticArray.__init__(self, model, parameters)
         sap = self.parameters.stimulator_array_parameters
-        sap[
-            "stimulating_signal"
-        ] = "mozaik.sheets.direct_stimulator.stimulating_pattern_flash"
+        sap["stimulating_signal"] = (
+            "mozaik.sheets.direct_stimulator.stimulating_pattern_flash"
+        )
         sap["stimulating_signal_parameters"] = ParameterSet(
             {
                 "shape": "hexagon",
@@ -669,9 +669,9 @@ class OptogeneticArrayImageStimulus(CorticalStimulationWithOptogeneticArray):
     def __init__(self, model, parameters):
         CorticalStimulationWithOptogeneticArray.__init__(self, model, parameters)
         sap = self.parameters.stimulator_array_parameters
-        sap[
-            "stimulating_signal"
-        ] = "mozaik.sheets.direct_stimulator.stimulating_pattern_flash"
+        sap["stimulating_signal"] = (
+            "mozaik.sheets.direct_stimulator.stimulating_pattern_flash"
+        )
         sap["stimulating_signal_parameters"] = ParameterSet(
             {
                 "shape": "image",
@@ -801,9 +801,9 @@ class OptogeneticArrayStimulusOrientationTuningProtocol(
         self.parameters["sheet_intensity_scaler"] = [1 for s in sl]
         self.parameters["sheet_transfection_proportion"] = [1 for s in sl]
         sap = self.parameters.stimulator_array_parameters
-        sap[
-            "stimulating_signal"
-        ] = "mozaik.sheets.direct_stimulator.stimulating_pattern_flash"
+        sap["stimulating_signal"] = (
+            "mozaik.sheets.direct_stimulator.stimulating_pattern_flash"
+        )
         sap["stimulating_signal_parameters"] = ParameterSet(
             {
                 "shape": "or_map",
@@ -959,9 +959,9 @@ class OptogeneticArrayStimulusContrastBasedOrientationTuningProtocol(
         self.parameters["sheet_intensity_scaler"] = [1 for s in sl]
         self.parameters["sheet_transfection_proportion"] = [1 for s in sl]
         sap = self.parameters.stimulator_array_parameters
-        sap[
-            "stimulating_signal"
-        ] = "mozaik.sheets.direct_stimulator.stimulating_pattern_flash"
+        sap["stimulating_signal"] = (
+            "mozaik.sheets.direct_stimulator.stimulating_pattern_flash"
+        )
         sap["stimulating_signal_parameters"] = ParameterSet(
             {
                 "shape": "or_map",
@@ -1106,9 +1106,9 @@ class OptogeneticArrayStimulusCircleWithFullfieldSquareGrating(VisualExperiment)
         CorticalStimulationWithOptogeneticArray.__init__(self, model, parameters)
 
         sap = self.parameters.stimulator_array_parameters
-        sap[
-            "stimulating_signal"
-        ] = "mozaik.sheets.direct_stimulator.stimulating_pattern_flash"
+        sap["stimulating_signal"] = (
+            "mozaik.sheets.direct_stimulator.stimulating_pattern_flash"
+        )
         sap["stimulating_signal_parameters"] = ParameterSet(
             {
                 "shape": "circle",
