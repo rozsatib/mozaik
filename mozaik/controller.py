@@ -321,9 +321,10 @@ def prepare_workflow(simulation_name, model_class):
         modified_parameters,
     ) = parse_workflow_args()
 
-    model_modified_parameters, experiment_modified_parameters = (
-        split_modified_parameters(modified_parameters)
-    )
+    (
+        model_modified_parameters,
+        experiment_modified_parameters,
+    ) = split_modified_parameters(modified_parameters)
 
     # First we load the parameters just to retrieve seeds. We will throw them away, because at this stage the PyNNDistribution values were not yet initialized correctly.
     parameters = load_parameters(parameters_url, model_modified_parameters)
@@ -573,9 +574,13 @@ def run_experiments(
             duration=parameters.null_stimulus_period,
             frame_duration=parameters.null_stimulus_period,
         )
-        segments, null_segments, input_stimulus, last_blank_run_time, _ = (
-            model.present_stimulus_and_record(s, ds)
-        )
+        (
+            segments,
+            null_segments,
+            input_stimulus,
+            last_blank_run_time,
+            _,
+        ) = model.present_stimulus_and_record(s, ds)
         data_store.add_recording(segments, s)
         data_store.add_stimulus(input_stimulus, s)
         data_store.add_direct_stimulation(ds, s)

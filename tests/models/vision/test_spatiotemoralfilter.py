@@ -266,7 +266,6 @@ class TestCellWithReceptiveField:
 
 
 class TestSpatioTemporalFilterRetinaLGN:
-
     @classmethod
     def setup_class(cls):
         from pyNN import nest

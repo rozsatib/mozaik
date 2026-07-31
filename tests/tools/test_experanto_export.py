@@ -46,7 +46,8 @@ class _DSV:
 def _reconstruct(spikes, spike_indices):
     """Split the flat spikes array back into per-unit arrays via the CSR indices."""
     return [
-        spikes[spike_indices[i] : spike_indices[i + 1]] for i in range(len(spike_indices) - 1)
+        spikes[spike_indices[i] : spike_indices[i + 1]]
+        for i in range(len(spike_indices) - 1)
     ]
 
 
@@ -106,9 +107,18 @@ def test_trial_export_format_and_spikes_identical(tmp_path):
 def test_custom_group_and_name_keys(tmp_path):
     # Group by a string "phase" (exercises the non-int equality path) and name by "label".
     segs = [
-        _Seg({"phase": "A", "label": "s1", "duration": 100}, [np.array([10.0]), np.array([])]),
-        _Seg({"phase": "B", "label": "s2", "duration": 100}, [np.array([11.0]), np.array([])]),
-        _Seg({"phase": "A", "label": "s3", "duration": 100}, [np.array([12.0]), np.array([])]),
+        _Seg(
+            {"phase": "A", "label": "s1", "duration": 100},
+            [np.array([10.0]), np.array([])],
+        ),
+        _Seg(
+            {"phase": "B", "label": "s2", "duration": 100},
+            [np.array([11.0]), np.array([])],
+        ),
+        _Seg(
+            {"phase": "A", "label": "s3", "duration": 100},
+            [np.array([12.0]), np.array([])],
+        ),
     ]
     out = str(tmp_path / "responses")
     exp = MozaikTrialExporter(
