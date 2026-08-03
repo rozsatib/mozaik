@@ -1,12 +1,14 @@
 import pickle
 import pytest
 import numpy as np
+import quantities as qt
 from copy import deepcopy
 from mozaik.models import Model
 from parameters import ParameterSet
 from mozaik.sheets.vision import VisualCorticalUniformSheet3D
 from mozaik.tools.distribution_parametrization import (
     load_parameters,
+    PyNNDistribution,
     MozaikExtendedParameterSet,
 )
 from mozaik.connectors.vision import MapDependentModularConnectorFunction
@@ -14,6 +16,10 @@ from mozaik.tools.circ_stat import circular_dist
 import scipy.stats
 import pathlib
 from mozaik.experiments.optogenetic import *
+import mozaik
+
+test_dir = None
+PARAM_RNG = np.random.RandomState(1729)
 
 
 @pytest.fixture(scope="class")
@@ -21,10 +27,15 @@ def test_env(request):
     from pyNN import nest
     import mozaik
 
-    mozaik.setup_mpi(mozaik_seed=1024, pynn_seed=1024)
     test_dir = str(pathlib.Path(__file__).parent.parent)
 
     model_params = load_parameters(test_dir + "/sheets/model_params")
+    mozaik.setup_seeds(
+        model_seed=model_params["model_seed"],
+        simulation_seed=model_params["simulation_seed"],
+        experiment_seed=model_params["experiment_seed"],
+    )
+    mozaik.setup_mpi()
 
     sheet_params = load_parameters(test_dir + "/sheets/exc_sheet_params")
     sheet_params.min_depth = 100
@@ -70,17 +81,6 @@ def test_env(request):
 
 @pytest.mark.usefixtures("test_env")
 class TestCorticalStimulationWithOptogeneticArray:
-
-    def plot(self, ds):
-        import matplotlib.pyplot as plt
-
-        pos = self.sheet.pop.positions[0:2, :]
-        plt.scatter(pos[0, :], pos[1, :])
-        print(pos[:, np.argmin(np.sum(pos**2, axis=0))])
-        plt.axis("equal")
-        plt.xlim(-0.01, 0.01)
-        plt.ylim(-0.01, 0.01)
-        plt.show()
 
     def get_coords(self, neuron_ids):
         ac = np.array(list(self.sheet.pop.all()))
@@ -148,8 +148,8 @@ class TestSingleOptogeneticArrayStimulus(TestCorticalStimulationWithOptogeneticA
     def c2a(self, c):
         return int((c + self.opt_array_params.size / 2) / self.opt_array_params.spacing)
 
-    @pytest.mark.parametrize("x", np.random.randint(-10, 10, 7) * 20)
-    @pytest.mark.parametrize("y", np.random.randint(-10, 10, 7) * 20)
+    @pytest.mark.parametrize("x", PARAM_RNG.randint(-10, 10, 7) * 20)
+    @pytest.mark.parametrize("y", PARAM_RNG.randint(-10, 10, 7) * 20)
     def test_random_pixels(self, x, y):
         size, spacing = self.opt_array_params.size, self.opt_array_params.spacing
         assert size == 400 and spacing == 20

@@ -10,7 +10,7 @@ from collections import OrderedDict
 from mozaik.sheets.direct_stimulator import OpticalStimulatorArrayChR
 import matplotlib
 from copy import deepcopy
-import random
+import mozaik
 from mozaik import load_component
 
 
@@ -476,7 +476,7 @@ class OptogeneticArrayStimulusHexagonalTiling(CorticalStimulationWithOptogenetic
         hc = sorted(list(set(map(tuple, hc))))
 
         if shuffle == True:
-            random.shuffle(hc)
+            mozaik.experiment_rng.shuffle(hc)
         return hc
 
 

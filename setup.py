@@ -41,6 +41,7 @@ setup(
                    'Operating System :: OS Independent',
                    'Programming Language :: Python',
                    'Topic :: Scientific/Engineering'],
+    install_requires=['PyYAML'],
     data_files=data_files_list,
 
 )

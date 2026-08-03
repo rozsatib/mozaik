@@ -2,6 +2,7 @@ import pickle
 import pytest
 import numpy as np
 import quantities as qt
+from copy import deepcopy
 from mozaik.models import Model
 from parameters import ParameterSet
 from mozaik.sheets.vision import VisualCorticalUniformSheet3D
@@ -15,8 +16,12 @@ from unittest.mock import Mock
 from neo.core import AnalogSignal
 from mozaik.tools.distribution_parametrization import (
     load_parameters,
+    PyNNDistribution,
     MozaikExtendedParameterSet,
 )
+
+test_dir = None
+PARAM_RNG = np.random.RandomState(1729)
 
 
 class TestDirectStimulator:
@@ -47,6 +52,12 @@ def test_env(request):
 
     model_params = load_parameters(test_dir + "/sheets/model_params")
     model_params.null_stimulus_period = 200
+    mozaik.setup_seeds(
+        model_seed=model_params["model_seed"],
+        simulation_seed=model_params["simulation_seed"],
+        experiment_seed=model_params["experiment_seed"],
+    )
+    mozaik.setup_mpi()
 
     sheet_params = load_parameters(test_dir + "/sheets/exc_sheet_params")
     sheet_params.min_depth = 100
@@ -87,10 +98,9 @@ def test_env(request):
 @pytest.mark.usefixtures("test_env")
 class TestOpticalStimulatorArrayChR:
 
-    def create_unity_radprof(self, h=4, w=424):
+    def create_unity_radprof(self, h=20, w=100):
         radprof = np.zeros((h, w))
-        # radprof[:, :5] = 1
-        radprof[:, :5] = 1
+        radprof[:, 0] = 1
         f = open(self.test_dir + "/sheets/unity_radprof.pickle", "wb")
         pickle.dump(radprof, f)
         f.close()
@@ -147,7 +157,7 @@ class TestOpticalStimulatorArrayChR:
             - cls.sheet_params["cell"]["params"]["v_rest"] * qt.mV
         )
 
-    @pytest.mark.parametrize("A", [np.random.rand(50, 50, 10) for i in range(5)])
+    @pytest.mark.parametrize("A", [PARAM_RNG.rand(50, 50, 10) for i in range(5)])
     def test_compress_decompress(self, A):
         self.create_unity_radprof()
         A_compressed = self.ds.compress_array(A)
@@ -175,9 +185,9 @@ class TestOpticalStimulatorArrayChR:
             else:
                 assert dj < 1e-11, "Nonzero input to neuron not in stimulated_cells!"
 
-    @pytest.mark.parametrize("onset_time", np.random.randint(0, 250, 4))
-    @pytest.mark.parametrize("stim_duration", np.random.randint(0, 50, 4))
-    @pytest.mark.parametrize("time_after_offset", np.random.randint(0, 250, 4))
+    @pytest.mark.parametrize("onset_time", PARAM_RNG.randint(0, 250, 4))
+    @pytest.mark.parametrize("stim_duration", PARAM_RNG.randint(0, 50, 4))
+    @pytest.mark.parametrize("time_after_offset", PARAM_RNG.randint(0, 250, 4))
     def test_duration_independence(self, onset_time, stim_duration, time_after_offset):
         offset_time = onset_time + stim_duration
         duration = offset_time + time_after_offset

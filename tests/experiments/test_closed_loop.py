@@ -50,9 +50,14 @@ def _make_opto_model(recording_variables, test_dir, closed_loop):
     from pyNN import nest
     import mozaik
 
-    mozaik.setup_mpi(mozaik_seed=1024, pynn_seed=1024)
     model_params = load_parameters(test_dir + "/sheets/model_params")
     model_params.reset = True
+    mozaik.setup_seeds(
+        model_seed=model_params["model_seed"],
+        simulation_seed=model_params["simulation_seed"],
+        experiment_seed=model_params["experiment_seed"],
+    )
+    mozaik.setup_mpi()
 
     sheet_params = load_parameters(test_dir + "/sheets/exc_sheet_params")
     sheet_params.min_depth = 100

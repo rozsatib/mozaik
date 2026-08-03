@@ -1341,6 +1341,7 @@ class RadialGaborApparentMotion(GaborStimulus):
     symmetric = SNumber(dimensionless, doc = "Boolean string - if True, draw a centrally symmetric pair for each patch.")
     surround_gabor_orientation_radial = SNumber(dimensionless, doc = "Boolean string - if True, the orientation of surround Gabor patches is radial, otherwise tangential.")
     random = SNumber(dimensionless, default=False, doc = "Boolean string - if True, random shuffle the locations and flash times of Gabor patches.")
+    random_seed = SNumber(dimensionless, doc="Seed used to shuffle Gabor locations and flash times. Required when random is True.")
     flash_center = SNumber(dimensionless, doc = "Boolean string, flash in center or not")
     centrifugal = SNumber(dimensionless, default=False, doc = "Boolean string - if True, patches move out from the center, rather than towards it.")
     identifier = SString(default="", doc="Stimulus identifier, can be used for grouping stimuli at the analysis stage.")
@@ -1409,12 +1410,18 @@ class RadialGaborApparentMotion(GaborStimulus):
 
         if self.random:
             # Shuffle x, y, angles arrays identically
-            rng_state = np.random.get_state()
-            np.random.shuffle(x_pos.flat)
-            np.random.set_state(rng_state)
-            np.random.shuffle(y_pos.flat)
-            np.random.set_state(rng_state)
-            np.random.shuffle(angles_mat.flat)
+            if self.random_seed is None:
+                raise ValueError(
+                    "RadialGaborApparentMotion.random_seed is required "
+                    "when random is True"
+                )
+            rng = numpy.random.RandomState(int(self.random_seed))
+            permutation = rng.permutation(x_pos.size)
+            x_pos = x_pos.reshape(-1)[permutation].reshape(x_pos.shape)
+            y_pos = y_pos.reshape(-1)[permutation].reshape(y_pos.shape)
+            angles_mat = angles_mat.reshape(-1)[permutation].reshape(
+                angles_mat.shape
+            )
 
         if self.centrifugal:
             # Reverse order of positions
@@ -1610,44 +1617,68 @@ class PixelMovieFromFile(TopographicaBasedVisualStimulus):
             yield (image(), [frame])
             self.time += self.frame_duration
 
-class GaussianSinusoid(VisualStimulus):
+
+class PixelMovieExperanto(TopographicaBasedVisualStimulus):
     """
+    A visual stimulus that consists of a movie that is loaded from a file, where it is stored as a 3D numpy matrix (npy), 
+    with the first axis the time, and 2nd and 3rd axis the visual field. The individual frames are presented one by one 
+    for the self.frame_duration. The stimulus is assumed to have pixel values in the interval [0,1].
+
+    For now we only support suqare stimuli.
     """
-    x = SNumber(degrees, doc="x coordinate of the center Gabor patch")
-    y = SNumber(degrees, doc="y coordinate of the center Gabor patch")
-    sigma = SNumber(degrees, doc="Standard deviation of the Gaussian")
-    relative_luminance_amplitude = SNumber(dimensionless, doc="Ratio of the gaussian luminance amplitude to the background luminance")
-    temporal_frequency = SNumber(dimensionless, doc="Temporal frequency of luminance change")
+    size = SNumber(degrees, doc="The length of the longer axis of the image in visual degrees")
+    movie_path = SString(doc="Path to the image file.")
+    movie_name = SString(doc="Name of the image file.")
+    condition_hash = SString(doc="Condition hash of stimulus")
+    movie_frame_duration = SNumber(ms, doc="Image + blank screen display duration.")
+    frame_offset = SNumber(ms, doc="The offset at which to start presenting frames.")
+    x_location = SNumber(degrees, default=0., doc="The x location of the center of the movie stimulus.")
+    y_location = SNumber(degrees, default=0., doc="The y location of the center of the movie stimulus.")
+    video_max_value = SNumber(dimensionless, default=1.0, doc="The maximum pixel value in the video file.")
+
+    # we will chaceh the loaded files in case many stimuli access frames from the same file
+    cache = {}
+
+    def __init__(self, **params):
+        TopographicaBasedVisualStimulus.__init__(self, **params)
+
+        import os
+
+        # Check if file was already loaded earlier as in the cache. If yes use it. If not load it and insert it in the cache.
+        p = os.path.join(self.movie_path,self.movie_name)
+        if p in PixelMovieExperanto.cache.keys():
+            self.mc = PixelMovieExperanto.cache[p]
+        else:
+            with open(p, 'rb') as f:
+                self.mc = numpy.load(f)
+                if len(self.mc.shape) == 2:
+                    # print(">>>>>>>>>>>>>>>>>>>>>>>>>>> Got an image")
+                    # if only one frame is present, we need to add a time axis
+                    self.mc = self.mc[numpy.newaxis,:,:]
+                PixelMovieExperanto.cache[p] = self.mc/self.video_max_value  # normalizing the pixel values to [0,1]
+
+        # assert self.mc.shape[1] == self.mc.shape[2], "The spatial shape of the pixel movie has to be square"
+        assert ( self.duration <= self.movie_frame_duration * (len(self.mc)-self.frame_offset)), "The duration of the total stimulus has to be less than number of frames in the movie remaining after the offset times the movie frame duration."
+        assert ( self.movie_frame_duration % self.frame_duration == 0), "The duration of single movie frame has to be multiple of the frame duration of the input space."
 
     def frames(self):
-        blank = imagen.Constant(
-            scale=self.background_luminance,
-            bounds=BoundingBox(radius=self.size_x / 2),
-            xdensity=self.density,
-            ydensity=self.density,
-        )()
-
-        for i in range(int(self.duration / self.frame_duration)):
-            if self.temporal_frequency == 0:
-                relative_luminance = self.relative_luminance_amplitude
-            else:
-                t = i * self.frame_duration / 1000
-                relative_luminance = (
-                    self.relative_luminance_amplitude
-                    * np.sin(2 * np.pi * self.temporal_frequency * t)
-                ) / 2 + 0.5
-            frame = imagen.Gaussian(
-                scale=self.background_luminance * relative_luminance,
-                size=self.sigma * 2,
-                aspect_ratio=1,
-                x=self.x,
-                y=self.y,
-                bounds=BoundingBox(radius=self.size_x / 2),
-                xdensity=self.density,
-                ydensity=self.density,
-            )()
-            frame += blank
-            yield (frame, [1])
+        self.time = 0
 
         while True:
-            yield (blank, [0])
+            frame = int(math.floor(self.time/self.movie_frame_duration) + self.frame_offset)
+            image = NDArrayImage(         
+                                self.mc[frame],
+                                x=self.x_location,
+                                y=self.y_location,
+                                orientation=0,
+                                xdensity=self.density,
+                                ydensity=self.density,
+                                size=self.size,
+                                bounds=BoundingBox(points=((-self.size_x/2, -self.size_y/2),
+                                                            (self.size_x/2, self.size_y/2))),
+                                scale=2*self.background_luminance,
+                                pattern_sampler= imagen.image.PatternSampler(size_normalization="fit_longest",whole_pattern_output_fns=[MaximumDynamicRange()]))
+            
+            yield (image(), [frame])
+
+            self.time += self.frame_duration

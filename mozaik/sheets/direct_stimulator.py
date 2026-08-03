@@ -200,14 +200,14 @@ class BackgroundActivityBombardment(DirectStimulator):
         else:
             if (self.parameters.exc_firing_rate != 0 or self.parameters.exc_weight != 0):
                         self.ssae = self.sheet.sim.Population(self.sheet.pop.size,self.sheet.sim.SpikeSourceArray())
-                        seeds=mozaik.get_seeds((self.sheet.pop.size,))
-                        self.stgene = [StGen(rng=numpy.random.RandomState(seed=seeds[i])) for i in numpy.nonzero(self.sheet.pop._mask_local)[0]]
+                        seeds=mozaik.get_simulation_seeds((self.sheet.pop.size,))
+                        self.stgene = [StGen(seed=seeds[i]) for i in numpy.nonzero(self.sheet.pop._mask_local)[0]]
                         self.sheet.sim.Projection(self.ssae, self.sheet.pop,self.sheet.sim.OneToOneConnector(),synapse_type=exc_syn,receptor_type='excitatory')
 
             if (self.parameters.inh_firing_rate != 0 or self.parameters.inh_weight != 0):
                         self.ssai = self.sheet.sim.Population(self.sheet.pop.size,self.sheet.sim.SpikeSourceArray())
-                        seeds=mozaik.get_seeds((self.sheet.pop.size,))
-                        self.stgeni = [StGen(rng=numpy.random.RandomState(seed=seeds[i])) for i in numpy.nonzero(self.sheet.pop._mask_local)[0]]
+                        seeds=mozaik.get_simulation_seeds((self.sheet.pop.size,))
+                        self.stgeni = [StGen(seed=seeds[i]) for i in numpy.nonzero(self.sheet.pop._mask_local)[0]]
                         self.sheet.sim.Projection(self.ssai, self.sheet.pop,self.sheet.sim.OneToOneConnector(),synapse_type=inh_syn,receptor_type='inhibitory')
 
     def prepare_stimulation(self,duration,offset):
@@ -303,8 +303,8 @@ class Kick(DirectStimulator):
         exc_syn = self.sheet.sim.StaticSynapse(weight=self.parameters.exc_weight,delay=2*self.sheet.model.parameters.min_delay)
         if (self.parameters.exc_firing_rate != 0 or self.parameters.exc_weight != 0):
             self.ssae = self.sheet.sim.Population(self.sheet.pop.size,self.sheet.sim.SpikeSourceArray())
-            seeds=mozaik.get_seeds((self.sheet.pop.size,))
-            self.stgene = [StGen(rng=numpy.random.RandomState(seed=seeds[i])) for i in self.to_stimulate_indexes]
+            seeds=mozaik.get_simulation_seeds((self.sheet.pop.size,))
+            self.stgene = [StGen(seed=seeds[i]) for i in self.to_stimulate_indexes]
             self.sheet.sim.Projection(self.ssae, self.sheet.pop,self.sheet.sim.OneToOneConnector(),synapse_type=exc_syn,receptor_type='excitatory') 
 
     def prepare_stimulation(self,duration,offset):
@@ -478,11 +478,14 @@ class OpticalStimulatorArray(DirectStimulator):
     transfection_proportion : float
         Fraction of neurons expressing the opsin (range [0, 1]).
 
+                     
     Notes
     -----
 
     For now this is not mpi optimized.
+
     """
+    
     
     required_parameters = ParameterSet({
         'size': float,
@@ -546,9 +549,14 @@ class OpticalStimulatorArray(DirectStimulator):
         if self.parameters.transfection_proportion == 1:
             self.transfection_mask[:] = True
         else:
-            n = int(self.parameters.transfection_proportion * self.sheet.pop.size)
-            # TODO: This random choice is not MPI safe!
-            idx = np.random.choice(self.sheet.pop.size, size=n, replace=False)
+            idx = mozaik.model_rng.choice(
+                range(self.sheet.pop.size),
+                size=int(
+                    self.parameters.transfection_proportion
+                    * self.sheet.pop.size
+                ),
+                replace=False,
+            )
             self.transfection_mask[idx] = True
 
         self.active_cells = np.where(self.transfection_mask)[0]
@@ -610,8 +618,11 @@ class OpticalStimulatorArray(DirectStimulator):
         for scs in self.scs:
             scs.set_parameters(times=[offset], amplitudes=[0.0],copy=False)
 
+
+
+
 class OpticalStimulatorArrayChR(OpticalStimulatorArray):
-    """
+    r"""
     Like *OpticalStimulatorArray*, but the light (photons/s/cm^2) impinging on the
     neuron is transformed via a model of Channelrhodopsin (courtesy of Quentin Sabatier)
     to give the final injected current.
