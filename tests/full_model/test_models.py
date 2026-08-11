@@ -9,6 +9,7 @@ import sys
 import subprocess
 import textwrap
 import shutil
+import quantities as qt
 from mozaik.storage.queries import *
 from mozaik.storage.datastore import PickledDataStore
 from mozaik.tools.distribution_parametrization import PyNNDistribution
@@ -25,6 +26,7 @@ SMOKE_MODEL_OVERRIDES = {
     "sheets.l4_cortex_exc.params.density": "150",
     "sheets.retina_lgn.params.density": "20",
 }
+OPTO_VOLTAGE_ATOL_MV = 1e-10
 
 repo_present = os.path.isdir(os.path.join(REPO_DIR, ".git"))
 
@@ -375,7 +377,9 @@ class TestModel(object):
             self.get_spikes(ds1, sheet_name, max_neurons),
         )
 
-    def check_voltages(self, ds0, ds1, sheet_name=None, max_neurons=None):
+    def check_voltages(
+        self, ds0, ds1, sheet_name=None, max_neurons=None, atol_mV=0.0
+    ):
         """
         Check if membrane potential voltages recorded in two DataStores are equal. Voltages
         are merged into a single 1D array and compared using numpy assertions.
@@ -387,11 +391,24 @@ class TestModel(object):
         ds0, ds1 : DataStores to retrieve spike times from
         sheet_name : name of neuron sheet (layer) to check voltages for
         max_neurons : maximum number of neurons to check voltages for
+        atol_mV : absolute comparison tolerance in millivolts; zero requires exact equality
         """
+        voltages0 = self.get_voltages(ds0, sheet_name, max_neurons)
+        voltages1 = self.get_voltages(ds1, sheet_name, max_neurons)
 
-        np.testing.assert_equal(
-            self.get_voltages(ds0, sheet_name, max_neurons),
-            self.get_voltages(ds1, sheet_name, max_neurons),
+        if atol_mV == 0:
+            np.testing.assert_equal(voltages0, voltages1)
+            return
+
+        np.testing.assert_allclose(
+            np.asarray(
+                [voltage.rescale(qt.mV).magnitude for voltage in voltages0]
+            ),
+            np.asarray(
+                [voltage.rescale(qt.mV).magnitude for voltage in voltages1]
+            ),
+            rtol=0,
+            atol=atol_mV,
         )
 
 
@@ -508,7 +525,15 @@ class TestLSV1MTinyOpto(TestModel):
     @pytest.mark.LSV1M_tiny
     @pytest.mark.parametrize("sheet_name", ["V1_Exc_L2/3"])
     def test_voltages(self, sheet_name):
-        self.check_voltages(self.ds, self.ds_ref, sheet_name, max_neurons=25)
+        # Optical and ChR calculations can differ in their last floating-point
+        # bits across CPUs, while still producing the same model response.
+        self.check_voltages(
+            self.ds,
+            self.ds_ref,
+            sheet_name,
+            max_neurons=25,
+            atol_mV=OPTO_VOLTAGE_ATOL_MV,
+        )
 
 
 class TestLSV1MTiny2024LGN(TestLSV1MTiny):

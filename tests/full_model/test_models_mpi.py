@@ -10,7 +10,7 @@ from mozaik.storage.queries import *
 from mozaik.storage.datastore import PickledDataStore
 from mozaik.tools.distribution_parametrization import PyNNDistribution
 from parameters import ParameterSet
-from .test_models import PROJECT_ROOT, TestModel
+from .test_models import OPTO_VOLTAGE_ATOL_MV, PROJECT_ROOT, TestModel
 
 import pytest
 import mozaik
@@ -87,7 +87,19 @@ class TestLSV1MTinyOptoMPI:
             lsv1m_tiny_opto_mpi_reference,
             sheet_name="V1_Exc_L2/3",
             max_neurons=25,
+            atol_mV=OPTO_VOLTAGE_ATOL_MV,
         )
+
+    def test_voltages_are_identical_across_process_counts(
+        self, lsv1m_tiny_opto_mpi
+    ):
+        for num_processes in (2, 4):
+            TestModel().check_voltages(
+                lsv1m_tiny_opto_mpi[1],
+                lsv1m_tiny_opto_mpi[num_processes],
+                sheet_name="V1_Exc_L2/3",
+                max_neurons=25,
+            )
 
 
 class TestLSV1MTinyMPI(TestModel):
