@@ -4,6 +4,7 @@ import numpy as np
 import quantities as qt
 from copy import deepcopy
 from mozaik.models import Model
+from mozaik.sheets.direct_stimulator import OpticalStimulatorArrayChR
 from parameters import ParameterSet
 from mozaik.sheets.vision import VisualCorticalUniformSheet3D
 import mozaik
@@ -205,6 +206,336 @@ class TestOpticalStimulatorArrayChR:
         plt.plot(d1[:, idx])
         plt.plot(d2[:, idx])
         plt.show()
+
+
+class TestOpticalStimulatorArrayChRIntegratedBackend:
+    """Test ``OpticalStimulatorArrayChR`` with integrated current schedules.
+
+    These tests cover MPI-local optical calculations and schedule programming,
+    rank-independent transfection, update timing, and equivalence to the legacy
+    external PyNN current-source backend.
+    """
+
+    STIMULATION_START = 5.0
+    STIMULATION_DURATION = 30.0
+    STIMULATION_END = STIMULATION_START + STIMULATION_DURATION
+    POST_STIMULATION_DURATION = 5.0
+
+    # Minimal PyNN population API for testing arbitrary MPI ownership masks
+    # without launching multiple MPI processes.
+    class _FakeDistributedPopulation:
+        class _FakeScheduleCell:
+            def __init__(self, population_index, local):
+                self.population_index = population_index
+                self.local = local
+                self.parameters = []
+
+            def set_parameters(self, **parameters):
+                self.parameters.append(parameters)
+
+        def __init__(self, positions, local_mask):
+            self.positions = positions
+            self.size = positions.shape[1]
+            self.celltype = SimpleNamespace(
+                has_parameter=lambda name: name
+                in ("amplitude_times", "amplitude_values")
+            )
+            self._mask_local = np.asarray(local_mask, dtype=bool)
+            self.all_cells = np.array(
+                [
+                    self._FakeScheduleCell(index, self._mask_local[index])
+                    for index in range(self.size)
+                ],
+                dtype=object,
+            )
+
+        @property
+        def local_cells(self):
+            return self.all_cells[self._mask_local]
+
+        @staticmethod
+        def id_to_index(cell):
+            return cell.population_index
+
+    @staticmethod
+    def _setup_test_seeds():
+        mozaik.setup_seeds(
+            model_seed=1024,
+            simulation_seed=513,
+            experiment_seed=0,
+        )
+        mozaik.setup_mpi()
+
+    @classmethod
+    def _integrated_optical_sheet(cls, local_mask):
+        positions = np.array(
+            [
+                [-0.1, 0.1, -0.05, 0.05],
+                [-0.1, -0.1, 0.1, 0.1],
+                [100.0, 200.0, 300.0, 400.0],
+            ]
+        )
+        return SimpleNamespace(
+            parameters=ParameterSet(
+                {
+                    "min_depth": 100.0,
+                    "max_depth": 400.0,
+                    "cell": {
+                        "model": "aeif_cond_exp_sc",
+                        "native_nest": True,
+                    },
+                }
+            ),
+            pop=cls._FakeDistributedPopulation(positions, local_mask),
+            vf_2_cs=lambda x, y: (x, y),
+            sim=SimpleNamespace(get_current_time=lambda: 0.0),
+            dt=0.1,
+        )
+
+    @staticmethod
+    def _parameters(transfection_proportion):
+        return ParameterSet(
+            {
+                "size": 400.0,
+                "spacing": 20.0,
+                "update_interval": 1.0,
+                "depth_sampling_step": 10.0,
+                "light_source_light_propagation_data": (
+                    "tests/sheets/unity_radprof.pickle"
+                ),
+                "transfection_proportion": transfection_proportion,
+            }
+        )
+
+    def test_calculates_and_programs_only_mpi_local_neurons(self):
+        self._setup_test_seeds()
+        sheet = self._integrated_optical_sheet([True, False, True, False])
+        ds = OpticalStimulatorArrayChR(sheet, self._parameters(1.0))
+
+        assert np.array_equal(ds.optical_calc_population_indices, [0, 2])
+        assert ds.mixed_signals_photo.shape[0] == 2
+
+        signal = np.ones(ds.stimulator_coords_x.shape + (3,))
+        ds.set_input(signal)
+        ds.prepare_stimulation(duration=3.0, offset=0.0)
+
+        programmed = [
+            index for index, cell in enumerate(sheet.pop.all_cells) if cell.parameters
+        ]
+        assert programmed == [0, 2]
+        assert all(
+            np.array_equal(cell.parameters[0]["amplitude_times"], [0.0, 1.0, 2.0])
+            for cell in sheet.pop.local_cells
+        )
+
+    def test_transfection_is_independent_of_mpi_ownership(self):
+        parameters = self._parameters(0.5)
+
+        self._setup_test_seeds()
+        first = OpticalStimulatorArrayChR(
+            self._integrated_optical_sheet([True, False, True, False]), parameters
+        )
+
+        self._setup_test_seeds()
+        second = OpticalStimulatorArrayChR(
+            self._integrated_optical_sheet([False, True, False, True]), parameters
+        )
+
+        assert np.array_equal(first.transfection_mask, second.transfection_mask)
+
+    def test_later_schedule_moves_only_current_time_to_next_step(self):
+        self._setup_test_seeds()
+        sheet = self._integrated_optical_sheet([True, False, True, False])
+        sheet.sim.get_current_time = lambda: 5.0
+        ds = OpticalStimulatorArrayChR(sheet, self._parameters(1.0))
+
+        assert np.array_equal(
+            ds._integrated_cs_neuron_amplitude_times([5.0, 6.0, 9.0]),
+            [5.1, 6.0, 9.0],
+        )
+
+    @staticmethod
+    def _response_sheet_parameters(integrated):
+        if integrated:
+            cell = {
+                "model": "aeif_cond_exp_sc",
+                "native_nest": True,
+                "params": {
+                    "E_L": -80.0,
+                    "V_reset": -60.0,
+                    "t_ref": 2.0,
+                    "C_m": 32.0,
+                    "g_L": 4.0,
+                    "E_ex": 0.0,
+                    "E_in": -80.0,
+                    "tau_syn_ex": 1.5,
+                    "tau_syn_in": 4.2,
+                    "a": -0.8,
+                    "b": 80.0,
+                    "Delta_T": 0.8,
+                    "tau_w": 1.0,
+                    "V_th": -56.0,
+                    "V_peak": -40.0,
+                    "I_e": 0.0,
+                },
+                "receptors": None,
+                "initial_values": {"V_m": -60.0},
+            }
+        else:
+            cell = {
+                "model": "EIF_cond_exp_isfa_ista",
+                "native_nest": False,
+                "params": {
+                    "v_rest": -80.0,
+                    "v_reset": -60.0,
+                    "tau_refrac": 2.0,
+                    "tau_m": 8.0,
+                    "cm": 0.032,
+                    "e_rev_E": 0.0,
+                    "e_rev_I": -80.0,
+                    "tau_syn_E": 1.5,
+                    "tau_syn_I": 4.2,
+                    "a": -0.8,
+                    "b": 0.08,
+                    "delta_T": 0.8,
+                    "tau_w": 1.0,
+                    "v_thresh": -56.0,
+                },
+                "receptors": None,
+                "initial_values": {"v": -60.0},
+            }
+
+        return ParameterSet(
+            {
+                "name": "integrated" if integrated else "external",
+                "sx": 100.0,
+                "sy": 100.0,
+                "min_depth": 200.0,
+                "max_depth": 200.0,
+                "density": 100.0,
+                "mpi_safe": False,
+                "magnification_factor": 1000.0,
+                "cell": cell,
+                "artificial_stimulators": {
+                    "stimulator": {
+                        "component": (
+                            "mozaik.sheets.direct_stimulator."
+                            "OpticalStimulatorArrayChR"
+                        ),
+                        "params": {
+                            "size": 400.0,
+                            "spacing": 20.0,
+                            "update_interval": 1.0,
+                            "depth_sampling_step": 10.0,
+                            "light_source_light_propagation_data": (
+                                "tests/sheets/unity_radprof.pickle"
+                            ),
+                            "transfection_proportion": 1.0,
+                        },
+                    }
+                },
+                "recording_interval": 0.1,
+                "recorders": {},
+            }
+        )
+
+    @classmethod
+    def _simulate_response(cls, integrated):
+        import nest
+        from pyNN import nest as sim
+
+        if "aeif_cond_exp_sc" not in nest.node_models:
+            nest.Install("stepcurrentmodule")
+
+        test_dir = str(pathlib.Path(__file__).parent.parent)
+        model_parameters = load_parameters(test_dir + "/sheets/model_params")
+        mozaik.setup_seeds(
+            model_seed=model_parameters.model_seed,
+            simulation_seed=model_parameters.simulation_seed,
+            experiment_seed=model_parameters.experiment_seed,
+        )
+        mozaik.setup_mpi()
+        model = Model(sim, 2, model_parameters)
+        sheet = VisualCorticalUniformSheet3D(
+            model, cls._response_sheet_parameters(integrated)
+        )
+        excitatory_input = sim.Population(
+            1,
+            sim.SpikeSourceArray(spike_times=[3.0, 7.0, 11.0, 17.0, 23.0]),
+        )
+        inhibitory_input = sim.Population(
+            1,
+            sim.SpikeSourceArray(spike_times=[5.0, 13.0, 19.0, 25.0]),
+        )
+        sim.Projection(
+            excitatory_input,
+            sheet.pop,
+            sim.OneToOneConnector(),
+            synapse_type=sim.StaticSynapse(weight=0.002, delay=0.1),
+            receptor_type="excitatory",
+        )
+        sim.Projection(
+            inhibitory_input,
+            sheet.pop,
+            sim.OneToOneConnector(),
+            synapse_type=sim.StaticSynapse(weight=0.003, delay=0.1),
+            receptor_type="inhibitory",
+        )
+        stimulator = sheet.artificial_stimulators["stimulator"]
+        voltage_variable = "V_m" if integrated else "v"
+        sheet.pop.record("spikes")
+        sheet.pop.record(voltage_variable, sampling_interval=0.1)
+
+        signal = np.zeros(
+            stimulator.stimulator_coords_x.shape + (int(cls.STIMULATION_DURATION),)
+        )
+        signal[:, :, 2:20] = 1.0
+        model.run(cls.STIMULATION_START)
+        stimulator.set_input(signal)
+        stimulator.prepare_stimulation(
+            cls.STIMULATION_DURATION, offset=cls.STIMULATION_START
+        )
+        current = stimulator.mixed_signals_current.copy()
+        positions = sheet.pop.positions.copy()
+
+        model.run(cls.STIMULATION_DURATION)
+        stimulator.inactivate(offset=cls.STIMULATION_END)
+        model.run(cls.POST_STIMULATION_DURATION)
+        segment = sheet.pop.get_data(["spikes", voltage_variable]).segments[-1]
+        voltage = np.asarray(segment.analogsignals[0]).copy()
+        spikes = np.asarray(segment.spiketrains[0]).copy()
+        sim.end()
+        return positions, current, voltage, spikes
+
+    def test_integrated_and_external_cs_produce_identical_responses(self):
+        # PyNN current source updates reach neurons after 3*dt (0.3 ms); integrated
+        # current source updates take dt (0.1 ms). Activation schedules which were set
+        # before presenting stimuli are aligned, but runtime inactivation differs by 2*dt.
+        # Thus, for voltages after the offset of stimulation we use a relative bound.
+        # For positions, calculated currents, spikes, and pre-offset voltages we use
+        # exact comparison.
+        external = self._simulate_response(integrated=False)
+        integrated = self._simulate_response(integrated=True)
+
+        assert np.ptp(external[2]) > 0
+        assert external[3].size > 0
+        np.testing.assert_equal(integrated[0], external[0])
+        np.testing.assert_equal(integrated[1], external[1])
+        np.testing.assert_equal(integrated[3], external[3])
+
+        # Split at deactivation: voltage before it must match exactly; afterwards,
+        # allow for the 2*dt (0.2 ms) difference in zero-current delivery.
+        times = np.arange(external[2].shape[0]) * 0.1
+        before_offset = times < self.STIMULATION_END
+        from_offset = times >= self.STIMULATION_END
+        np.testing.assert_equal(
+            integrated[2][before_offset],
+            external[2][before_offset],
+        )
+        post_offset_relative_error = np.abs(
+            integrated[2][from_offset] - external[2][from_offset]
+        ) / np.maximum(np.abs(external[2][from_offset]), np.finfo(float).eps)
+        assert np.max(post_offset_relative_error) <= 0.01
 
 
 @pytest.mark.usefixtures("test_env")
