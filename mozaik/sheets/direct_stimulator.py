@@ -606,16 +606,10 @@ class OpticalStimulatorArray(DirectStimulator):
         )
 
         
+    # A single BLAS worker is faster for these small calculations and keeps
+    # results independent of the number of MPI processes.
+    @threadpool_limits.wrap(limits=1, user_api="blas")
     def calculate_photo(self, input_signal):
-        if not self.integrated_cs:
-            return self._calculate_photo(input_signal)
-
-        # A single BLAS worker is faster for these small integrated calculations
-        # and gives the same results for any number of MPI processes.
-        with threadpool_limits(limits=1, user_api="blas"):
-            return self._calculate_photo(input_signal)
-
-    def _calculate_photo(self, input_signal):
         # input_signal needs to be of dimensions space x space x time
         assert input_signal.shape[:2] == self.stimulator_coords_x.shape, "Spatial dimensions of input signal (%s) and stimulation array (%s) are not equal!" % (input_signal.shape[1:],(self.stimulator_coords_x.shape))
         photo = numpy.zeros(
