@@ -392,13 +392,19 @@ class Sheet(BaseComponent):
         active_ds_with_input = [ds for ds in additional_stimulators if requires_input(ds) and ds in sheet_stimulators]
         # Remove duplicate stimulators
         ds_no_input = [ds for ds in sheet_stimulators + additional_stimulators if not requires_input(ds)]
+        active_stimulators = active_ds_with_input + ds_no_input
+
+        integrated_stimulators = [
+            ds for ds in active_stimulators if getattr(ds, "integrated_cs", False)
+        ]
+        assert len(integrated_stimulators) <= 1, "Only one integrated optical stimulator per sheet may be active!"
 
         if stimulus is not None and len(active_ds_with_input) > 0:
             assert len(stimulus.direct_stimulation_signals) == len(active_ds_with_input), "The number of stimulators requiring input (%d) and the number of stimulator inputs stored in the stimulus (%d) needs to be equal!" % (len(active_ds_with_input),len(stimulus.direct_stimulation_signals))
             for i in range(len(active_ds_with_input)):
                 active_ds_with_input[i].set_input(stimulus.direct_stimulation_signals[i])
 
-        for ds in active_ds_with_input + ds_no_input:
+        for ds in active_stimulators:
             ds.prepare_stimulation(duration,offset)
         
 

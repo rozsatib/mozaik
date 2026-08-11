@@ -34,6 +34,7 @@ from mozaik.tools.units import *
 import io
 from numba import jit
 import nest
+from threadpoolctl import threadpool_limits
 
 from builtins import zip
 
@@ -43,6 +44,16 @@ mpi_comm = MPI.COMM_WORLD
 
 
 logger = mozaik.getMozaikLogger()
+
+
+def _supports_integrated_current_schedules(sheet):
+    cell_type = sheet.pop.celltype
+    return (
+        sheet.parameters.cell.native_nest
+        and cell_type.has_parameter("amplitude_times")
+        and cell_type.has_parameter("amplitude_values")
+    )
+
 
 class DirectStimulator(ParametrizedObject):
     r"""
@@ -479,11 +490,6 @@ class OpticalStimulatorArray(DirectStimulator):
         Fraction of neurons expressing the opsin (range [0, 1]).
 
                      
-    Notes
-    -----
-
-    For now this is not mpi optimized.
-
     """
     
     
@@ -499,6 +505,8 @@ class OpticalStimulatorArray(DirectStimulator):
     def __init__(self, sheet, parameters):
         DirectStimulator.__init__(self, sheet,parameters)
         self.is_active = False
+        self.integrated_cs = _supports_integrated_current_schedules(self.sheet)
+
         assert self.parameters.transfection_proportion >= 0 and self.parameters.transfection_proportion <= 1, "Transfection proportions must be in the range of (0,1)!"
 
         assert math.fmod(self.parameters.size,self.parameters.spacing) < 0.000000001 , "Error the size has to be multiple of spacing!"
@@ -524,7 +532,27 @@ class OpticalStimulatorArray(DirectStimulator):
         # the number of neurons in the population and m is the number of stimulators
         x =  self.stimulator_coords_x.flatten()
         y =  self.stimulator_coords_y.flatten()
-        xx,yy = self.sheet.vf_2_cs(self.sheet.pop.positions[0],self.sheet.pop.positions[1])
+        # Partition integrated optical calculations across MPI ranks so each rank
+        # handles the neurons it owns in PyNN/NEST.
+        local_mask = numpy.asarray(self.sheet.pop._mask_local, dtype=bool)
+        self.local_population_indices = numpy.flatnonzero(local_mask)
+        if self.integrated_cs:
+            self.optical_calc_population_indices = self.local_population_indices
+        else:
+            self.optical_calc_population_indices = numpy.arange(self.sheet.pop.size)
+
+        assert numpy.array_equal(
+            self.local_population_indices,
+            numpy.array(
+                [
+                    self.sheet.pop.id_to_index(cell)
+                    for cell in self.sheet.pop.local_cells
+                ]
+            ),
+        ), "PyNN local-cell order does not match the population locality mask!"
+
+        positions = self.sheet.pop.positions[:, self.optical_calc_population_indices]
+        xx,yy = self.sheet.vf_2_cs(positions[0],positions[1])
         zeros = numpy.zeros(len(x))
         self.mixing_templates=[]
         for depth in numpy.arange(sheet.parameters.min_depth,sheet.parameters.max_depth+self.parameters.depth_sampling_step,self.parameters.depth_sampling_step):
@@ -536,7 +564,7 @@ class OpticalStimulatorArray(DirectStimulator):
 
         self.nearest_ix = numpy.rint(xx/self.parameters.spacing)+self.n
         self.nearest_iy = numpy.rint(yy/self.parameters.spacing)+self.n
-        self.nearest_iz = numpy.rint((numpy.array(self.sheet.pop.positions[2])-sheet.parameters.min_depth)/self.parameters.depth_sampling_step)
+        self.nearest_iz = numpy.rint((numpy.array(positions[2])-sheet.parameters.min_depth)/self.parameters.depth_sampling_step)
 
         self.nearest_ix[self.nearest_ix<0] = 0
         self.nearest_iy[self.nearest_iy<0] = 0
@@ -559,31 +587,53 @@ class OpticalStimulatorArray(DirectStimulator):
             )
             self.transfection_mask[idx] = True
 
-        self.active_cells = np.where(self.transfection_mask)[0]
+        self.active_cells = np.flatnonzero(
+            self.transfection_mask[self.optical_calc_population_indices]
+        )
+        self.active_population_indices = self.optical_calc_population_indices[
+            self.active_cells
+        ]
         self.scs = []
 
-        for i in self.active_cells:
-            scs = self.sheet.sim.StepCurrentSource(times=[0.0], amplitudes=[0.0])
-            self.sheet.pop.all_cells[i].inject(scs)
-            self.scs.append(scs)
+        if not self.integrated_cs:
+            for i in self.active_population_indices:
+                scs = self.sheet.sim.StepCurrentSource(times=[0.0], amplitudes=[0.0])
+                self.sheet.pop.all_cells[i].inject(scs)
+                self.scs.append(scs)
 
-        self.mixed_signals_photo = numpy.zeros((self.sheet.pop.size,2),dtype=numpy.float64)
+        self.mixed_signals_photo = numpy.zeros(
+            (len(self.optical_calc_population_indices),2), dtype=numpy.float64
+        )
 
         
     def calculate_photo(self, input_signal):
+        if not self.integrated_cs:
+            return self._calculate_photo(input_signal)
+
+        # A single BLAS worker is faster for these small integrated calculations
+        # and gives the same results for any number of MPI processes.
+        with threadpool_limits(limits=1, user_api="blas"):
+            return self._calculate_photo(input_signal)
+
+    def _calculate_photo(self, input_signal):
         # input_signal needs to be of dimensions space x space x time
         assert input_signal.shape[:2] == self.stimulator_coords_x.shape, "Spatial dimensions of input signal (%s) and stimulation array (%s) are not equal!" % (input_signal.shape[1:],(self.stimulator_coords_x.shape))
-        photo = numpy.zeros((self.sheet.pop.size,input_signal.shape[2]),dtype=numpy.float64)
+        photo = numpy.zeros(
+            (len(self.optical_calc_population_indices),input_signal.shape[2]),
+            dtype=numpy.float64,
+        )
         
         # Tibor note: For sure this can be better separated, look into it!
         # find coordinates given spacing and shift by half the array size
-        for i in range(0,self.sheet.pop.size):
+        for i in range(0,len(self.optical_calc_population_indices)):
             temp,cutof = self.mixing_templates[int(self.nearest_iz[i])]
             ss = input_signal[max(int(self.nearest_ix[i]-cutof),0):int(self.nearest_ix[i]+cutof+1),max(int(self.nearest_iy[i]-cutof),0):int(self.nearest_iy[i]+cutof+1),:]
             if ss.size != 0:
                 temp = temp[max(int(cutof-self.nearest_ix[i]),0):max(int(2*self.n+1+cutof-self.nearest_ix[i]),0),max(int(cutof-self.nearest_iy[i]),0):max(int(2*self.n+1+cutof-self.nearest_iy[i]),0)]
                 photo[i,:] = self.K*self.W*numpy.dot(temp.flatten(),numpy.reshape(ss,(len(temp.flatten()),-1)))
-        photo *= self.transfection_mask[:, None] # photo input is zero for non-transfected cells
+        photo *= self.transfection_mask[
+            self.optical_calc_population_indices, None
+        ] # photo input is zero for non-transfected cells
         return photo
 
     def set_input(self, input_signal):
@@ -606,17 +656,54 @@ class OpticalStimulatorArray(DirectStimulator):
         assert hasattr(self,"mixed_signals_current"), "Child class has to implement conversion of optical stimulation to current!"
         self.times = numpy.arange(0,self.stimulation_duration,self.parameters.update_interval) + offset
 
-        for scs_idx, cell_idx in enumerate(self.active_cells):
-            self.scs[scs_idx].set_parameters(
-                times=Sequence(self.times),
-                amplitudes=Sequence(self.mixed_signals_current[cell_idx, :].flatten()),
-                copy=False
-            )
+        if self.integrated_cs:
+            amplitude_times = self._integrated_cs_neuron_amplitude_times(self.times)
+            for cell_idx, population_idx in zip(
+                self.active_cells, self.active_population_indices
+            ):
+                cell = self.sheet.pop.all_cells[population_idx]
+                assert cell.local, "Integrated current schedules must be set locally!"
+                cell.set_parameters(
+                    amplitude_times=amplitude_times,
+                    amplitude_values=self.mixed_signals_current[
+                        cell_idx, :
+                    ].flatten()
+                    * 1000,
+                )
+        else:
+            for scs_idx, cell_idx in enumerate(self.active_cells):
+                self.scs[scs_idx].set_parameters(
+                    times=Sequence(self.times),
+                    amplitudes=Sequence(self.mixed_signals_current[cell_idx, :].flatten()),
+                    copy=False
+                )
+
+    def _integrated_cs_neuron_amplitude_times(self, times):
+        times = numpy.array(times, dtype=float, copy=True)
+        current_time = self.sheet.sim.get_current_time()
+        if current_time > 0 and times[0] < current_time + self.sheet.dt:
+            # NEST requires current source updates during a run
+            # to start at the next time step.
+            times[0] = current_time + self.sheet.dt
+            assert (
+                len(times) == 1 or times[0] < times[1]
+            ), "Integrated optical update intervals must exceed the simulation timestep!"
+        return times
 
     def inactivate(self,offset):
         self.is_active = False
-        for scs in self.scs:
-            scs.set_parameters(times=[offset], amplitudes=[0.0],copy=False)
+        if self.integrated_cs:
+            amplitude_times = self._integrated_cs_neuron_amplitude_times([offset])
+            for population_idx in self.active_population_indices:
+                cell = self.sheet.pop.all_cells[population_idx]
+                assert cell.local, "Integrated current schedules must be set locally!"
+                cell.set_parameters(
+                    amplitude_times=amplitude_times,
+                    amplitude_values=numpy.array([0.0]),
+                )
+        else:
+            for scs in self.scs:
+                scs.set_parameters(times=[offset], amplitudes=[0.0],copy=False)
 
 
 
@@ -686,6 +773,9 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
     })
 
     def __init__(self, sheet, parameters):
+        assert not _supports_integrated_current_schedules(
+            sheet
+        ), "Integrated current-source neurons are not supported for closed-loop stimulation!"
         OpticalStimulatorArrayChR.__init__(self, sheet,parameters)
         self.start_time = None
         assert self.parameters.state_update_interval % self.parameters.update_interval == 0
