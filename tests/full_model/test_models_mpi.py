@@ -10,10 +10,84 @@ from mozaik.storage.queries import *
 from mozaik.storage.datastore import PickledDataStore
 from mozaik.tools.distribution_parametrization import PyNNDistribution
 from parameters import ParameterSet
-from .test_models import TestModel
+from .test_models import PROJECT_ROOT, TestModel
 
 import pytest
 import mozaik
+
+
+@pytest.mark.model
+@pytest.mark.mpi
+@pytest.mark.stepcurrentmodule
+class TestLSV1MTinyOptoMPI:
+    @pytest.fixture(scope="class")
+    def lsv1m_tiny_opto_mpi(self):
+        model_directory = os.path.join(
+            PROJECT_ROOT, "tests", "full_model", "models", "LSV1M_tiny_opto"
+        )
+        env = os.environ.copy()
+        env["PYTHONPATH"] = os.pathsep.join(
+            filter(None, (PROJECT_ROOT, env.get("PYTHONPATH")))
+        )
+        data_stores = {}
+        for num_processes in (1, 2, 4):
+            threads_per_process = 4 // num_processes
+            run_name = "pytest_mpi%d" % num_processes
+            result_path = os.path.join(model_directory, "LSV1M_%s_____" % run_name)
+            data_stores[num_processes] = TestModel.run_model_and_load(
+                [
+                    "mpirun",
+                    "--oversubscribe",
+                    "-np",
+                    str(num_processes),
+                    sys.executable,
+                    "run.py",
+                    "nest",
+                    str(threads_per_process),
+                    "param/defaults_mpi",
+                    run_name,
+                ],
+                result_path,
+                cwd=model_directory,
+                env=env,
+                shell=False,
+            )
+
+        return data_stores
+
+    @pytest.fixture(scope="class")
+    def lsv1m_tiny_opto_mpi_reference(self):
+        reference_path = os.path.join(
+            os.path.dirname(__file__), "reference_data", "LSV1M_tiny_opto_mpi"
+        )
+        return TestModel.load_datastore(reference_path)
+
+    @pytest.mark.parametrize("num_processes", (1, 2, 4))
+    def test_spikes(
+        self,
+        lsv1m_tiny_opto_mpi,
+        lsv1m_tiny_opto_mpi_reference,
+        num_processes,
+    ):
+        TestModel().check_spikes(
+            lsv1m_tiny_opto_mpi[num_processes],
+            lsv1m_tiny_opto_mpi_reference,
+            sheet_name="V1_Exc_L2/3",
+        )
+
+    @pytest.mark.parametrize("num_processes", (1, 2, 4))
+    def test_voltages(
+        self,
+        lsv1m_tiny_opto_mpi,
+        lsv1m_tiny_opto_mpi_reference,
+        num_processes,
+    ):
+        TestModel().check_voltages(
+            lsv1m_tiny_opto_mpi[num_processes],
+            lsv1m_tiny_opto_mpi_reference,
+            sheet_name="V1_Exc_L2/3",
+            max_neurons=25,
+        )
 
 
 class TestLSV1MTinyMPI(TestModel):

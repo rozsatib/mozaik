@@ -1,0 +1,87 @@
+{
+    'base': url("param/l23_cortex_exc"),
+
+    'component': ref('sheets.l23_cortex_exc.base.component'),
+
+    'params': {
+        'name': ref('sheets.l23_cortex_exc.base.params.name'),
+        'sx': ref('sheets.l23_cortex_exc.base.params.sx'),
+        'sy': ref('sheets.l23_cortex_exc.base.params.sy'),
+        'min_depth': ref('sheets.l23_cortex_exc.base.params.min_depth'),
+        'max_depth': ref('sheets.l23_cortex_exc.base.params.max_depth'),
+        'density': ref('sheets.l23_cortex_exc.base.params.density'),
+        'mpi_safe': ref('sheets.l23_cortex_exc.base.params.mpi_safe'),
+        'magnification_factor': ref('sheets.l23_cortex_exc.base.params.magnification_factor'),
+        'cell': {
+            'model': 'aeif_cond_exp_sc',
+            'native_nest': True,
+            'params': {
+                'E_L': ref('sheets.l23_cortex_exc.base.params.cell.params.v_rest'),
+                'V_reset': ref('sheets.l23_cortex_exc.base.params.cell.params.v_reset'),
+                't_ref': ref('sheets.l23_cortex_exc.base.params.cell.params.tau_refrac'),
+                'C_m': ref('sheets.l23_cortex_exc.base.params.cell.params.cm') * 1000,
+                'g_L': ref('sheets.l23_cortex_exc.base.params.cell.params.cm') / ref('sheets.l23_cortex_exc.base.params.cell.params.tau_m') * 1000,
+                'E_ex': ref('sheets.l23_cortex_exc.base.params.cell.params.e_rev_E'),
+                'E_in': ref('sheets.l23_cortex_exc.base.params.cell.params.e_rev_I'),
+                'tau_syn_ex': ref('sheets.l23_cortex_exc.base.params.cell.params.tau_syn_E'),
+                'tau_syn_in': ref('sheets.l23_cortex_exc.base.params.cell.params.tau_syn_I'),
+                'a': ref('sheets.l23_cortex_exc.base.params.cell.params.a'),
+                'b': ref('sheets.l23_cortex_exc.base.params.cell.params.b') * 1000,
+                'Delta_T': ref('sheets.l23_cortex_exc.base.params.cell.params.delta_T'),
+                'tau_w': ref('sheets.l23_cortex_exc.base.params.cell.params.tau_w'),
+                'V_th': ref('sheets.l23_cortex_exc.base.params.cell.params.v_thresh'),
+                'V_peak': -40.0,
+                'I_e': 0.0,
+            },
+            'receptors': ref('sheets.l23_cortex_exc.base.params.cell.receptors'),
+            'initial_values': {
+                'V_m': ref('sheets.l23_cortex_exc.base.params.cell.initial_values.v'),
+            },
+        },
+        'artificial_stimulators': ref('sheets.l23_cortex_exc.base.params.artificial_stimulators'),
+        'recording_interval': ref('sheets.l23_cortex_exc.base.params.recording_interval'),
+        'recorders': {
+            '2': {
+                'component': 'mozaik.sheets.population_selector.RCGrid',
+                'variables': ('spikes', 'V_m', 'g_ex', 'g_in'),
+                'params': {
+                    'size': 200.0,
+                    'spacing': 10.0,
+                    'offset_x': 0.0,
+                    'offset_y': 0.0,
+                },
+            },
+            '3': {
+                'component': 'mozaik.sheets.population_selector.RCGrid',
+                'variables': 'spikes',
+                'params': {
+                    'size': 600.0,
+                    'spacing': 20.0,
+                    'offset_x': 0.0,
+                    'offset_y': 0.0,
+                },
+            },
+            '4': {
+                'component': 'mozaik.sheets.population_selector.RCGrid',
+                'variables': 'spikes',
+                'params': {
+                    'size': 1000.0,
+                    'spacing': 100.0,
+                    'offset_x': 0.0,
+                    'offset_y': 0.0,
+                },
+            },
+        },
+    },
+
+    'layer23_aff_ratio': ref('sheets.l23_cortex_exc.base.layer23_aff_ratio'),
+    'num_samples_var': ref('sheets.l23_cortex_exc.base.num_samples_var'),
+    'feedback_arborization_ratio': ref('sheets.l23_cortex_exc.base.feedback_arborization_ratio'),
+    'K': ref('sheets.l23_cortex_exc.base.K'),
+
+    'L23ExcL23ExcConnection': url("param/l23_cortex_exc").L23ExcL23ExcConnection,
+    'L23ExcL23InhConnection': url("param/l23_cortex_exc").L23ExcL23InhConnection,
+    'L4ExcL23ExcConnection': url("param/l23_cortex_exc").L4ExcL23ExcConnection,
+    'L23ExcL4ExcConnection': url("param/l23_cortex_exc").L23ExcL4ExcConnection,
+    'L23ExcL4InhConnection': url("param/l23_cortex_exc").L23ExcL4InhConnection,
+}

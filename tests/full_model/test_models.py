@@ -170,20 +170,29 @@ class TestModel(object):
     ds_ref = None  # Reference datastore
 
     @classmethod
-    def setup_class(cls):
+    def run_model_and_load(
+        cls,
+        model_run_command,
+        result_path,
+        cwd=PROJECT_ROOT,
+        env=None,
+        shell=True,
+        use_posix_spawn=False,
+    ):
         """
-        Runs the model and loads its result and a saved reference result
+        Run a model command and load the resulting datastore.
         """
-        result_path = os.path.join(PROJECT_ROOT, cls.result_path)
-        ref_path = os.path.join(PROJECT_ROOT, cls.ref_path)
+        if not os.path.isabs(result_path):
+            result_path = os.path.join(cwd, result_path)
 
         # Rerun the test if it already ran.
         if os.path.exists(result_path):
             shutil.rmtree(result_path)
 
-        env = os.environ.copy()
+        if env is None:
+            env = os.environ.copy()
 
-        if cls.model_run_uses_posix_spawn:
+        if use_posix_spawn:
             # os.posix_spawn() has no cwd argument, so change directory in the
             # spawned shell before executing the model command.
             pid = os.posix_spawn(
@@ -193,8 +202,8 @@ class TestModel(object):
                     "-c",
                     'cd "$1" && exec /bin/sh -c "$2"',
                     "model-runner",
-                    PROJECT_ROOT,
-                    cls.model_run_command,
+                    cwd,
+                    model_run_command,
                 ],
                 env,
             )
@@ -203,9 +212,9 @@ class TestModel(object):
             stdout = stderr = None
         else:
             result = subprocess.run(
-                cls.model_run_command,
-                shell=True,
-                cwd=PROJECT_ROOT,
+                model_run_command,
+                shell=shell,
+                cwd=cwd,
                 env=env,
                 capture_output=True,
                 text=True,
@@ -226,13 +235,25 @@ class TestModel(object):
                 stderr_summary = stderr[-4000:] or "<empty>"
 
             pytest.fail(
-                f"Model run command failed: {cls.model_run_command}\n"
+                f"Model run command failed: {model_run_command}\n"
                 f"Return code: {returncode}\n\n"
                 f"===== model stdout =====\n{stdout_summary}\n\n"
                 f"===== model stderr =====\n{stderr_summary}"
             )
-        # Load DataStore of recordings from the model that just ran
-        cls.ds = cls.load_datastore(cls.result_path)
+
+        return cls.load_datastore(result_path)
+
+    @classmethod
+    def setup_class(cls):
+        """
+        Runs the model and loads its result and a saved reference result
+        """
+        cls.ds = cls.run_model_and_load(
+            cls.model_run_command,
+            cls.result_path,
+            cwd=PROJECT_ROOT,
+            use_posix_spawn=cls.model_run_uses_posix_spawn,
+        )
         # Load DataStore of reference recordings
         cls.ds_ref = cls.load_datastore(cls.ref_path)
 
@@ -470,7 +491,7 @@ class TestLSV1MTinyOpto(TestModel):
     spike times of all neurons to a saved reference.
     """
 
-    model_run_command = "cd tests/full_model/models/LSV1M_tiny_opto && python run.py nest 2 param/defaults 'pytest' && cd ../../../.."
+    model_run_command = f"cd tests/full_model/models/LSV1M_tiny_opto && PYTHONPATH=../../../..:$PYTHONPATH {sys.executable} run.py nest 2 param/defaults 'pytest' && cd ../../../.."
     result_path = "tests/full_model/models/LSV1M_tiny_opto/LSV1M_pytest_____"
     ref_path = "tests/full_model/reference_data/LSV1M_tiny_opto"
 
