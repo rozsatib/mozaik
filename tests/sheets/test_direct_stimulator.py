@@ -4,7 +4,10 @@ import numpy as np
 import quantities as qt
 from copy import deepcopy
 from mozaik.models import Model
-from mozaik.sheets.direct_stimulator import OpticalStimulatorArrayChR
+from mozaik.sheets.direct_stimulator import (
+    ClosedLoopOpticalStimulatorArray,
+    OpticalStimulatorArrayChR,
+)
 from parameters import ParameterSet
 from mozaik.sheets.vision import VisualCorticalUniformSheet3D
 import mozaik
@@ -74,6 +77,8 @@ def test_env(request):
     )
     if stimulator_component.endswith("ClosedLoopOpticalStimulatorArray"):
         opt_array_params["state_update_interval"] = 6.0
+        opt_array_params["actuation_delay"] = None
+        opt_array_params["feedback_sheet_names"] = [sheet_params.name]
 
     sheet_params.artificial_stimulators = {
         "stimulator": {
@@ -276,6 +281,7 @@ class TestOpticalStimulatorArrayChRIntegratedBackend:
             ]
         )
         return SimpleNamespace(
+            name="integrated",
             parameters=ParameterSet(
                 {
                     "min_depth": 100.0,
@@ -353,6 +359,77 @@ class TestOpticalStimulatorArrayChRIntegratedBackend:
             ds._integrated_cs_neuron_amplitude_times([5.0, 6.0, 9.0]),
             [5.1, 6.0, 9.0],
         )
+
+    def test_closed_loop_programs_integrated_local_current_schedules(self):
+        # Check that closed-loop updates program only rank-local integrated cells.
+        self._setup_test_seeds()
+        sheet = self._integrated_optical_sheet([True, False, True, False])
+        parameters = self._parameters(1.0)
+        parameters["state_update_interval"] = 3.0
+        parameters["actuation_delay"] = None
+        parameters["feedback_sheet_names"] = [sheet.name]
+        ds = ClosedLoopOpticalStimulatorArray(sheet, parameters)
+        ds.calculate_input_function = lambda stimulator: np.ones(
+            stimulator.stimulator_coords_x.shape + (3,)
+        )
+
+        ds.set_input_segment()
+        ds.stimulation_duration = parameters.state_update_interval
+        ds.prepare_stimulation(duration=3.0, offset=0.0)
+
+        programmed = [
+            index for index, cell in enumerate(sheet.pop.all_cells) if cell.parameters
+        ]
+        assert programmed == [0, 2]
+        assert ds.integrated_cs
+        assert ds.scs == []
+        assert ds.actuation_delay() == 2 * sheet.dt
+
+    @pytest.mark.parametrize(
+        ("requested_delay", "expected_delay"),
+        [(None, 0.2), (0.4, 0.4)],
+    )
+    def test_closed_loop_actuation_delay_selection(
+        self, requested_delay, expected_delay
+    ):
+        # Verify None selects the backend minimum while an explicit delay is kept.
+        self._setup_test_seeds()
+        sheet = self._integrated_optical_sheet([True, False, True, False])
+        parameters = self._parameters(1.0)
+        parameters["state_update_interval"] = 3.0
+        parameters["actuation_delay"] = requested_delay
+        parameters["feedback_sheet_names"] = [sheet.name]
+
+        ds = ClosedLoopOpticalStimulatorArray(sheet, parameters)
+
+        assert ds.actuation_delay() == expected_delay
+
+    @pytest.mark.parametrize("actuation_delay", [-1.0, 0.1])
+    def test_closed_loop_rejects_actuation_delay_below_minimum(
+        self, actuation_delay
+    ):
+        # Ensure negative and positive delays below the backend minimum are rejected.
+        self._setup_test_seeds()
+        sheet = self._integrated_optical_sheet([True, False, True, False])
+        parameters = self._parameters(1.0)
+        parameters["state_update_interval"] = 3.0
+        parameters["actuation_delay"] = actuation_delay
+        parameters["feedback_sheet_names"] = [sheet.name]
+
+        with pytest.raises(AssertionError, match="shorter than the .* minimum"):
+            ClosedLoopOpticalStimulatorArray(sheet, parameters)
+
+    def test_closed_loop_rejects_empty_feedback_sheet_names(self):
+        # Ensure every controller explicitly names at least one feedback sheet.
+        self._setup_test_seeds()
+        sheet = self._integrated_optical_sheet([True, False, True, False])
+        parameters = self._parameters(1.0)
+        parameters["state_update_interval"] = 3.0
+        parameters["actuation_delay"] = None
+        parameters["feedback_sheet_names"] = []
+
+        with pytest.raises(AssertionError, match="must not be empty"):
+            ClosedLoopOpticalStimulatorArray(sheet, parameters)
 
     @staticmethod
     def _response_sheet_parameters(integrated):
@@ -544,6 +621,10 @@ class TestClosedLoopOpticalStimulatorArray:
         "mozaik.sheets.direct_stimulator.ClosedLoopOpticalStimulatorArray"
     )
 
+    def test_external_actuation_delay_uses_backend_minimum(self):
+        # Confirm the minimum sentinel includes NEST's configured source delay.
+        assert self.ds.actuation_delay() == self.ds.scs[0].min_delay + 2 * self.sheet.dt
+
     @pytest.mark.parametrize(
         ("center", "radius"),
         [([0.0, 0.0], 50.0), ([80.0, -60.0], 100.0)],
@@ -616,15 +697,25 @@ class TestClosedLoopOpticalStimulatorArray:
     def _clear_sheet_data_cache(self):
         self.ds._sheet_data_cache.clear()
 
-    def test_get_data_all_sheets_selects_and_retrieves_cortical_sheets(
+    def test_get_data_all_sheets_returns_configured_cache_without_retrieval(
         self, monkeypatch
     ):
+        # Ensure the public accessor reads the configured cache without MPI retrieval.
         first_data, second_data = object(), object()
         first = self._fake_sheet("cortex_1", {"spikes": [0]}, first_data)
         unrecorded = self._fake_sheet("unrecorded", {})
         second = self._fake_sheet("cortex_2", {"v": [0]}, second_data)
         lgn = SimpleNamespace(name="X_ON", to_record={"spikes": [0]}, get_data=Mock())
         self._set_sheets(monkeypatch, first, lgn, unrecorded, second)
+        self.ds.parameters.feedback_sheet_names = [
+            first.name,
+            unrecorded.name,
+            second.name,
+        ]
+
+        self.ds._collect_sheet_data()
+        first.get_data.reset_mock()
+        second.get_data.reset_mock()
 
         data = self.ds.get_data_all_sheets()
 
@@ -632,36 +723,50 @@ class TestClosedLoopOpticalStimulatorArray:
         assert data[first.name] is first_data
         assert data[unrecorded.name] == []
         assert data[second.name] is second_data
-        first.get_data.assert_called_once_with(clear=False)
-        second.get_data.assert_called_once_with(clear=False)
+        first.get_data.assert_not_called()
+        second.get_data.assert_not_called()
         unrecorded.get_data.assert_not_called()
         lgn.get_data.assert_not_called()
 
     def test_get_data_all_sheets_caches_by_simulator_time(self, monkeypatch):
+        # Check that automatic collection retrieves each sheet at most once per time.
         current_time = [10.0]
         sheet = self._fake_sheet("recorded", {"spikes": [0]})
         sheet.get_data.side_effect = [object(), object()]
         self._set_sheets(monkeypatch, sheet)
+        self.ds.parameters.feedback_sheet_names = [sheet.name]
         monkeypatch.setattr(self.sheet.sim, "get_current_time", lambda: current_time[0])
 
+        self.ds._collect_sheet_data()
         first = self.ds.get_data_all_sheets()[sheet.name]
+        self.ds._collect_sheet_data()
         second = self.ds.get_data_all_sheets()[sheet.name]
 
         assert first is second
         sheet.get_data.assert_called_once_with(clear=False)
 
         current_time[0] = 11.0
+        self.ds._collect_sheet_data()
         third = self.ds.get_data_all_sheets()[sheet.name]
 
         assert third is not first
         assert sheet.get_data.call_count == 2
 
-    @pytest.mark.parametrize(
-        ("retrieve_all", "expected_other_calls"), [(True, 1), (False, 0)]
-    )
-    def test_update_state_retrieval_paths(
-        self, monkeypatch, retrieve_all, expected_other_calls
-    ):
+    def test_collect_sheet_data_respects_feedback_sheet_names(self, monkeypatch):
+        # Verify automatic collection is limited to explicitly configured sheets.
+        first = self._fake_sheet("first", {"v": [0]}, object())
+        second = self._fake_sheet("second", {"v": [0]}, object())
+        self._set_sheets(monkeypatch, first, second)
+        self.ds.parameters.feedback_sheet_names = [second.name]
+
+        self.ds._collect_sheet_data()
+
+        first.get_data.assert_not_called()
+        second.get_data.assert_called_once_with(clear=False)
+
+    @pytest.mark.parametrize("retrieve_all", [True, False])
+    def test_update_state_retrieval_paths(self, monkeypatch, retrieve_all):
+        # Ensure feedback is prefetched whether or not the callback reads the cache.
         attached_data = object()
         attached_get_data = Mock(return_value=attached_data)
         other = self._fake_sheet("other_cortex", {"v": [0]}, object())
@@ -676,6 +781,7 @@ class TestClosedLoopOpticalStimulatorArray:
             "_cortical_sheets",
             lambda: {self.sheet.name: self.sheet, other.name: other},
         )
+        self.ds.parameters.feedback_sheet_names = [self.sheet.name, other.name]
         retrieved = {}
 
         def update_controller(stimulator):
@@ -688,7 +794,7 @@ class TestClosedLoopOpticalStimulatorArray:
 
         fast_get_data.assert_called_once_with()
         attached_get_data.assert_called_once_with(clear=False)
-        assert other.get_data.call_count == expected_other_calls
+        other.get_data.assert_called_once_with(clear=False)
         if retrieve_all:
             assert retrieved[self.sheet.name] is attached_data
 
@@ -705,3 +811,61 @@ class TestClosedLoopOpticalStimulatorArray:
             )
         assert self.ds.get_recording("spikes", sheet_name=first.name) == []
         assert self.ds.get_recording("v", sheet_name=unrecorded.name) == []
+
+    def test_non_controller_rank_uses_broadcast_input_without_running_callback(
+        self, monkeypatch
+    ):
+        # Check that MPI worker ranks consume rank 0's signal without running user code.
+        signal = np.ones(self.ds.stimulator_coords_x.shape + (6,))
+        calculate_input = Mock()
+        communicator = SimpleNamespace(
+            rank=1,
+            size=2,
+            bcast=Mock(return_value=signal),
+        )
+        monkeypatch.setattr(mozaik, "mpi_comm", communicator)
+        monkeypatch.setattr(self.ds, "calculate_input_function", calculate_input)
+
+        received = self.ds.calculate_input_signal()
+
+        calculate_input.assert_not_called()
+        communicator.bcast.assert_called_once_with(None, root=mozaik.MPI_ROOT)
+        assert received is signal
+
+    def test_mozaik_spike_path_does_not_create_direct_recorder(self, monkeypatch):
+        # TODO: Remove this test if the temporary direct last-spikes path is removed.
+        # Verify the standard Mozaik path does not allocate a redundant NEST recorder.
+        create_recorder = Mock()
+        monkeypatch.setattr(self.ds, "use_direct_nest_spike_retrieval", False)
+        monkeypatch.setattr(self.sheet, "to_record", {"v": [0, 2]})
+        monkeypatch.setattr(
+            mozaik.sheets.direct_stimulator,
+            "nest",
+            SimpleNamespace(Create=create_recorder),
+        )
+
+        self.ds.set_data_recording()
+
+        create_recorder.assert_not_called()
+        assert self.ds.spike_recorder is None
+
+    def test_non_controller_rank_does_not_run_state_callback(self, monkeypatch):
+        # Ensure MPI workers program the broadcast update but never invoke controller state.
+        update_controller = Mock()
+        communicator = SimpleNamespace(rank=1, size=2)
+        monkeypatch.setattr(mozaik, "mpi_comm", communicator)
+        monkeypatch.setattr(self.ds, "update_state_function", update_controller)
+        monkeypatch.setattr(self.ds, "_collect_sheet_data", Mock())
+        monkeypatch.setattr(self.ds, "get_data", Mock())
+        monkeypatch.setattr(self.ds, "set_input_segment", Mock())
+        monkeypatch.setattr(self.ds, "_set_stimulation_current_schedule", Mock())
+        monkeypatch.setattr(self.ds, "times", np.array([0.0]), raising=False)
+
+        self.ds.update_state()
+
+        update_controller.assert_not_called()
+        self.ds.set_input_segment.assert_called_once_with()
+        self.ds._set_stimulation_current_schedule.assert_called_once()
+        np.testing.assert_array_equal(
+            self.ds._set_stimulation_current_schedule.call_args.args[0], [6.0]
+        )
