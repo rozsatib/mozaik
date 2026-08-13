@@ -53,6 +53,10 @@ class ClosedLoopOptogeneticStimulation(Experiment):
         state_update_function : callable
             Function updating the internal controller state.
 
+            In MPI simulations this function, and ``input_calculation_function``,
+            are called only on rank 0. The calculated stimulation signal is
+            broadcast to the other ranks automatically.
+
     duration : int
         Duration of the stimulation (ms).
 

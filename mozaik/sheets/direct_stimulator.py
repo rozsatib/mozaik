@@ -40,10 +40,14 @@ from builtins import zip
 
 from mpi4py import MPI
 
-mpi_comm = MPI.COMM_WORLD
-
 
 logger = mozaik.getMozaikLogger()
+
+
+# Temporary benchmarking switch.  The direct NEST path avoids constructing
+# Neo spike trains, while the default path exercises PyNN/Mozaik's MPI-aware
+# Population.get_data() implementation.
+USE_DIRECT_NEST_SPIKE_RETRIEVAL = True
 
 
 def _supports_integrated_current_schedules(sheet):
@@ -650,8 +654,13 @@ class OpticalStimulatorArray(DirectStimulator):
         assert hasattr(self,"mixed_signals_current"), "Child class has to implement conversion of optical stimulation to current!"
         self.times = numpy.arange(0,self.stimulation_duration,self.parameters.update_interval) + offset
 
+        self._set_stimulation_current_schedule(self.times)
+
+    def _set_stimulation_current_schedule(self, times):
+        """Program one current segment on the neurons owned by this rank."""
+
         if self.integrated_cs:
-            amplitude_times = self._integrated_cs_neuron_amplitude_times(self.times)
+            amplitude_times = self._integrated_cs_neuron_amplitude_times(times)
             for cell_idx, population_idx in zip(
                 self.active_cells, self.active_population_indices
             ):
@@ -667,7 +676,7 @@ class OpticalStimulatorArray(DirectStimulator):
         else:
             for scs_idx, cell_idx in enumerate(self.active_cells):
                 self.scs[scs_idx].set_parameters(
-                    times=Sequence(self.times),
+                    times=Sequence(times),
                     amplitudes=Sequence(self.mixed_signals_current[cell_idx, :].flatten()),
                     copy=False
                 )
@@ -753,6 +762,29 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
     starts at time zero; later segments start at the delayed actuation time
     exposed by :meth:`next_actuation_time`.
 
+    In MPI simulations, feedback is collected collectively, but the user-supplied
+    state-update and input-calculation functions run only on rank 0. The resulting
+    light-array segment is broadcast before each rank calculates and programs the
+    currents for its locally owned neurons.
+
+    ``USE_DIRECT_NEST_SPIKE_RETRIEVAL`` temporarily selects whether
+    ``last_spike_counts`` is populated through a direct NEST spike recorder or
+    whether controllers use the standard PyNN/Mozaik recording data available
+    in ``feedback_data``.
+
+    ``actuation_delay`` is the interval in milliseconds between observing the
+    network state and starting the resulting stimulation. Set it to ``None`` to
+    use the backend minimum. The integrated-current backend requires at least
+    ``2 * time_step``. The external ``StepCurrentSource`` backend requires at
+    least ``min_delay + 2 * time_step``; ``min_delay`` and ``time_step`` are
+    configured in the top-level Mozaik model parameters. Any explicit value must
+    meet the selected backend minimum and be a multiple of ``time_step``. The
+    effective value is logged on rank 0.
+
+    ``feedback_sheet_names`` is the non-empty list of cortical sheets whose
+    configured Mozaik recordings are collected before every controller update.
+    Rank 0 receives them in ``feedback_data``, keyed by sheet name.
+
     Note that, as in *OpticalStimulatorArrayChR*, the current is approximated by
     ignoring the voltage dependence of the channels.
     """
@@ -764,23 +796,52 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
         'light_source_light_propagation_data' : str,
         'transfection_proportion' : float,
         'state_update_interval': float,
+        'actuation_delay': (float, type(None)),
+        'feedback_sheet_names': list,
     })
 
     def __init__(self, sheet, parameters):
-        assert not _supports_integrated_current_schedules(
-            sheet
-        ), "Integrated current-source neurons are not supported for closed-loop stimulation!"
         OpticalStimulatorArrayChR.__init__(self, sheet,parameters)
         self.start_time = None
         assert self.parameters.state_update_interval % self.parameters.update_interval == 0
-        # Program the next current segment at least NEST's min_delay, plus a
-        # small integration-step margin, before it should start.
-        self._actuation_delay = (
-            self.scs[0].min_delay if self.scs else 0
-        ) + 2 * self.sheet.dt
+        if self.integrated_cs:
+            minimum_actuation_delay = 2 * self.sheet.dt
+            backend = "integrated current schedule"
+        else:
+            current_source_min_delay = (
+                self.scs[0].min_delay
+                if self.scs
+                else self.sheet.model.parameters.min_delay
+            )
+            minimum_actuation_delay = current_source_min_delay + 2 * self.sheet.dt
+            backend = "external StepCurrentSource"
+
+        requested_actuation_delay = self.parameters.actuation_delay
+        if requested_actuation_delay is None:
+            self._actuation_delay = minimum_actuation_delay
+        else:
+            self._actuation_delay = requested_actuation_delay
+        assert self._actuation_delay >= minimum_actuation_delay, (
+            "Closed loop actuation delay %.6g ms is shorter than the %.6g ms "
+            "minimum for the %s backend!"
+            % (self._actuation_delay, minimum_actuation_delay, backend)
+        )
+        assert np.isclose(
+            self._actuation_delay / self.sheet.dt,
+            round(self._actuation_delay / self.sheet.dt),
+        ), "Closed loop actuation delay must be a multiple of the simulation timestep!"
         assert (
             self._actuation_delay < self.parameters.state_update_interval
         ), "Closed loop actuation delay must be shorter than the state update interval!"
+        if (not mozaik.mpi_comm) or mozaik.mpi_comm.rank == mozaik.MPI_ROOT:
+            logger.info(
+                "Closed-loop stimulator %s uses the %s backend with an actuation "
+                "delay of %.6g ms (minimum %.6g ms)",
+                self.sheet.name,
+                backend,
+                self._actuation_delay,
+                minimum_actuation_delay,
+            )
         self.calculate_input_function, self.update_state_function, self.state = (
             None,
             None,
@@ -790,6 +851,24 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
         self._next_actuation_time = None
         self._last_photo_sample = None
         self._sheet_data_cache = {}
+        self.feedback_data = {}
+        self.use_direct_nest_spike_retrieval = USE_DIRECT_NEST_SPIKE_RETRIEVAL
+        assert self.parameters.feedback_sheet_names, (
+            "Closed loop feedback_sheet_names must not be empty!"
+        )
+        assert len(self.parameters.feedback_sheet_names) == len(
+            set(self.parameters.feedback_sheet_names)
+        ), "Closed loop feedback_sheet_names must not contain duplicates!"
+
+    @staticmethod
+    def _is_controller_rank():
+        return (not mozaik.mpi_comm) or (
+            mozaik.mpi_comm.rank == mozaik.MPI_ROOT
+        )
+
+    @staticmethod
+    def _is_mpi_parallel():
+        return bool(mozaik.mpi_comm and mozaik.mpi_comm.size > 1)
 
     # Maybe add calculate input function setter to assert its parameters, etc.?
     def current_time(self): #Maybe make this an attribute and automatically calculate it upon state update?
@@ -818,10 +897,12 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
 
     def set_input(self, input_signal):
         # Only called before the experiment
+        self._feedback_sheets()
         self.start_time = self.sheet.sim.get_current_time()
         self._next_actuation_time = 0.0
         self._last_photo_sample = None
         self._sheet_data_cache.clear()
+        self.feedback_data = {}
         self.stimulation_duration = self.parameters.state_update_interval
         self.set_input_segment()
         self.set_data_recording()
@@ -842,6 +923,19 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
         cortical_sheets = self._cortical_sheets()
         assert sheet_name in cortical_sheets, "Unknown cortical sheet: %s" % sheet_name
         return cortical_sheets[sheet_name]
+
+    def _feedback_sheets(self):
+        cortical_sheets = self._cortical_sheets()
+        unknown_sheets = set(self.parameters.feedback_sheet_names) - set(
+            cortical_sheets
+        )
+        assert not unknown_sheets, "Unknown closed-loop feedback sheets: %s" % sorted(
+            unknown_sheets
+        )
+        return {
+            name: cortical_sheets[name]
+            for name in self.parameters.feedback_sheet_names
+        }
 
     @staticmethod
     def _time_slice(recording, t_start, t_stop):
@@ -939,27 +1033,46 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
         self._sheet_data_cache[sheet.name] = (current_time, data)
         return data
 
+    def _collect_sheet_data(self):
+        """Collect controller-visible PyNN data collectively on every MPI rank."""
+        feedback_sheets = self._feedback_sheets()
+        feedback_data = {}
+        for name, sheet in feedback_sheets.items():
+            if not self.has_sheet_recorders(sheet):
+                data = []
+                self._sheet_data_cache[name] = (
+                    self.sheet.sim.get_current_time(),
+                    data,
+                )
+            else:
+                data = self._retrieve_sheet_data(sheet)
+            feedback_data[name] = data
+        self.feedback_data = feedback_data
+
     def get_data_all_sheets(self):
-        return {
-            name: self._retrieve_sheet_data(sheet)
-            for name, sheet in self._cortical_sheets().items()
-        }
+        """Return the feedback data collected before the current callback."""
+        return self.feedback_data
 
     def get_recording_all_sheets(
         self, name, t_start=None, t_stop=None, retrieve=True
     ):
-        if retrieve:
-            self.get_data_all_sheets()
+        """Read recordings from the already collected feedback-sheet data."""
         return {
             sheet_name: self.get_recording(
                 name, t_start, t_stop, sheet_name=sheet_name
             )
-            for sheet_name in self._cortical_sheets()
+            for sheet_name in self.feedback_data
         }
 
     def calculate_input_signal(self):
-        assert self.calculate_input_function is not None, "Calculate input function not set!"
-        input_signal = self.calculate_input_function(self)
+        input_signal = None
+        if self._is_controller_rank():
+            assert self.calculate_input_function is not None, "Calculate input function not set!"
+            input_signal = self.calculate_input_function(self)
+        if mozaik.mpi_comm:
+            input_signal = mozaik.mpi_comm.bcast(
+                input_signal, root=mozaik.MPI_ROOT
+            )
         return input_signal
 
     def _advance_ChR_to_segment_start(self, first_photo_sample):
@@ -989,53 +1102,78 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
         self._last_photo_sample = self.mixed_signals_photo[:, -1].copy()
 
     def set_data_recording(self):
-        self.nest_ids = self.sheet.pop.all_cells[self.recorded_neuron_indices()].tolist()
-        self.nest_ids_order = np.argsort(self.nest_ids)
-        self.spike_recorder = nest.Create("spike_recorder")
-        nest.Connect(self.nest_ids, self.spike_recorder)
+        if not self.use_direct_nest_spike_retrieval:
+            self.spike_recorder = None
+            return
+
+        if self.has_sheet_recorders() and "spikes" in self.sheet.to_record:
+            recorded_indices = self.recorded_neuron_indices("spikes")
+        else:
+            recorded_indices = self.recorded_neuron_indices()
+        self.spike_population_indices = np.asarray(recorded_indices, dtype=int)
+        self.nest_ids = np.asarray(
+            self.sheet.pop.all_cells[self.spike_population_indices], dtype=int
+        )
+        self._nest_id_to_spike_index = {
+            nest_id: index for index, nest_id in enumerate(self.nest_ids)
+        }
         self.spike_counts = np.zeros(len(self.nest_ids))
         self.last_spike_counts = np.zeros(len(self.nest_ids))
-        self.last_n_events = 0
+
+        local_mask = np.asarray(self.sheet.pop._mask_local, dtype=bool)[
+            self.spike_population_indices
+        ]
+        self.local_nest_ids = self.nest_ids[local_mask]
+        self.spike_recorder = nest.Create("spike_recorder")
+        if len(self.local_nest_ids) > 0:
+            nest.Connect(self.local_nest_ids.tolist(), self.spike_recorder)
+
+    def _get_spike_counts_directly_from_nest(self):
+        events = nest.GetStatus(self.spike_recorder, "events")[0]
+        senders = events["senders"]
+        local_cumulative_counts = np.zeros(len(self.nest_ids))
+        unique_senders, counts = np.unique(senders, return_counts=True)
+        for sender, count in zip(unique_senders, counts):
+            local_cumulative_counts[
+                self._nest_id_to_spike_index[int(sender)]
+            ] = count
+
+        if self._is_mpi_parallel():
+            cumulative_counts = (
+                np.zeros_like(local_cumulative_counts)
+                if self._is_controller_rank()
+                else None
+            )
+            mozaik.mpi_comm.Reduce(
+                local_cumulative_counts,
+                cumulative_counts,
+                op=MPI.SUM,
+                root=mozaik.MPI_ROOT,
+            )
+        else:
+            cumulative_counts = local_cumulative_counts
+
+        if self._is_controller_rank():
+            self.last_spike_counts = cumulative_counts - self.spike_counts
+            self.spike_counts = cumulative_counts
 
     def get_data(self):
-        events = nest.GetStatus(self.spike_recorder, "events")[0]
-        kernel_status = nest.GetKernelStatus()
-        senders, times = events["senders"], events["times"]
-        if kernel_status["local_num_threads"] > 1 or kernel_status["num_processes"] > 1:
-             # spikes from each thread are concatenated in a single array,
-             # so they need to be sorted if there's more than 1 thread
-            order = np.argsort(times, kind="mergesort")
-            senders, times = senders[order], times[order]
-
-        senders = senders[self.last_n_events:]
-        times = times[self.last_n_events:] - self.start_time
-
-        self.last_spike_counts = (np.unique(np.hstack([senders,self.nest_ids]),return_counts=True)[1] - 1)[self.nest_ids_order]
-        self.spike_counts += self.last_spike_counts
-        self.last_n_events += len(times)
+        if self.use_direct_nest_spike_retrieval:
+            self._get_spike_counts_directly_from_nest()
 
     # Interface functions
     def update_state(self):
         assert self.update_state_function is not None, "Update state function not set!"
+        self._collect_sheet_data()
         self.get_data()
-        if self.has_sheet_recorders() and not (
-            len(self.sheet.to_record.keys()) == 1
-            and list(self.sheet.to_record.keys())[0] == "spikes"
-        ):
-            self._retrieve_sheet_data(self.sheet)
         # At this point the controller has data up to current_time(); its output
         # is scheduled actuation_delay later so NEST can deliver it on time.
         self._next_actuation_time = self.current_time() + self.actuation_delay()
-        self.update_state_function(self)
+        if self._is_controller_rank():
+            self.update_state_function(self)
         self.set_input_segment()
         self.times += self.parameters.state_update_interval
-        # Set the scs amplitudes for the next iteration
-        for scs_idx, cell_idx in enumerate(self.active_cells):
-            self.scs[scs_idx].set_parameters(
-                times=Sequence(self.times),
-                amplitudes=Sequence(self.mixed_signals_current[cell_idx, :].flatten()),
-                copy=False
-            )
+        self._set_stimulation_current_schedule(self.times)
 
 def stimulating_pattern_flash(sheet, coor_x, coor_y, update_interval, parameters):
     r"""
