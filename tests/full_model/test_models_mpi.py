@@ -90,9 +90,7 @@ class TestLSV1MTinyOptoMPI:
             atol_mV=OPTO_VOLTAGE_ATOL_MV,
         )
 
-    def test_voltages_are_identical_across_process_counts(
-        self, lsv1m_tiny_opto_mpi
-    ):
+    def test_voltages_are_identical_across_process_counts(self, lsv1m_tiny_opto_mpi):
         for num_processes in (2, 4):
             TestModel().check_voltages(
                 lsv1m_tiny_opto_mpi[1],

@@ -377,9 +377,7 @@ class TestModel(object):
             self.get_spikes(ds1, sheet_name, max_neurons),
         )
 
-    def check_voltages(
-        self, ds0, ds1, sheet_name=None, max_neurons=None, atol_mV=0.0
-    ):
+    def check_voltages(self, ds0, ds1, sheet_name=None, max_neurons=None, atol_mV=0.0):
         """
         Check if membrane potential voltages recorded in two DataStores are equal. Voltages
         are merged into a single 1D array and compared using numpy assertions.
@@ -401,12 +399,8 @@ class TestModel(object):
             return
 
         np.testing.assert_allclose(
-            np.asarray(
-                [voltage.rescale(qt.mV).magnitude for voltage in voltages0]
-            ),
-            np.asarray(
-                [voltage.rescale(qt.mV).magnitude for voltage in voltages1]
-            ),
+            np.asarray([voltage.rescale(qt.mV).magnitude for voltage in voltages0]),
+            np.asarray([voltage.rescale(qt.mV).magnitude for voltage in voltages1]),
             rtol=0,
             atol=atol_mV,
         )

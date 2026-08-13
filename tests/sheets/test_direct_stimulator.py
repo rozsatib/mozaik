@@ -405,9 +405,7 @@ class TestOpticalStimulatorArrayChRIntegratedBackend:
         assert ds.actuation_delay() == expected_delay
 
     @pytest.mark.parametrize("actuation_delay", [-1.0, 0.1])
-    def test_closed_loop_rejects_actuation_delay_below_minimum(
-        self, actuation_delay
-    ):
+    def test_closed_loop_rejects_actuation_delay_below_minimum(self, actuation_delay):
         # Ensure negative and positive delays below the backend minimum are rejected.
         self._setup_test_seeds()
         sheet = self._integrated_optical_sheet([True, False, True, False])
