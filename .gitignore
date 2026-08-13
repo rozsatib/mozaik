@@ -9,3 +9,4 @@ cover
 AGENTS.md
 mozaik.egg-info
 dist
+tests/full_model/models/mozaik-models
