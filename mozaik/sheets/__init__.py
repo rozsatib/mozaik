@@ -314,9 +314,13 @@ class Sheet(BaseComponent):
         if steps:
             for i in range(0,len(self.pop),steps):
                 try:
-                    b = self.pop[i:i+steps].get_data(['spikes'] + vm_name + gsyn_names, gather=False, clear=clear & (i+steps >= len(self.pop)))
-                b = gather_recording(b)
-		except NothingToWriteError as errmsg:
+                    b = self.pop[i:i+steps].get_data(
+                        ['spikes'] + vm_name + gsyn_names,
+                        gather=False,
+                        clear=clear and (i + steps >= len(self.pop)),
+                    )
+                    b = gather_recording(b)
+                except NothingToWriteError as errmsg:
                     logger.debug(errmsg)
                 if (mozaik.mpi_comm) and (mozaik.mpi_comm.rank == mozaik.MPI_ROOT):
                     if block:
