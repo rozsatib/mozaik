@@ -92,6 +92,8 @@ def test_run_workflow_list_legacy_path(monkeypatch):
         parameters,
         load_from=None,
         experiment_parameter_list=None,
+        workflow_start_time=None,
+        model_construction_run_time=None,
     ):
         captured["experiment_list"] = experiment_list
         captured["experiment_parameter_list"] = experiment_parameter_list
@@ -140,6 +142,8 @@ def test_run_workflow_ordereddict_applies_overrides(monkeypatch):
         parameters,
         load_from=None,
         experiment_parameter_list=None,
+        workflow_start_time=None,
+        model_construction_run_time=None,
     ):
         captured["experiment_list"] = experiment_list
         captured["experiment_parameter_list"] = experiment_parameter_list

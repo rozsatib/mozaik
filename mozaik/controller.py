@@ -431,12 +431,16 @@ def run_workflow(simulation_name, model_class, create_experiments):
 
     """
 
+    workflow_start_time = time.perf_counter()
+
     # Prepare workflow - read parameters, setup logging, etc.
     sim, num_threads, parameters, experiment_modified_parameters = prepare_workflow(
         simulation_name, model_class
     )
     # Prepare model to run experiments on
+    model_construction_start_time = time.perf_counter()
     model = model_class(sim, num_threads, parameters)
+    model_construction_run_time = time.perf_counter() - model_construction_start_time
     experiment_definition = create_experiments(model)
 
     if isinstance(experiment_definition, list):
@@ -466,6 +470,8 @@ def run_workflow(simulation_name, model_class, create_experiments):
         experiment_list,
         parameters,
         experiment_parameter_list=experiment_parameter_list,
+        workflow_start_time=workflow_start_time,
+        model_construction_run_time=model_construction_run_time,
     )
 
     if mozaik.mpi_comm.rank == mozaik.MPI_ROOT:
@@ -480,7 +486,13 @@ def run_workflow(simulation_name, model_class, create_experiments):
 
 
 def run_experiments(
-    model, experiment_list, parameters, load_from=None, experiment_parameter_list=None
+    model,
+    experiment_list,
+    parameters,
+    load_from=None,
+    experiment_parameter_list=None,
+    workflow_start_time=None,
+    model_construction_run_time=None,
 ):
     r"""
     This is function called by :func:.run_workflow that executes the experiments in the `experiment_list` over the model.
@@ -505,6 +517,12 @@ def run_experiments(
         Optional explicit experiment parametrization metadata to store in the
         datastore. If not supplied it will be derived from the instantiated
         experiments in ``experiment_list``.
+
+    workflow_start_time : float, optional
+        Monotonic start time of the workflow, used for runtime reporting.
+
+    model_construction_run_time : float, optional
+        Time spent constructing the model, used for runtime reporting.
 
     Returns
     -------
@@ -603,6 +621,15 @@ def run_experiments(
     data_store.set_simulation_log(log)
 
     if not model_exploded and mozaik.mpi_comm.rank == mozaik.MPI_ROOT:
+        if workflow_start_time is not None:
+            logger.info(
+                "Total workflow run time: %.0fs"
+                % (time.perf_counter() - workflow_start_time)
+            )
+        if model_construction_run_time is not None:
+            logger.info(
+                "Model construction run time: %.0fs" % model_construction_run_time
+            )
         logger.info("Total simulation run time: %.0fs" % total_run_time)
         logger.info(
             "Simulator run time: %.0fs (%d%%)"
