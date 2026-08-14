@@ -9,6 +9,7 @@ from collections import OrderedDict
 from mozaik.core import BaseComponent
 from mozaik import load_component
 from mozaik.tools.distribution_parametrization import PyNNDistribution
+from mozaik.tools.recording import gather_recording
 from parameters import ParameterSet, UniformDist
 from pyNN import space
 from pyNN.errors import NothingToWriteError
@@ -313,8 +314,9 @@ class Sheet(BaseComponent):
         if steps:
             for i in range(0,len(self.pop),steps):
                 try:
-                    b = self.pop[i:i+steps].get_data(['spikes'] + vm_name + gsyn_names, clear=clear & (i+steps >= len(self.pop)))
-                except (NothingToWriteError, errmsg):
+                    b = self.pop[i:i+steps].get_data(['spikes'] + vm_name + gsyn_names, gather=False, clear=clear & (i+steps >= len(self.pop)))
+                b = gather_recording(b)
+		except NothingToWriteError as errmsg:
                     logger.debug(errmsg)
                 if (mozaik.mpi_comm) and (mozaik.mpi_comm.rank == mozaik.MPI_ROOT):
                     if block:
@@ -332,8 +334,11 @@ class Sheet(BaseComponent):
                 mozaik.mpi_comm.barrier()
         else:
             try:
-                block = self.pop.get_data(['spikes'] + vm_name + gsyn_names,clear=clear)
-            except (NothingToWriteError, errmsg):
+                block = self.pop.get_data(
+                    ['spikes'] + vm_name + gsyn_names, gather=False, clear=clear
+                )
+                block = gather_recording(block)
+            except NothingToWriteError as errmsg:
                 logger.debug(errmsg)
 
         if (mozaik.mpi_comm) and (mozaik.mpi_comm.rank != mozaik.MPI_ROOT):

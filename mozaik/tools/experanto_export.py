@@ -14,6 +14,27 @@ from scipy.ndimage import gaussian_filter1d
 # and screen timelines are aligned exactly, so a drift here desyncs them. Single source on this side.
 POST_BLANK_MS = 49.0
 
+# Canonical export order for sheets when multiple are exported into one spikes.npy. Sheets not listed
+# here are appended in sorted-name order, so unit indexing stays deterministic across trials/runs while
+# still handling models that add new sheets. See docs/plan/updating-mozaik/2026-08-13_multi-sheet-export.md.
+_SHEET_PRIORITY = [
+    "X_ON",
+    "X_OFF",
+    "V1_Exc_L4",
+    "V1_Inh_L4",
+    "V1_Exc_L2/3",
+    "V1_Inh_L2/3",
+]
+
+
+def canonical_sheet_order(found):
+    """Order the discovered sheet names deterministically: known sheets by ``_SHEET_PRIORITY``, then
+    any unknown sheet names in sorted order."""
+    found = set(found)
+    known = [s for s in _SHEET_PRIORITY if s in found]
+    rest = sorted(s for s in found if s not in _SHEET_PRIORITY)
+    return known + rest
+
 
 def load_tier_reference(combined_meta_path):
     """Build a condition_hash → tier mapping from an existing combined_meta.json.
@@ -82,6 +103,7 @@ class MozaikTrialExporter:
         stim_name_key="movie_name",
         group_by_key="trial",
         group_value=None,
+        sheet_names=None,
     ):
         self.output_dir = output_dir
         self.trial_id = trial_id
@@ -93,6 +115,17 @@ class MozaikTrialExporter:
         self.stim_name_key = stim_name_key
         self.group_by_key = group_by_key
         self.group_value = trial_id if group_value is None else group_value
+
+        # Multi-sheet export: which sheets to fold into the single spikes.npy. None = every sheet with
+        # recorded spiketrains in the DSV (discovered on the first batch). A list restricts to a subset.
+        # Sheets are laid out contiguously in canonical_sheet_order(); the per-sheet unit boundaries are
+        # recorded in meta.yml (`sheets`/`sheet_unit_indices`/`n_signals_layerwise`).
+        self.sheet_names_requested = (
+            list(sheet_names) if sheet_names is not None else None
+        )
+        self.sheet_names = None  # resolved (ordered) sheet list, set on first data
+        self.sheet_unit_counts = None  # units per sheet, aligned with self.sheet_names
+        self.sheet_unit_indices = None  # CSR boundaries, len == len(sheet_names)+1
 
         self.meta_segments = []
         self.all_unit_spike_lists = None
@@ -131,6 +164,12 @@ class MozaikTrialExporter:
             self.num_units = meta_data["n_signals"]
             self.meta_segments = meta_data.get("stimuli_order", [])
             spike_indices = meta_data["spike_indices"]
+
+            # Restore multi-sheet layout so appended chunks keep the same sheet ordering / boundaries.
+            # (Absent on legacy single-sheet exports — finalize() then falls back to a single block.)
+            self.sheet_names = meta_data.get("sheets")
+            self.sheet_unit_counts = meta_data.get("n_signals_layerwise")
+            self.sheet_unit_indices = meta_data.get("sheet_unit_indices")
 
             # end_time is in seconds; convert back to ms for internal offset
             self.current_time_offset = meta_data["end_time"] * 1000.0
@@ -177,12 +216,86 @@ class MozaikTrialExporter:
         except (TypeError, ValueError):
             return raw == self.group_value
 
+    def _parse_stimulus(self, seg):
+        """Return the stimulus-parameter dict for a segment, or None on a parse error."""
+        try:
+            raw = seg.annotations["stimulus"]
+            return ast.literal_eval(raw) if isinstance(raw, str) else raw
+        except (ValueError, SyntaxError):
+            print(f"Warning: Parse error for segment {seg}. Skipping.", flush=True)
+            return None
+
+    def _bucket_by_sheet(self, dsvs):
+        """Group this batch's (trial-matched) segments by sheet, preserving block/temporal order.
+
+        Segments in a Mozaik datastore are stored one per (presentation, sheet); within a sheet the
+        block order is the temporal presentation order. Returns an ``OrderedDict`` mapping
+        ``sheet_name -> [(segment, stim_params), ...]`` in encounter order.
+        """
+        from collections import OrderedDict
+
+        segs_by_sheet = OrderedDict()
+        for dsv in dsvs:
+            for seg in dsv.get_segments():
+                stim_params = self._parse_stimulus(seg)
+                if stim_params is None:
+                    continue
+                if not self._in_group(stim_params.get(self.group_by_key)):
+                    continue
+                sn = seg.annotations.get("sheet_name")
+                segs_by_sheet.setdefault(sn, []).append((seg, stim_params))
+        return segs_by_sheet
+
+    def _resolve_sheets(self, present):
+        """Resolve (and, on later batches, validate) the ordered list of sheets to export."""
+        if self.sheet_names_requested is not None:
+            missing = [s for s in self.sheet_names_requested if s not in present]
+            if missing:
+                raise ValueError(
+                    f"Requested sheet(s) {missing} not present in datastore (have: {sorted(present)})"
+                )
+            requested = set(self.sheet_names_requested)
+            selected = [s for s in canonical_sheet_order(present) if s in requested]
+        else:
+            selected = canonical_sheet_order(present)
+
+        if self.sheet_names is None:
+            self.sheet_names = selected
+        elif selected != self.sheet_names:
+            # Only enforce once we already know the layout (fresh export, or a resume that restored it).
+            raise ValueError(
+                f"Sheet set/order changed across batches: had {self.sheet_names}, now {selected}"
+            )
+        return self.sheet_names
+
+    def _init_layout(self, segs_by_sheet, i):
+        """Allocate the global per-unit spike lists using each sheet's unit count at presentation ``i``.
+
+        A presentation is blank or non-blank for all sheets simultaneously (same stimulus), so at the
+        first non-blank presentation every sheet has spiketrains to size from.
+        """
+        counts = [
+            len(segs_by_sheet[sn][i][0].get_spiketrains()) for sn in self.sheet_names
+        ]
+        indices = [0]
+        for c in counts:
+            indices.append(indices[-1] + c)
+        self.sheet_unit_counts = counts
+        self.sheet_unit_indices = indices
+        self.num_units = indices[-1]
+        self.all_unit_spike_lists = [[] for _ in range(self.num_units)]
+        print(
+            f"Initialized for {self.num_units} units across {len(self.sheet_names)} sheets: "
+            + ", ".join(f"{s}={c}" for s, c in zip(self.sheet_names, counts)),
+            flush=True,
+        )
+
     def process_batch(self, dsv_or_list):
         """
-        Process a batch of DSVs. Accumulates spike times in memory lists
-        and updates metadata.
+        Process a batch of DSVs. Folds every requested sheet into one flat per-unit spike list,
+        aligning presentations by index across sheets (segments are per-(presentation, sheet)) and
+        advancing the timeline once per presentation so it stays aligned with the screen timeline.
         """
-        import sys
         import time
 
         if isinstance(dsv_or_list, (list, tuple)):
@@ -199,131 +312,99 @@ class MozaikTrialExporter:
             flush=True,
         )
 
-        # 1. Scan Metadata for this batch — segments are kept in chronological
-        #    order (as stored by Mozaik) so the time offsets stay aligned with
-        #    the screen timeline.  Both PixelMovieExperanto and InternalStimulus
-        #    (blank) segments are included.
+        # 1. Bucket segments by sheet (trial-filtered), preserving temporal order within each sheet.
         scan_t0 = time.time()
-        batch_segments = []
-        for dsv_i, dsv in enumerate(dsvs):
-            dsv_t0 = time.time()
-            segment_refs = dsv.get_segments()
-            n_segs_in_dsv = 0
-            for seg in segment_refs:
-                try:
-                    if isinstance(seg.annotations["stimulus"], str):
-                        stim_params = ast.literal_eval(seg.annotations["stimulus"])
-                    else:
-                        stim_params = seg.annotations["stimulus"]
-                except (ValueError, SyntaxError):
-                    print(
-                        f"Warning: Parse error for segment {seg}. Skipping.", flush=True
-                    )
-                    continue
-
-                if self._in_group(stim_params.get(self.group_by_key)):
-                    stim_name = stim_params.get(self.stim_name_key)
-                    batch_segments.append(
-                        {
-                            "segment": seg,
-                            "stim_name": stim_name if stim_name else "blank",
-                            "duration": stim_params["duration"],
-                            "is_blank": stim_name is None,
-                        }
-                    )
-                    n_segs_in_dsv += 1
-            print(
-                f"  DSV {dsv_i}: {n_segs_in_dsv} segments scanned in {time.time() - dsv_t0:.1f}s",
-                flush=True,
-            )
-
-        n_blanks = sum(1 for s in batch_segments if s["is_blank"])
-        n_stim = len(batch_segments) - n_blanks
-        print(
-            f"  Scan total: {time.time() - scan_t0:.1f}s — {len(batch_segments)} segments "
-            f"({n_stim} stimulus, {n_blanks} blank)",
-            flush=True,
-        )
-
-        if not batch_segments:
+        segs_by_sheet = self._bucket_by_sheet(dsvs)
+        if not segs_by_sheet:
             print("No matching segments in this batch.", flush=True)
             return
 
-        bin_size_ms = 1000.0 / self.sampling_rate
+        sheet_names = self._resolve_sheets(list(segs_by_sheet.keys()))
 
-        # 2. Stream Process this Batch
+        # 2. Every sheet must contribute the same number of presentations, so the index-zip aligns.
+        lengths = {sn: len(segs_by_sheet[sn]) for sn in sheet_names}
+        n_pres = lengths[sheet_names[0]]
+        if any(v != n_pres for v in lengths.values()):
+            raise ValueError(f"Unequal segment counts across sheets: {lengths}")
+
+        ref = sheet_names[0]
+        n_blanks = sum(
+            1
+            for j in range(n_pres)
+            if segs_by_sheet[ref][j][1].get(self.stim_name_key) is None
+        )
+        n_stim = n_pres - n_blanks
+        print(
+            f"  Scan total: {time.time() - scan_t0:.1f}s — {n_pres} presentations × "
+            f"{len(sheet_names)} sheets ({n_stim} stimulus, {n_blanks} blank)",
+            flush=True,
+        )
+
+        bin_size_ms = 1000.0 / self.sampling_rate
         t_load = 0.0  # time in get_spiketrains()
         t_loop = 0.0  # time in per-unit spike extraction
         n_processed = 0
         seg_t0 = time.time()
 
-        for meta in batch_segments:
-            seg = meta["segment"]
-            seg_duration = meta["duration"]
+        # 3. Process presentation by presentation, stacking sheets on the unit axis.
+        for i in range(n_pres):
+            ref_seg, ref_stim = segs_by_sheet[ref][i]
+            stim_name = ref_stim.get(self.stim_name_key)
+            seg_duration = ref_stim["duration"]
             num_seg_bins = int(np.ceil(seg_duration / bin_size_ms))
-            is_blank = meta["is_blank"]
+            is_blank = stim_name is None
 
-            # Store metadata
-            self.meta_segments.append(meta["stim_name"])
+            self.meta_segments.append(stim_name if stim_name else "blank")
 
             if is_blank:
-                # Blank segments (InternalStimulus): advance the timeline
-                # but skip the expensive per-unit spike extraction.
-                # The dataloader filters blanks via screen metadata anyway.
+                # Blank presentation: advance the timeline for every sheet at once, skip extraction.
                 self.current_time_offset += seg_duration
                 self.total_bins_accumulated += num_seg_bins
-                # Don't call seg.release() here — spiketrains were never
-                # loaded, so release() would fail with AttributeError.
                 continue
 
-            # Load spikes once per segment
-            t0 = time.time()
-            spiketrains = seg.get_spiketrains()
-            t_load += time.time() - t0
-
-            # Initialize unit count on first segment seen
+            # Allocate the global layout from all sheets' unit counts at the first non-blank presentation.
             if self.all_unit_spike_lists is None:
-                self.num_units = len(spiketrains)
-                self.all_unit_spike_lists = [[] for _ in range(self.num_units)]
-                print(f"Initialized for {self.num_units} units.", flush=True)
+                self._init_layout(segs_by_sheet, i)
 
-            limit_units = min(self.num_units, len(spiketrains))
             offset = self.current_time_offset
-
-            # Tight loop — avoid repeated attribute lookups
-            t0 = time.time()
             _lists = self.all_unit_spike_lists
-            _trains = spiketrains
-            _dur = seg_duration
-            for unit_idx in range(limit_units):
-                spikes = np.asarray(_trains[unit_idx])
-                if len(spikes) == 0:
-                    continue
-                valid = spikes[spikes < _dur]
-                if len(valid):
-                    valid += offset
-                    _lists[unit_idx].append(valid)
-            t_loop += time.time() - t0
+            for k, sn in enumerate(sheet_names):
+                seg_k, stim_k = segs_by_sheet[sn][i]
+                if stim_k["duration"] != seg_duration:
+                    raise ValueError(
+                        f"Presentation {i}: duration mismatch across sheets "
+                        f"({ref}={seg_duration} vs {sn}={stim_k['duration']}) — misaligned segments"
+                    )
+                t0 = time.time()
+                trains = seg_k.get_spiketrains()
+                t_load += time.time() - t0
 
-            # Update global offsets
+                base = self.sheet_unit_indices[k]
+                limit_units = min(self.sheet_unit_counts[k], len(trains))
+                t0 = time.time()
+                for unit_idx in range(limit_units):
+                    spikes = np.asarray(trains[unit_idx])
+                    if len(spikes) == 0:
+                        continue
+                    valid = spikes[spikes < seg_duration]
+                    if len(valid):
+                        valid = valid + offset
+                        _lists[base + unit_idx].append(valid)
+                t_loop += time.time() - t0
+
+                if hasattr(seg_k, "release"):
+                    seg_k.release()
+
             self.current_time_offset += seg_duration
             self.total_bins_accumulated += num_seg_bins
             n_processed += 1
 
-            if hasattr(seg, "release"):
-                seg.release()
-
-            # Progress every 50 stimulus segments
             if n_processed % 50 == 0:
                 elapsed = time.time() - seg_t0
-                avg_load = t_load / n_processed
-                avg_loop = t_loop / n_processed
                 eta = (n_stim - n_processed) * (elapsed / n_processed)
                 print(
-                    f"  [{n_processed}/{n_stim}] {elapsed:.0f}s elapsed, "
-                    f"ETA {eta:.0f}s — "
-                    f"load: {t_load:.1f}s (avg {avg_load:.2f}s/seg), "
-                    f"loop: {t_loop:.1f}s (avg {avg_loop:.3f}s/seg), "
+                    f"  [{n_processed}/{n_stim}] {elapsed:.0f}s elapsed, ETA {eta:.0f}s — "
+                    f"load: {t_load:.1f}s, loop: {t_loop:.1f}s, "
                     f"offset: {self.current_time_offset/1000:.1f}s, "
                     f"mem: {get_process_memory():.0f} MB",
                     flush=True,
@@ -373,10 +454,23 @@ class MozaikTrialExporter:
         # Save Main Output
         np.save(os.path.join(self.output_dir, "spikes.npy"), spikes_1d)
 
+        # Sheet layout for the multi-sheet index. Fall back to a single anonymous block for a legacy
+        # resume that restored no sheet metadata (old single-sheet exports).
+        sheet_names = self.sheet_names
+        sheet_unit_counts = self.sheet_unit_counts
+        sheet_unit_indices = self.sheet_unit_indices
+        if sheet_unit_indices is None:
+            sheet_names = sheet_names if sheet_names is not None else [None]
+            sheet_unit_counts = [self.num_units]
+            sheet_unit_indices = [0, self.num_units]
+
         # Save Metadata
         meta_data = {
             "modality": "spikes",
             "n_signals": self.num_units,
+            "n_signals_layerwise": sheet_unit_counts,
+            "sheets": sheet_names,
+            "sheet_unit_indices": sheet_unit_indices,
             "start_time": 0.0,
             "end_time": self.current_time_offset / 1000.0,
             "trial_id": self.trial_id,
