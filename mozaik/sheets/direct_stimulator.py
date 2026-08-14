@@ -1036,6 +1036,15 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
     def _collect_sheet_data(self):
         """Collect controller-visible PyNN data collectively on every MPI rank."""
         feedback_sheets = self._feedback_sheets()
+        if (
+            self.use_direct_nest_spike_retrieval
+            and list(feedback_sheets) == [self.sheet.name]
+            and set(getattr(self.sheet, "to_record", {})) == {"spikes"}
+        ):
+            self._sheet_data_cache.pop(self.sheet.name, None)
+            self.feedback_data = {self.sheet.name: []}
+            return
+
         feedback_data = {}
         for name, sheet in feedback_sheets.items():
             if not self.has_sheet_recorders(sheet):

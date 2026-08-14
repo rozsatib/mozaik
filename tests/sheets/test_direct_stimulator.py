@@ -762,6 +762,19 @@ class TestClosedLoopOpticalStimulatorArray:
         first.get_data.assert_not_called()
         second.get_data.assert_called_once_with(clear=False)
 
+    def test_direct_spike_only_feedback_skips_mozaik_retrieval(self, monkeypatch):
+        # Keep final spike recording enabled without paying for Neo data every update.
+        sheet_get_data = Mock()
+        monkeypatch.setattr(self.ds, "use_direct_nest_spike_retrieval", True)
+        monkeypatch.setattr(self.sheet, "to_record", {"spikes": [0, 2]})
+        monkeypatch.setattr(self.sheet, "get_data", sheet_get_data)
+        self.ds.parameters.feedback_sheet_names = [self.sheet.name]
+
+        self.ds._collect_sheet_data()
+
+        sheet_get_data.assert_not_called()
+        assert self.ds.feedback_data == {self.sheet.name: []}
+
     @pytest.mark.parametrize("retrieve_all", [True, False])
     def test_update_state_retrieval_paths(self, monkeypatch, retrieve_all):
         # Ensure feedback is prefetched whether or not the callback reads the cache.
