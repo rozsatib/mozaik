@@ -1,0 +1,246 @@
+{
+  "format_version": 1,
+  "array_file": "williams_reference.npy",
+  "array_dtype": "float64",
+  "array_layout": [
+    "sample",
+    "channel"
+  ],
+  "shape": [
+    12501,
+    8
+  ],
+  "axes": {
+    "0": {
+      "name": "sample",
+      "length": 12501,
+      "coordinate": "channel 0 (time)"
+    },
+    "1": {
+      "name": "channel",
+      "length": 8,
+      "entries": "channels"
+    }
+  },
+  "dt_s": 0.0004,
+  "duration_s": 5.0,
+  "sample_count": 12501,
+  "time_construction": "time_s = integer sample index * dt_s; endpoints included",
+  "segment_interval_convention": "All stimulus intervals are [start, end); the final 5.0 s output sample is dark.",
+  "channels": {
+    "0": {
+      "name": "time",
+      "unit": "s"
+    },
+    "1": {
+      "name": "irradiance",
+      "unit": "mW/mm^2"
+    },
+    "2": {
+      "name": "C1",
+      "unit": "fraction"
+    },
+    "3": {
+      "name": "O1",
+      "unit": "fraction"
+    },
+    "4": {
+      "name": "O2",
+      "unit": "fraction"
+    },
+    "5": {
+      "name": "C2",
+      "unit": "fraction"
+    },
+    "6": {
+      "name": "p",
+      "unit": "dimensionless"
+    },
+    "7": {
+      "name": "I_ChR2",
+      "unit": "pA/pF"
+    }
+  },
+  "model": {
+    "name": "Williams ChR2(H134R)",
+    "citation": "Williams et al. (2013), Computational Optogenetics: Empirically-Derived Voltage- and Light-Sensitive Channelrhodopsin-2 Model",
+    "implementation": "chr2_williams.py",
+    "implementation_sha256": "bf2ab32e675fdf5b38cafa6b52f5f71c1802fe965ffe05b1bb1d8f4a068df821",
+    "primary_executable_source": "151549/ MATLAB implementation",
+    "secondary_cross_check": "244414/ NEURON/NMODL implementation",
+    "wavelength_nm": 470.0,
+    "dark_adapted_initial_state": [
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "internal_state_order": [
+      "C1",
+      "C2",
+      "O1",
+      "O2",
+      "p"
+    ],
+    "parameters": {
+      "gamma": 0.1,
+      "wloss": 1.3,
+      "sigma_retinal": 1.2e-19,
+      "g_chr2": 0.4,
+      "capacitance": 1.0,
+      "e12_dark": 0.011,
+      "e21_dark": 0.008,
+      "e12_light_coefficient": 0.005,
+      "e21_light_coefficient": 0.004,
+      "irradiance_log_scale": 0.024,
+      "gd1_base": 0.075,
+      "gd1_amplitude": 0.043,
+      "gd1_voltage_offset": 20.0,
+      "gd1_voltage_scale": -20.0,
+      "gd2": 0.05,
+      "gr_prefactor": 4.34587e-05,
+      "gr_voltage_coefficient": -0.0211539274,
+      "tau_chr2": 1.3,
+      "epsilon1": 0.8535,
+      "epsilon2": 0.14,
+      "rectification_a": 10.6408,
+      "rectification_b": -14.6408,
+      "rectification_c": 42.7671,
+      "reversal_potential": 0.0,
+      "hc": 1.986446e-25,
+      "wavelength_nm": 470.0,
+      "theta_scale": 100.0,
+      "s0_slope": 120.0,
+      "s0_midpoint": 0.1,
+      "q10_gd1": 1.97,
+      "q10_gd2": 1.77,
+      "q10_epsilon1": 1.46,
+      "q10_epsilon2": 2.77,
+      "q10_gr": 2.56,
+      "q10_e12_dark": 1.1,
+      "q10_e21_dark": 1.95,
+      "reference_temperature_c": 22.0
+    }
+  },
+  "solver": {
+    "library": "scipy.integrate.solve_ivp",
+    "scipy_version": "1.9.1",
+    "method": "BDF",
+    "rtol": 1e-10,
+    "atol": 1e-10,
+    "max_step_ms": 0.1,
+    "output_grid_dt_ms": 0.4,
+    "irradiance_input": "exact callable evaluation; no interpolation, normalization, clipping, smoothing, or rescaling"
+  },
+  "recording": {
+    "voltage_mV": -60.0,
+    "temperature_C": 39.0
+  },
+  "stimulus_segments": [
+    {
+      "start_s": 0.0,
+      "end_s": 0.25,
+      "type": "constant",
+      "irradiance_mW_mm2": 0.0
+    },
+    {
+      "start_s": 0.25,
+      "end_s": 0.45,
+      "type": "constant",
+      "irradiance_mW_mm2": 0.2
+    },
+    {
+      "start_s": 0.45,
+      "end_s": 0.65,
+      "type": "constant",
+      "irradiance_mW_mm2": 0.0
+    },
+    {
+      "start_s": 0.65,
+      "end_s": 0.95,
+      "type": "constant",
+      "irradiance_mW_mm2": 5.5
+    },
+    {
+      "start_s": 0.95,
+      "end_s": 1.95,
+      "type": "constant",
+      "irradiance_mW_mm2": 0.0
+    },
+    {
+      "start_s": 1.95,
+      "end_s": 2.24,
+      "type": "pulse_train",
+      "pulse_amplitude_mW_mm2": 5.0,
+      "pulse_duration_s": 0.05,
+      "inter_pulse_dark_interval_s": 0.01,
+      "number_of_pulses": 5,
+      "pulses": [
+        {
+          "pulse_index": 0,
+          "start_s": 1.95,
+          "end_s": 2.0,
+          "irradiance_mW_mm2": 5.0
+        },
+        {
+          "pulse_index": 1,
+          "start_s": 2.01,
+          "end_s": 2.06,
+          "irradiance_mW_mm2": 5.0
+        },
+        {
+          "pulse_index": 2,
+          "start_s": 2.07,
+          "end_s": 2.12,
+          "irradiance_mW_mm2": 5.0
+        },
+        {
+          "pulse_index": 3,
+          "start_s": 2.13,
+          "end_s": 2.18,
+          "irradiance_mW_mm2": 5.0
+        },
+        {
+          "pulse_index": 4,
+          "start_s": 2.19,
+          "end_s": 2.24,
+          "irradiance_mW_mm2": 5.0
+        }
+      ]
+    },
+    {
+      "start_s": 2.24,
+      "end_s": 2.5,
+      "type": "constant",
+      "irradiance_mW_mm2": 0.0
+    },
+    {
+      "start_s": 2.5,
+      "end_s": 3.8,
+      "type": "continuous_formula",
+      "time_variable": "u = t - 2.5 s",
+      "formula": "3.0 + 1.2*sin(2*pi*3*u) + 0.8*sin(2*pi*17*u + 0.7) + 0.5*sin(2*pi*43*u + 1.9)",
+      "unit": "mW/mm^2",
+      "clipped_or_rectified": false
+    },
+    {
+      "start_s": 3.8,
+      "end_s": 4.7,
+      "type": "constant",
+      "irradiance_mW_mm2": 5.0
+    },
+    {
+      "start_s": 4.7,
+      "end_s": 5.0,
+      "type": "constant",
+      "irradiance_mW_mm2": 0.0
+    }
+  ],
+  "chunk_regression_boundaries_s": [
+    0.7312,
+    2.1072,
+    3.3332,
+    4.6208
+  ]
+}
