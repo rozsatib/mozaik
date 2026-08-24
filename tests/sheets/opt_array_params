@@ -2,6 +2,8 @@
     "size": 400,
     "spacing": 20,
     "depth_sampling_step": 10,
-    "light_source_light_propagation_data": "tests/sheets/unity_radprof.pickle",
+    "light_source_light_propagation_data": "tests/sheets/unity_radprof_470nm_590nm.pickle",
     "update_interval": 1,
+    "channelrhodopsin_model": "Sabatier",
+    "intensity_input_convention": "legacy",
 }

@@ -1,12 +1,15 @@
 import pickle
+import json
 import pytest
 import numpy as np
 import quantities as qt
 from copy import deepcopy
 from mozaik.models import Model
 from mozaik.sheets.direct_stimulator import (
+    ChR2_H134R_system,
     ClosedLoopOpticalStimulatorArray,
     OpticalStimulatorArrayChR,
+    _williams_current_density,
 )
 from parameters import ParameterSet
 from mozaik.sheets.vision import VisualCorticalUniformSheet3D
@@ -16,6 +19,8 @@ import copy
 import pathlib
 from types import SimpleNamespace
 from unittest.mock import Mock
+from scipy.integrate import odeint
+from scipy.interpolate import CubicSpline
 
 from neo.core import AnalogSignal
 from mozaik.tools.distribution_parametrization import (
@@ -46,6 +51,51 @@ class TestDepolarization:
 
 class TestOpticalStimulatorArray:
     pass
+
+
+def test_williams_reference():
+    reference_path = pathlib.Path(__file__).with_name("williams_reference.npy")
+    reference = np.load(reference_path, allow_pickle=False)
+    with reference_path.with_suffix(".json").open(encoding="utf-8") as f:
+        metadata = json.load(f)
+
+    assert reference.shape == tuple(metadata["shape"])
+    time_ms, irradiance = reference[:, 0] * 1000.0, reference[:, 1]
+
+    segment = next(s for s in metadata["stimulus_segments"] if s["type"] == "continuous_formula")
+    start_ms, end_ms = 1000.0 * segment["start_s"], 1000.0 * segment["end_s"]
+    mask = (time_ms >= start_ms) & (time_ms < end_ms)
+    continuous_irradiance = CubicSpline(time_ms[mask], irradiance[mask])
+
+    # odeint evaluates between samples: interpolate the continuous waveform smoothly,
+    # but use zero-order hold elsewhere to preserve discontinuous pulse edges.
+    def sampled_irradiance(t):
+        if start_ms <= t < end_ms:
+            return float(continuous_irradiance(t))
+        i = np.clip(np.searchsorted(time_ms, t, side="right") - 1, 0, len(irradiance) - 1)
+        return irradiance[i]
+
+    solver = metadata["solver"]
+    sampling_period = solver["output_grid_dt_ms"]
+
+    def reference_system(state, time):
+        return ChR2_H134R_system(
+            state, 0.0, np.array([sampled_irradiance(time)]), sampling_period
+        )
+
+    states = odeint(
+        reference_system,
+        np.asarray(metadata["model"]["dark_adapted_initial_state"]),
+        time_ms,
+        hmax=solver["max_step_ms"],
+        rtol=solver["rtol"],
+        atol=solver["atol"],
+        mxstep=100000,
+    )
+    actual = np.column_stack(
+        (states[:, [0, 2, 3, 1, 4]], _williams_current_density(states))
+    )
+    np.testing.assert_allclose(actual, reference[:, 2:], rtol=0.0, atol=6e-6)
 
 
 @pytest.fixture(scope="class")
@@ -107,7 +157,7 @@ class TestOpticalStimulatorArrayChR:
     def create_unity_radprof(self, h=20, w=100):
         radprof = np.zeros((h, w))
         radprof[:, 0] = 1
-        f = open(self.test_dir + "/sheets/unity_radprof.pickle", "wb")
+        f = open(self.test_dir + "/sheets/unity_radprof_470nm_590nm.pickle", "wb")
         pickle.dump(radprof, f)
         f.close()
 
@@ -184,12 +234,14 @@ class TestOpticalStimulatorArrayChR:
 
     def test_stimulated_cells(self):
         d = self.record_and_retrieve_data(self.ds, self.duration).sum(axis=0)
-        msp = self.ds.mixed_signals_photo.mean(axis=1)
-        for i, dj in zip(self.sheet.to_record["v"], d):
-            if msp[i] > 0:
-                assert dj != 0, "Zero input to neuron in stimulated_cells!"
+        mean_photon_flux = self.ds.mixed_signals_photo.mean(axis=1)
+        for i, injected_signal in zip(self.sheet.to_record["v"], d):
+            if mean_photon_flux[i] > 0:
+                assert injected_signal != 0, "Zero input to neuron in stimulated_cells!"
             else:
-                assert dj < 1e-11, "Nonzero input to neuron not in stimulated_cells!"
+                assert (
+                    injected_signal < 1e-11
+                ), "Nonzero input to neuron not in stimulated_cells!"
 
     @pytest.mark.parametrize("onset_time", PARAM_RNG.randint(0, 250, 4))
     @pytest.mark.parametrize("stim_duration", PARAM_RNG.randint(0, 50, 4))
@@ -299,7 +351,11 @@ class TestOpticalStimulatorArrayChRIntegratedBackend:
         )
 
     @staticmethod
-    def _parameters(transfection_proportion):
+    def _parameters(
+        transfection_proportion,
+        channelrhodopsin_model="Sabatier",
+        intensity_input_convention="legacy",
+    ):
         return ParameterSet(
             {
                 "size": 400.0,
@@ -307,9 +363,11 @@ class TestOpticalStimulatorArrayChRIntegratedBackend:
                 "update_interval": 1.0,
                 "depth_sampling_step": 10.0,
                 "light_source_light_propagation_data": (
-                    "tests/sheets/unity_radprof.pickle"
+                    "tests/sheets/unity_radprof_470nm_590nm.pickle"
                 ),
                 "transfection_proportion": transfection_proportion,
+                "channelrhodopsin_model": channelrhodopsin_model,
+                "intensity_input_convention": intensity_input_convention,
             }
         )
 
@@ -359,6 +417,40 @@ class TestOpticalStimulatorArrayChRIntegratedBackend:
             ds._integrated_cs_neuron_amplitude_times([5.0, 6.0, 9.0]),
             [5.1, 6.0, 9.0],
         )
+
+    def test_williams_input_units_produce_equivalent_response(self):
+        irradiance_mw_per_mm2 = 5.0
+        photon_energy_j = 6.62607015e-34 * 299792458.0 / (470e-9)
+        photon_flux = irradiance_mw_per_mm2 / (10.0 * photon_energy_j)
+        inputs = {
+            "legacy": photon_flux / 3e14,
+            "photons/s/cm^2": photon_flux,
+            "mW/mm^2": irradiance_mw_per_mm2,
+        }
+
+        responses = []
+        for convention, intensity in inputs.items():
+            self._setup_test_seeds()
+            stimulator = OpticalStimulatorArrayChR(
+                self._integrated_optical_sheet([True, False, True, False]),
+                self._parameters(1.0, "Williams", convention),
+            )
+            signal = np.full(stimulator.stimulator_coords_x.shape + (50,), intensity)
+            stimulator.set_input(signal)
+            responses.append(
+                (
+                    stimulator.mixed_signals_current.copy(),
+                    stimulator.ChR_state.copy(),
+                )
+            )
+
+        for current_and_state in responses[1:]:
+            np.testing.assert_allclose(
+                current_and_state[0], responses[0][0], rtol=1e-12, atol=1e-12
+            )
+            np.testing.assert_allclose(
+                current_and_state[1], responses[0][1], rtol=1e-12, atol=1e-12
+            )
 
     def test_closed_loop_programs_integrated_local_current_schedules(self):
         # Check that closed-loop updates program only rank-local integrated cells.
@@ -503,9 +595,11 @@ class TestOpticalStimulatorArrayChRIntegratedBackend:
                             "update_interval": 1.0,
                             "depth_sampling_step": 10.0,
                             "light_source_light_propagation_data": (
-                                "tests/sheets/unity_radprof.pickle"
+                                "tests/sheets/unity_radprof_470nm_590nm.pickle"
                             ),
                             "transfection_proportion": 1.0,
+                            "channelrhodopsin_model": "Sabatier",
+                            "intensity_input_convention": "legacy",
                         },
                     }
                 },
@@ -647,14 +741,14 @@ class TestClosedLoopOpticalStimulatorArray:
                 }
             ),
         )
-        photo = self.ds.calculate_photo(signal)
+        photon_flux = self.ds.calculate_photo(signal)
         indices = self.ds.recorded_neuron_indices("v")
         positions = self.ds.recorded_neuron_positions("v")
 
         assert positions.shape == (3, len(indices))
         np.testing.assert_allclose(positions[2], self.sheet.pop[indices].positions[2])
 
-        stimulated = np.any(photo[indices] > 0, axis=1)
+        stimulated = np.any(photon_flux[indices] > 0, axis=1)
         assert np.any(stimulated)
         distances = np.sqrt(
             (positions[0, stimulated] - center[0]) ** 2
