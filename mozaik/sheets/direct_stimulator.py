@@ -35,6 +35,7 @@ import io
 from numba import jit
 import nest
 from threadpoolctl import threadpool_limits
+from typing import NamedTuple
 
 from builtins import zip
 
@@ -405,7 +406,7 @@ class Depolarization(DirectStimulator):
 
 
 @jit()
-def ChRsystem(y,time,X,sampling_period):
+def ChrimsonR_system(y,time,X,sampling_period):
           PhoC1toO1 = 1.0993e-19 * 50
           PhoC2toO2 = 7.1973e-20 * 50
           PhoC1toC2 = 1.936e-21 * 50
@@ -436,6 +437,130 @@ def ChRsystem(y,time,X,sampling_period):
           _C2 = O2toC2 * O2    - C2toC1 * C2              - PhoC2toC1 * I * C2    + PhoC1toC2 * I * C1      - PhoC2toO2 * I * C2
 
           return (_O1,_O2,_C1,_C2,_S)
+
+
+# Williams ChR2(H134R) model parameter precomputation.
+class _ChR2H134RParameters(NamedTuple):
+    Gd1: float
+    Gd2: float
+    Gr: float
+    epsilon1: float
+    epsilon2: float
+    e12dark: float
+    e21dark: float
+    Ephoton: float
+    sigma_retinal: float
+    wloss: float
+    tauChR2: float
+
+Q10 = ParameterSet(
+    {
+        "Gd1": 1.97,
+        "Gd2": 1.77,
+        "epsilon1": 1.46,
+        "epsilon2": 2.77,
+        "Gr": 2.56,
+        "e12dark": 1.10,
+        "e21dark": 1.95,
+    }
+)
+
+# Approximate V1 temperature as 39 °C from macaque occipital cortex
+# Hayward et al. (1966), https://doi.org/10.3181/00379727-121-30827
+temperature = 39.0
+V = -60.0
+hc = 1.986446e-25
+wavelength = 470.0
+temperature_exponent = (temperature - 22.0) / 10.0
+
+ChR2_H134R_parameters = _ChR2H134RParameters(
+    Gd1=(0.075 + 0.043 * numpy.tanh((V + 20.0) / -20.0))
+    * Q10.Gd1**temperature_exponent,
+    Gd2=0.05 * Q10.Gd2**temperature_exponent,
+    Gr=0.0000434587
+    * numpy.exp(-0.0211539274 * V)
+    * Q10.Gr**temperature_exponent,
+    epsilon1=0.8535 * Q10.epsilon1**temperature_exponent,
+    epsilon2=0.14 * Q10.epsilon2**temperature_exponent,
+    e12dark=0.011 * Q10.e12dark**temperature_exponent,
+    e21dark=0.008 * Q10.e21dark**temperature_exponent,
+    Ephoton=1e9 * hc / wavelength,
+    sigma_retinal=12e-20,
+    wloss=1.3,
+    tauChR2=1.3,
+)
+
+
+# Williams ChR2(H134R): ODE system evaluated by odeint.
+@jit()
+def ChR2_H134R_system(statevar, t, X, sampling_period):
+    """Williams et al. ChR2(H134R) model at -60 mV and 39 degrees Celsius.
+
+    Irradiance ``X`` is in mW/mm^2 and the state order is C1, C2, O1, O2, p.
+    Array inputs are held constant over each sampling interval.
+    Model variables retain the names used by the ModelDB MATLAB implementation:
+    https://modeldb.science/showmodel?model=151549
+    """
+
+    parameters = ChR2_H134R_parameters
+    index = int(numpy.floor(t / sampling_period))
+    Irradiance = X[index] if 0 <= index < len(X) else 0.0
+
+    logphi0 = numpy.log1p(Irradiance / 0.024) if Irradiance > 0.0 else 0.0
+    e12 = parameters.e12dark + 0.005 * logphi0
+    e21 = parameters.e21dark + 0.004 * logphi0
+
+    flux = 1000.0 * Irradiance / parameters.Ephoton
+    F = flux * parameters.sigma_retinal / (parameters.wloss * 1000.0)
+    theta = 100.0 * Irradiance
+    S0 = 0.5 * (1.0 + numpy.tanh(120.0 * (theta - 0.1)))
+
+    C1, C2, O1, O2, p = statevar
+    Fp = F * p
+    dC1O1 = parameters.epsilon1 * Fp * C1
+    dO1C1 = parameters.Gd1 * O1
+    dO1O2 = e12 * O1
+    dO2O1 = e21 * O2
+    dO2C2 = parameters.Gd2 * O2
+    dC2O2 = parameters.epsilon2 * Fp * C2
+    dC2C1 = parameters.Gr * C2
+    dp = (S0 - p) / parameters.tauChR2
+    dC1 = dC2C1 + dO1C1 - dC1O1
+    dC2 = dO2C2 - dC2O2 - dC2C1
+    dO1 = dC1O1 + dO2O1 - dO1C1 - dO1O2
+    dO2 = dC2O2 + dO1O2 - dO2C2 - dO2O1
+    return dC1, dC2, dO1, dO2, dp
+
+
+def _williams_current_density(states):
+    """Return Williams ChR2 current density in pA/pF at -60 mV."""
+
+    states = numpy.asarray(states)
+    V = -60.0
+    A = 10.6408
+    B = -14.6408
+    C = 42.7671
+    Cm = 1.0
+    gChR2 = 2.0 / 5.0
+    G_ChR2 = gChR2 / Cm
+    gamma = 0.1
+    O1 = states[..., 2]
+    O2 = states[..., 3]
+    I_ChR2 = G_ChR2 * (A + B * numpy.exp(-V / C)) * (O1 + gamma * O2)
+    return I_ChR2
+
+
+def _photon_energy_j(wavelength_nm):
+    hc = 6.62607015e-34 * 299792458.0  # Planck constant * speed of light, J m
+    return hc / (wavelength_nm * 1e-9)
+
+
+def _mw_per_mm2_to_photons_per_s_per_cm2(irradiance, wavelength_nm):
+    return irradiance / (10.0 * _photon_energy_j(wavelength_nm))
+
+
+def _photons_per_s_per_cm2_to_mw_per_mm2(photon_flux, wavelength_nm):
+    return photon_flux * _photon_energy_j(wavelength_nm) * 10.0
 
 
 class OpticalStimulatorArray(DirectStimulator):   
@@ -605,6 +730,7 @@ class OpticalStimulatorArray(DirectStimulator):
                 self.sheet.pop.all_cells[i].inject(scs)
                 self.scs.append(scs)
 
+        # Propagated light is stored in photons/s/cm^2 for every opsin model.
         self.mixed_signals_photo = numpy.zeros(
             (len(self.optical_calc_population_indices),2), dtype=numpy.float64
         )
@@ -614,9 +740,10 @@ class OpticalStimulatorArray(DirectStimulator):
     # results independent of the number of MPI processes.
     @threadpool_limits.wrap(limits=1, user_api="blas")
     def calculate_photo(self, input_signal):
-        # input_signal needs to be of dimensions space x space x time
+        # input_signal is relative source intensity with dimensions
+        # space x space x time; the returned propagation result is photons/s/cm^2.
         assert input_signal.shape[:2] == self.stimulator_coords_x.shape, "Spatial dimensions of input signal (%s) and stimulation array (%s) are not equal!" % (input_signal.shape[1:],(self.stimulator_coords_x.shape))
-        photo = numpy.zeros(
+        propagated_photon_flux = numpy.zeros(
             (len(self.optical_calc_population_indices),input_signal.shape[2]),
             dtype=numpy.float64,
         )
@@ -628,11 +755,11 @@ class OpticalStimulatorArray(DirectStimulator):
             ss = input_signal[max(int(self.nearest_ix[i]-cutof),0):int(self.nearest_ix[i]+cutof+1),max(int(self.nearest_iy[i]-cutof),0):int(self.nearest_iy[i]+cutof+1),:]
             if ss.size != 0:
                 temp = temp[max(int(cutof-self.nearest_ix[i]),0):max(int(2*self.n+1+cutof-self.nearest_ix[i]),0),max(int(cutof-self.nearest_iy[i]),0):max(int(2*self.n+1+cutof-self.nearest_iy[i]),0)]
-                photo[i,:] = self.K*self.W*numpy.dot(temp.flatten(),numpy.reshape(ss,(len(temp.flatten()),-1)))
-        photo *= self.transfection_mask[
+                propagated_photon_flux[i,:] = self.K*self.W*numpy.dot(temp.flatten(),numpy.reshape(ss,(len(temp.flatten()),-1)))
+        propagated_photon_flux *= self.transfection_mask[
             self.optical_calc_population_indices, None
-        ] # photo input is zero for non-transfected cells
-        return photo
+        ] # Photon flux is zero for non-transfected cells.
+        return propagated_photon_flux
 
     def set_input(self, input_signal):
         self.stimulation_duration = input_signal.shape[2] * self.parameters.update_interval
@@ -713,27 +840,106 @@ class OpticalStimulatorArray(DirectStimulator):
 
 class OpticalStimulatorArrayChR(OpticalStimulatorArray):
     r"""
-    Like *OpticalStimulatorArray*, but the light (photons/s/cm^2) impinging on the
-    neuron is transformed via a model of Channelrhodopsin (courtesy of Quentin Sabatier)
-    to give the final injected current.
+    Like *OpticalStimulatorArray*, but the light impinging on the neuron is
+    transformed via either the Sabatier ChrimsonR model or the Williams ChR2
+    model to give the final injected current.
 
     Note that we approximate the current by ignoring the voltage dependence of the
     channels, as it is very expensive to inject conductance in PyNN. The
     Channelrhodopsin has reverse potential of ~0, and we assume that our neurons
     sits on average at -60mV to calculate the current.
     """
+    required_parameters = ParameterSet(
+        {
+            "channelrhodopsin_model": str,
+            "intensity_input_convention": str,
+        }
+    )
+
+    # Optical transmission factor, modelling dura light absorption, etc.
+    T_optical = 1.0
+    # Empirical conversion from Williams pA/pF to absolute current. This absorbs
+    # effective neuron membrane area/capacitance and ChR2 expression differences;
+    # it independent of AdExp membrane capacitance and T_optical.
+    effective_current_scaler_pF = 1.0
+    _legacy_reference_photon_flux = 3e14 # TODO: Verify and document the exact normalization factor.
+
     def __init__(self, sheet, parameters):
+        self.channelrhodopsin_model = parameters.channelrhodopsin_model.lower()
+        assert self.channelrhodopsin_model in ("sabatier", "williams"), (
+            "channelrhodopsin_model must be 'Sabatier' or 'Williams'!"
+        )
+        assert parameters.intensity_input_convention in (
+            "legacy",
+            "photons/s/cm^2",
+            "mW/mm^2",
+        ), (
+            "intensity_input_convention must be 'legacy', "
+            "'photons/s/cm^2', or 'mW/mm^2'!"
+        )
+        wavelength_label = (
+            "590nm" if self.channelrhodopsin_model == "sabatier" else "470nm"
+        )
+        assert wavelength_label in parameters.light_source_light_propagation_data, (
+            "light_source_light_propagation_data must contain '%s' for the %s path!"
+            % (wavelength_label, parameters.channelrhodopsin_model)
+        )
         OpticalStimulatorArray.__init__(self, sheet,parameters)
         self.mixed_signals_current = np.zeros_like(self.mixed_signals_photo)
-        self.ChR_default_state = np.array([0,0,0.2,0.8,0])
+        if self.channelrhodopsin_model == "sabatier":
+            self.ChR_default_state = np.array([0, 0, 0.2, 0.8, 0])
+        else:
+            self.ChR_default_state = np.array([1, 0, 0, 0, 0])
         self.ChR_state = np.tile(self.ChR_default_state,(self.mixed_signals_photo.shape[0],1))
-        
-    def calculate_ChR(self, photo_input):
-        current = np.zeros_like(photo_input)
-        times = numpy.arange(0,photo_input.shape[1] * self.parameters.update_interval,self.parameters.update_interval)
+
+    def calculate_photo(self, input_signal):
+        convention = self.parameters.intensity_input_convention
+        if convention == "legacy":
+            relative_source_intensity = input_signal
+        elif convention == "photons/s/cm^2":
+            relative_source_intensity = (
+                input_signal / self._legacy_reference_photon_flux
+            )
+        else:
+            wavelength_nm = (
+                590.0 if self.channelrhodopsin_model == "sabatier" else 470.0
+            )
+            source_photon_flux = _mw_per_mm2_to_photons_per_s_per_cm2(
+                input_signal, wavelength_nm
+            )
+            relative_source_intensity = (
+                source_photon_flux / self._legacy_reference_photon_flux
+            )
+        if self.T_optical != 1.0:
+            relative_source_intensity = relative_source_intensity * self.T_optical
+        propagated_photon_flux = OpticalStimulatorArray.calculate_photo(
+            self, relative_source_intensity
+        )
+        return propagated_photon_flux
+
+    def calculate_ChR(self, propagated_photon_flux):
+        current = np.zeros_like(propagated_photon_flux)
+        times = numpy.arange(0,propagated_photon_flux.shape[1] * self.parameters.update_interval,self.parameters.update_interval)
         for i in self.active_cells:
-            res = odeint(ChRsystem,self.ChR_state[i,:],times,args=(photo_input[i,:].flatten(),self.parameters.update_interval),hmax=self.parameters.update_interval)
-            current[i,:] =  60 * (17.2*res[:,0] + 2.9 * res[:,1])  / 2500 ; # the 60 corresponds to the 60mV difference between ChR reverse potential of 0mV and our expected mean Vm of about 60mV. This happens to end up being in nA which is what pyNN expect for current injection.
+            if self.channelrhodopsin_model == "sabatier":
+                res = odeint(ChrimsonR_system,self.ChR_state[i,:],times,args=(propagated_photon_flux[i,:].flatten(),self.parameters.update_interval),hmax=self.parameters.update_interval)
+                current[i,:] =  60 * (17.2*res[:,0] + 2.9 * res[:,1])  / 2500 ; # the 60 corresponds to the 60mV difference between ChR reverse potential of 0mV and our expected mean Vm of about 60mV. This happens to end up being in nA which is what pyNN expect for current injection.
+            else:
+                irradiance_mw_per_mm2 = _photons_per_s_per_cm2_to_mw_per_mm2(
+                    propagated_photon_flux[i, :].flatten(), 470.0
+                )
+                res = odeint(
+                    ChR2_H134R_system,
+                    self.ChR_state[i, :],
+                    times,
+                    args=(irradiance_mw_per_mm2, self.parameters.update_interval),
+                    hmax=self.parameters.update_interval,
+                )
+                current[i, :] = (
+                    _williams_current_density(res)
+                    * self.effective_current_scaler_pF
+                    / 1000.0
+                )
             self.ChR_state[i,:] = res[-1,:]
         return current
 
@@ -849,7 +1055,7 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
         )
         self.input_signal = None
         self._next_actuation_time = None
-        self._last_photo_sample = None
+        self._last_photon_flux_sample = None
         self._sheet_data_cache = {}
         self.feedback_data = {}
         self.use_direct_nest_spike_retrieval = USE_DIRECT_NEST_SPIKE_RETRIEVAL
@@ -900,7 +1106,7 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
         self._feedback_sheets()
         self.start_time = self.sheet.sim.get_current_time()
         self._next_actuation_time = 0.0
-        self._last_photo_sample = None
+        self._last_photon_flux_sample = None
         self._sheet_data_cache.clear()
         self.feedback_data = {}
         self.stimulation_duration = self.parameters.state_update_interval
@@ -1084,13 +1290,15 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
             )
         return input_signal
 
-    def _advance_ChR_to_segment_start(self, first_photo_sample):
-        if self._last_photo_sample is not None:
+    def _advance_ChR_to_segment_start(self, first_photon_flux_sample):
+        if self._last_photon_flux_sample is not None:
             # The controller provides one interval at a time. This private
             # one-step bridge gives ChR the boundary sample it needs without
             # exposing that bookkeeping to controller code.
             self.calculate_ChR(
-                np.stack((self._last_photo_sample, first_photo_sample), axis=1)
+                np.stack(
+                    (self._last_photon_flux_sample, first_photon_flux_sample), axis=1
+                )
             )
 
     def set_input_segment(self):
@@ -1108,7 +1316,7 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
         self.mixed_signals_photo = self.calculate_photo(self.input_signal)
         self._advance_ChR_to_segment_start(self.mixed_signals_photo[:, 0])
         self.mixed_signals_current = self.calculate_ChR(self.mixed_signals_photo)
-        self._last_photo_sample = self.mixed_signals_photo[:, -1].copy()
+        self._last_photon_flux_sample = self.mixed_signals_photo[:, -1].copy()
 
     def set_data_recording(self):
         if not self.use_direct_nest_spike_retrieval:
