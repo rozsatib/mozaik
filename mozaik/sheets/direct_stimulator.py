@@ -414,7 +414,7 @@ def ChrimsonR_system(y,time,X,sampling_period):
 
           O1toC1 = 0.125
           O2toC2 = 0.015
-          O2toS  = 0.0001 / 20
+          O2toS  = 0.0001
           C2toC1 = 1e-7
           StoC1  = 3e-6
 
@@ -561,6 +561,13 @@ def _mw_per_mm2_to_photons_per_s_per_cm2(irradiance, wavelength_nm):
 
 def _photons_per_s_per_cm2_to_mw_per_mm2(photon_flux, wavelength_nm):
     return photon_flux * _photon_energy_j(wavelength_nm) * 10.0
+
+
+# Provisional Williams compatibility scales.  Keeping these at module scope lets
+# temporary calibration utilities evaluate candidates without constructing a
+# simulator-backed OpticalStimulatorArrayChR.
+PROVISIONAL_WILLIAMS_T_OPTICAL = 1.0
+PROVISIONAL_WILLIAMS_EFFECTIVE_CURRENT_SCALER_PF = 1.0
 
 
 class OpticalStimulatorArray(DirectStimulator):   
@@ -857,11 +864,11 @@ class OpticalStimulatorArrayChR(OpticalStimulatorArray):
     )
 
     # Optical transmission factor, modelling dura light absorption, etc.
-    T_optical = 1.0
+    T_optical = PROVISIONAL_WILLIAMS_T_OPTICAL
     # Empirical conversion from Williams pA/pF to absolute current. This absorbs
     # effective neuron membrane area/capacitance and ChR2 expression differences;
     # it independent of AdExp membrane capacitance and T_optical.
-    effective_current_scaler_pF = 1.0
+    effective_current_scaler_pF = PROVISIONAL_WILLIAMS_EFFECTIVE_CURRENT_SCALER_PF
     _legacy_reference_photon_flux = 3e14 # TODO: Verify and document the exact normalization factor.
 
     def __init__(self, sheet, parameters):
