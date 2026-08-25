@@ -563,6 +563,12 @@ def _photons_per_s_per_cm2_to_mw_per_mm2(photon_flux, wavelength_nm):
     return photon_flux * _photon_energy_j(wavelength_nm) * 10.0
 
 
+# Historical Mozaik source intensity convention.  The original value was stored
+# as 3.9e-10 W/um^2; its source is unknown and it is not a Sabatier model
+# parameter.  In canonical optical units it is 0.39 mW/mm^2 per legacy unit.
+LEGACY_SURFACE_IRRADIANCE_MW_PER_MM2 = 0.39
+
+
 # Provisional Williams compatibility scales.  Keeping these at module scope lets
 # temporary calibration utilities evaluate candidates without constructing a
 # simulator-backed OpticalStimulatorArrayChR.
@@ -577,7 +583,7 @@ class OpticalStimulatorArray(DirectStimulator):
     The stimulator is a regular 2D grid (defined by `size` and `spacing`). Each
     grid element emits light that spreads through tissue, and contributions from
     all stimulators are summed linearly at each neuron to produce the local light
-    intensity (photon flux).
+    irradiance.
 
     The input is a spatiotemporal signal provided via `set_input(input_signal)`,
     a 3D array of shape:
@@ -585,7 +591,7 @@ class OpticalStimulatorArray(DirectStimulator):
         (Nx, Ny, T)
 
     where Nx and Ny match the stimulator grid, and T is the number of time steps. 
-    Each value represents the relative light output of a stimulator at a given time.
+    Each value represents surface irradiance in mW/mm^2 at a given time.
 
     This class computes the resulting light intensity at each neuron. The conversion
     from light to injected current is handled by child classes.
@@ -660,10 +666,6 @@ class OpticalStimulatorArray(DirectStimulator):
 
         light_flux_lookup =  scipy.interpolate.RegularGridInterpolator((np.linspace(0,1080,radprofs.shape[0]),numpy.linspace(0,1,radprofs.shape[1])*299.7*numpy.sqrt(2)), radprofs, method='linear',bounds_error=False,fill_value=0)
 
-        # the constant translating the data in radprofs to photons/s/cm^2
-        self.K = 2.97e26
-        self.W = 3.9e-10
-
         # now let's calculate mixing weights, this will be a matrix nxm where n is 
         # the number of neurons in the population and m is the number of stimulators
         x =  self.stimulator_coords_x.flatten()
@@ -737,7 +739,7 @@ class OpticalStimulatorArray(DirectStimulator):
                 self.sheet.pop.all_cells[i].inject(scs)
                 self.scs.append(scs)
 
-        # Propagated light is stored in photons/s/cm^2 for every opsin model.
+        # Propagated light is stored as local irradiance in mW/mm^2.
         self.mixed_signals_photo = numpy.zeros(
             (len(self.optical_calc_population_indices),2), dtype=numpy.float64
         )
@@ -746,12 +748,12 @@ class OpticalStimulatorArray(DirectStimulator):
     # A single BLAS worker is faster for these small calculations and keeps
     # results independent of the number of MPI processes.
     @threadpool_limits.wrap(limits=1, user_api="blas")
-    def calculate_photo(self, input_signal):
-        # input_signal is relative source intensity with dimensions
-        # space x space x time; the returned propagation result is photons/s/cm^2.
-        assert input_signal.shape[:2] == self.stimulator_coords_x.shape, "Spatial dimensions of input signal (%s) and stimulation array (%s) are not equal!" % (input_signal.shape[1:],(self.stimulator_coords_x.shape))
-        propagated_photon_flux = numpy.zeros(
-            (len(self.optical_calc_population_indices),input_signal.shape[2]),
+    def calculate_photo(self, surface_irradiance_mw_per_mm2):
+        # The input is surface irradiance with dimensions space x space x time.
+        # Propagation profiles are dimensionless, so the result remains mW/mm^2.
+        assert surface_irradiance_mw_per_mm2.shape[:2] == self.stimulator_coords_x.shape, "Spatial dimensions of input signal (%s) and stimulation array (%s) are not equal!" % (surface_irradiance_mw_per_mm2.shape[1:],(self.stimulator_coords_x.shape))
+        local_irradiance_mw_per_mm2 = numpy.zeros(
+            (len(self.optical_calc_population_indices),surface_irradiance_mw_per_mm2.shape[2]),
             dtype=numpy.float64,
         )
         
@@ -759,14 +761,14 @@ class OpticalStimulatorArray(DirectStimulator):
         # find coordinates given spacing and shift by half the array size
         for i in range(0,len(self.optical_calc_population_indices)):
             temp,cutof = self.mixing_templates[int(self.nearest_iz[i])]
-            ss = input_signal[max(int(self.nearest_ix[i]-cutof),0):int(self.nearest_ix[i]+cutof+1),max(int(self.nearest_iy[i]-cutof),0):int(self.nearest_iy[i]+cutof+1),:]
+            ss = surface_irradiance_mw_per_mm2[max(int(self.nearest_ix[i]-cutof),0):int(self.nearest_ix[i]+cutof+1),max(int(self.nearest_iy[i]-cutof),0):int(self.nearest_iy[i]+cutof+1),:]
             if ss.size != 0:
                 temp = temp[max(int(cutof-self.nearest_ix[i]),0):max(int(2*self.n+1+cutof-self.nearest_ix[i]),0),max(int(cutof-self.nearest_iy[i]),0):max(int(2*self.n+1+cutof-self.nearest_iy[i]),0)]
-                propagated_photon_flux[i,:] = self.K*self.W*numpy.dot(temp.flatten(),numpy.reshape(ss,(len(temp.flatten()),-1)))
-        propagated_photon_flux *= self.transfection_mask[
+                local_irradiance_mw_per_mm2[i,:] = numpy.dot(temp.flatten(),numpy.reshape(ss,(len(temp.flatten()),-1)))
+        local_irradiance_mw_per_mm2 *= self.transfection_mask[
             self.optical_calc_population_indices, None
-        ] # Photon flux is zero for non-transfected cells.
-        return propagated_photon_flux
+        ] # Irradiance is zero for non-transfected cells.
+        return local_irradiance_mw_per_mm2
 
     def set_input(self, input_signal):
         self.stimulation_duration = input_signal.shape[2] * self.parameters.update_interval
@@ -863,14 +865,15 @@ class OpticalStimulatorArrayChR(OpticalStimulatorArray):
         }
     )
 
-    # Optical transmission factor, modelling dura light absorption, etc.
-    T_optical = PROVISIONAL_WILLIAMS_T_OPTICAL
+    # TODO: This model-specific split is temporary compatibility scaffolding.
+    # Unify the two T_optical values once the Sabatier-to-Williams transition no
+    # longer requires independently calibrated optical transmission factors.
+    T_optical_sabatier = 1.0
+    T_optical_williams = PROVISIONAL_WILLIAMS_T_OPTICAL
     # Empirical conversion from Williams pA/pF to absolute current. This absorbs
     # effective neuron membrane area/capacitance and ChR2 expression differences;
-    # it independent of AdExp membrane capacitance and T_optical.
+    # it is independent of AdExp membrane capacitance and T_optical.
     effective_current_scaler_pF = PROVISIONAL_WILLIAMS_EFFECTIVE_CURRENT_SCALER_PF
-    _legacy_reference_photon_flux = 3e14 # TODO: Verify and document the exact normalization factor.
-
     def __init__(self, sheet, parameters):
         self.channelrhodopsin_model = parameters.channelrhodopsin_model.lower()
         assert self.channelrhodopsin_model in ("sabatier", "williams"), (
@@ -901,45 +904,52 @@ class OpticalStimulatorArrayChR(OpticalStimulatorArray):
 
     def calculate_photo(self, input_signal):
         convention = self.parameters.intensity_input_convention
+        wavelength_nm = (
+            590.0 if self.channelrhodopsin_model == "sabatier" else 470.0
+        )
         if convention == "legacy":
-            relative_source_intensity = input_signal
+            surface_irradiance_mw_per_mm2 = (
+                input_signal * LEGACY_SURFACE_IRRADIANCE_MW_PER_MM2
+            )
         elif convention == "photons/s/cm^2":
-            relative_source_intensity = (
-                input_signal / self._legacy_reference_photon_flux
+            surface_irradiance_mw_per_mm2 = (
+                _photons_per_s_per_cm2_to_mw_per_mm2(input_signal, wavelength_nm)
             )
         else:
-            wavelength_nm = (
-                590.0 if self.channelrhodopsin_model == "sabatier" else 470.0
-            )
-            source_photon_flux = _mw_per_mm2_to_photons_per_s_per_cm2(
-                input_signal, wavelength_nm
-            )
-            relative_source_intensity = (
-                source_photon_flux / self._legacy_reference_photon_flux
-            )
-        if self.T_optical != 1.0:
-            relative_source_intensity = relative_source_intensity * self.T_optical
-        propagated_photon_flux = OpticalStimulatorArray.calculate_photo(
-            self, relative_source_intensity
+            surface_irradiance_mw_per_mm2 = input_signal
+        T_optical = (
+            self.T_optical_sabatier
+            if self.channelrhodopsin_model == "sabatier"
+            else self.T_optical_williams
         )
-        return propagated_photon_flux
+        if T_optical != 1.0:
+            surface_irradiance_mw_per_mm2 = (
+                surface_irradiance_mw_per_mm2 * T_optical
+            )
+        local_irradiance_mw_per_mm2 = OpticalStimulatorArray.calculate_photo(
+            self, surface_irradiance_mw_per_mm2
+        )
+        return local_irradiance_mw_per_mm2
 
-    def calculate_ChR(self, propagated_photon_flux):
-        current = np.zeros_like(propagated_photon_flux)
-        times = numpy.arange(0,propagated_photon_flux.shape[1] * self.parameters.update_interval,self.parameters.update_interval)
+    def calculate_ChR(self, local_irradiance_mw_per_mm2):
+        current = np.zeros_like(local_irradiance_mw_per_mm2)
+        times = numpy.arange(0,local_irradiance_mw_per_mm2.shape[1] * self.parameters.update_interval,self.parameters.update_interval)
         for i in self.active_cells:
             if self.channelrhodopsin_model == "sabatier":
-                res = odeint(ChrimsonR_system,self.ChR_state[i,:],times,args=(propagated_photon_flux[i,:].flatten(),self.parameters.update_interval),hmax=self.parameters.update_interval)
+                local_photon_flux = _mw_per_mm2_to_photons_per_s_per_cm2(
+                    local_irradiance_mw_per_mm2[i, :].flatten(), 590.0
+                )
+                res = odeint(ChrimsonR_system,self.ChR_state[i,:],times,args=(local_photon_flux,self.parameters.update_interval),hmax=self.parameters.update_interval)
                 current[i,:] =  60 * (17.2*res[:,0] + 2.9 * res[:,1])  / 2500 ; # the 60 corresponds to the 60mV difference between ChR reverse potential of 0mV and our expected mean Vm of about 60mV. This happens to end up being in nA which is what pyNN expect for current injection.
             else:
-                irradiance_mw_per_mm2 = _photons_per_s_per_cm2_to_mw_per_mm2(
-                    propagated_photon_flux[i, :].flatten(), 470.0
-                )
                 res = odeint(
                     ChR2_H134R_system,
                     self.ChR_state[i, :],
                     times,
-                    args=(irradiance_mw_per_mm2, self.parameters.update_interval),
+                    args=(
+                        local_irradiance_mw_per_mm2[i, :].flatten(),
+                        self.parameters.update_interval,
+                    ),
                     hmax=self.parameters.update_interval,
                 )
                 current[i, :] = (
@@ -1062,7 +1072,7 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
         )
         self.input_signal = None
         self._next_actuation_time = None
-        self._last_photon_flux_sample = None
+        self._last_irradiance_sample = None
         self._sheet_data_cache = {}
         self.feedback_data = {}
         self.use_direct_nest_spike_retrieval = USE_DIRECT_NEST_SPIKE_RETRIEVAL
@@ -1113,7 +1123,7 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
         self._feedback_sheets()
         self.start_time = self.sheet.sim.get_current_time()
         self._next_actuation_time = 0.0
-        self._last_photon_flux_sample = None
+        self._last_irradiance_sample = None
         self._sheet_data_cache.clear()
         self.feedback_data = {}
         self.stimulation_duration = self.parameters.state_update_interval
@@ -1297,14 +1307,14 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
             )
         return input_signal
 
-    def _advance_ChR_to_segment_start(self, first_photon_flux_sample):
-        if self._last_photon_flux_sample is not None:
+    def _advance_ChR_to_segment_start(self, first_irradiance_sample):
+        if self._last_irradiance_sample is not None:
             # The controller provides one interval at a time. This private
             # one-step bridge gives ChR the boundary sample it needs without
             # exposing that bookkeeping to controller code.
             self.calculate_ChR(
                 np.stack(
-                    (self._last_photon_flux_sample, first_photon_flux_sample), axis=1
+                    (self._last_irradiance_sample, first_irradiance_sample), axis=1
                 )
             )
 
@@ -1323,7 +1333,7 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
         self.mixed_signals_photo = self.calculate_photo(self.input_signal)
         self._advance_ChR_to_segment_start(self.mixed_signals_photo[:, 0])
         self.mixed_signals_current = self.calculate_ChR(self.mixed_signals_photo)
-        self._last_photon_flux_sample = self.mixed_signals_photo[:, -1].copy()
+        self._last_irradiance_sample = self.mixed_signals_photo[:, -1].copy()
 
     def set_data_recording(self):
         if not self.use_direct_nest_spike_retrieval:

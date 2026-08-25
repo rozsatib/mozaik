@@ -8,7 +8,10 @@ from mozaik.models import Model
 from mozaik.sheets.direct_stimulator import (
     ChR2_H134R_system,
     ClosedLoopOpticalStimulatorArray,
+    LEGACY_SURFACE_IRRADIANCE_MW_PER_MM2,
+    OpticalStimulatorArray,
     OpticalStimulatorArrayChR,
+    _mw_per_mm2_to_photons_per_s_per_cm2,
     _williams_current_density,
 )
 from parameters import ParameterSet
@@ -62,7 +65,9 @@ def test_williams_reference():
     assert reference.shape == tuple(metadata["shape"])
     time_ms, irradiance = reference[:, 0] * 1000.0, reference[:, 1]
 
-    segment = next(s for s in metadata["stimulus_segments"] if s["type"] == "continuous_formula")
+    segment = next(
+        s for s in metadata["stimulus_segments"] if s["type"] == "continuous_formula"
+    )
     start_ms, end_ms = 1000.0 * segment["start_s"], 1000.0 * segment["end_s"]
     mask = (time_ms >= start_ms) & (time_ms < end_ms)
     continuous_irradiance = CubicSpline(time_ms[mask], irradiance[mask])
@@ -72,7 +77,9 @@ def test_williams_reference():
     def sampled_irradiance(t):
         if start_ms <= t < end_ms:
             return float(continuous_irradiance(t))
-        i = np.clip(np.searchsorted(time_ms, t, side="right") - 1, 0, len(irradiance) - 1)
+        i = np.clip(
+            np.searchsorted(time_ms, t, side="right") - 1, 0, len(irradiance) - 1
+        )
         return irradiance[i]
 
     solver = metadata["solver"]
@@ -234,9 +241,9 @@ class TestOpticalStimulatorArrayChR:
 
     def test_stimulated_cells(self):
         d = self.record_and_retrieve_data(self.ds, self.duration).sum(axis=0)
-        mean_photon_flux = self.ds.mixed_signals_photo.mean(axis=1)
+        mean_irradiance = self.ds.mixed_signals_photo.mean(axis=1)
         for i, injected_signal in zip(self.sheet.to_record["v"], d):
-            if mean_photon_flux[i] > 0:
+            if mean_irradiance[i] > 0:
                 assert injected_signal != 0, "Zero input to neuron in stimulated_cells!"
             else:
                 assert (
@@ -418,12 +425,44 @@ class TestOpticalStimulatorArrayChRIntegratedBackend:
             [5.1, 6.0, 9.0],
         )
 
-    def test_williams_input_units_produce_equivalent_response(self):
+    @pytest.mark.parametrize(
+        ("channelrhodopsin_model", "expected_scale"),
+        [("sabatier", 0.25), ("williams", 0.75)],
+    )
+    def test_uses_model_specific_optical_transmission_factor(
+        self, monkeypatch, channelrhodopsin_model, expected_scale
+    ):
+        monkeypatch.setattr(
+            OpticalStimulatorArray,
+            "calculate_photo",
+            lambda _stimulator, irradiance: irradiance,
+        )
+        stimulator = SimpleNamespace(
+            parameters=SimpleNamespace(intensity_input_convention="mW/mm^2"),
+            channelrhodopsin_model=channelrhodopsin_model,
+            T_optical_sabatier=0.25,
+            T_optical_williams=0.75,
+        )
+
+        actual = OpticalStimulatorArrayChR.calculate_photo(
+            stimulator, np.ones((2, 2, 3))
+        )
+
+        np.testing.assert_equal(actual, expected_scale)
+
+    @pytest.mark.parametrize(
+        ("channelrhodopsin_model", "wavelength_nm"),
+        [("Sabatier", 590.0), ("Williams", 470.0)],
+    )
+    def test_input_units_produce_equivalent_response(
+        self, channelrhodopsin_model, wavelength_nm
+    ):
         irradiance_mw_per_mm2 = 5.0
-        photon_energy_j = 6.62607015e-34 * 299792458.0 / (470e-9)
-        photon_flux = irradiance_mw_per_mm2 / (10.0 * photon_energy_j)
+        photon_flux = _mw_per_mm2_to_photons_per_s_per_cm2(
+            irradiance_mw_per_mm2, wavelength_nm
+        )
         inputs = {
-            "legacy": photon_flux / 3e14,
+            "legacy": (irradiance_mw_per_mm2 / LEGACY_SURFACE_IRRADIANCE_MW_PER_MM2),
             "photons/s/cm^2": photon_flux,
             "mW/mm^2": irradiance_mw_per_mm2,
         }
@@ -433,23 +472,43 @@ class TestOpticalStimulatorArrayChRIntegratedBackend:
             self._setup_test_seeds()
             stimulator = OpticalStimulatorArrayChR(
                 self._integrated_optical_sheet([True, False, True, False]),
-                self._parameters(1.0, "Williams", convention),
+                self._parameters(1.0, channelrhodopsin_model, convention),
             )
             signal = np.full(stimulator.stimulator_coords_x.shape + (50,), intensity)
             stimulator.set_input(signal)
             responses.append(
                 (
+                    stimulator.mixed_signals_photo.copy(),
                     stimulator.mixed_signals_current.copy(),
                     stimulator.ChR_state.copy(),
                 )
             )
 
-        for current_and_state in responses[1:]:
+        # Every convention enters propagation as the same canonical irradiance.
+        for irradiance_current_and_state in responses[1:]:
             np.testing.assert_allclose(
-                current_and_state[0], responses[0][0], rtol=1e-12, atol=1e-12
+                irradiance_current_and_state[0],
+                responses[0][0],
+                rtol=1e-12,
+                atol=1e-12,
+            )
+
+        # All conventions use the same local irradiance and opsin conversion.
+        reference_indices = (0, 1)
+        response_rtol = 1e-12 if channelrhodopsin_model == "Williams" else 1e-8
+        state_rtol = 1e-12 if channelrhodopsin_model == "Williams" else 1e-6
+        for reference_index in reference_indices:
+            np.testing.assert_allclose(
+                responses[2][1],
+                responses[reference_index][1],
+                rtol=response_rtol,
+                atol=1e-12,
             )
             np.testing.assert_allclose(
-                current_and_state[1], responses[0][1], rtol=1e-12, atol=1e-12
+                responses[2][2],
+                responses[reference_index][2],
+                rtol=state_rtol,
+                atol=1e-12,
             )
 
     def test_closed_loop_programs_integrated_local_current_schedules(self):
@@ -741,14 +800,14 @@ class TestClosedLoopOpticalStimulatorArray:
                 }
             ),
         )
-        photon_flux = self.ds.calculate_photo(signal)
+        local_irradiance = self.ds.calculate_photo(signal)
         indices = self.ds.recorded_neuron_indices("v")
         positions = self.ds.recorded_neuron_positions("v")
 
         assert positions.shape == (3, len(indices))
         np.testing.assert_allclose(positions[2], self.sheet.pop[indices].positions[2])
 
-        stimulated = np.any(photon_flux[indices] > 0, axis=1)
+        stimulated = np.any(local_irradiance[indices] > 0, axis=1)
         assert np.any(stimulated)
         distances = np.sqrt(
             (positions[0, stimulated] - center[0]) ** 2

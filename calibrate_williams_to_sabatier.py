@@ -5,8 +5,8 @@ Fit provisional Williams optical and current scales against the peak absolute
 photocurrent of the legacy Sabatier model.  This script is deliberately separate
 from production classes and never writes fitted values back into the model.
 
-The legacy command is converted to a representative local photon flux using the
-production OpticalStimulatorArray scale K * W and a unit spatial-profile factor.
+The legacy command is converted to surface irradiance using the production
+0.39 mW/mm^2 convention and a unit spatial-profile factor.
 Consequently, this is a compatibility calibration, not a biological parameter
 estimate or a fit for a particular tissue location.
 """
@@ -35,9 +35,10 @@ from scipy.optimize import least_squares
 from mozaik.sheets.direct_stimulator import (
     ChR2_H134R_system,
     ChrimsonR_system,
+    LEGACY_SURFACE_IRRADIANCE_MW_PER_MM2,
     PROVISIONAL_WILLIAMS_EFFECTIVE_CURRENT_SCALER_PF,
     PROVISIONAL_WILLIAMS_T_OPTICAL,
-    _photons_per_s_per_cm2_to_mw_per_mm2,
+    _mw_per_mm2_to_photons_per_s_per_cm2,
     _williams_current_density,
 )
 
@@ -47,11 +48,6 @@ CALIBRATION_LABEL = "Temporary Sabatier→Williams compatibility calibration"
 INPUT_AMPLITUDES = np.geomspace(0.01, 1.0, 8)
 PULSE_DURATION_MS = 50.0
 SAMPLING_PERIOD_MS = 1.0
-
-# OpticalStimulatorArray uses K=2.97e26 and W=3.9e-10 to translate a legacy
-# command and spatial-profile weight to local photon flux.  A representative
-# unit profile weight isolates the opsin dose-response compatibility problem.
-LEGACY_PHOTON_FLUX_PER_UNIT_COMMAND = 2.97e26 * 3.9e-10
 
 SABATIER_DARK_STATE = np.array([0.0, 0.0, 0.2, 0.8, 0.0])
 WILLIAMS_DARK_STATE = np.array([1.0, 0.0, 0.0, 0.0, 0.0])
@@ -67,11 +63,12 @@ def sabatier_current_trace(input_amplitude):
     """Return the Sabatier current trace in nA for one legacy command level."""
 
     times = _sample_times()
-    photon_flux = np.full(
+    irradiance = np.full(
         times.size,
-        LEGACY_PHOTON_FLUX_PER_UNIT_COMMAND * input_amplitude,
+        LEGACY_SURFACE_IRRADIANCE_MW_PER_MM2 * input_amplitude,
         dtype=float,
     )
+    photon_flux = _mw_per_mm2_to_photons_per_s_per_cm2(irradiance, 590.0)
     states = odeint(
         ChrimsonR_system,
         SABATIER_DARK_STATE,
@@ -89,12 +86,11 @@ def williams_current_trace(input_amplitude, t_optical, effective_current_scaler_
         raise ValueError("Williams calibration scales must be positive")
 
     times = _sample_times()
-    photon_flux = np.full(
+    irradiance = np.full(
         times.size,
-        LEGACY_PHOTON_FLUX_PER_UNIT_COMMAND * t_optical * input_amplitude,
+        LEGACY_SURFACE_IRRADIANCE_MW_PER_MM2 * t_optical * input_amplitude,
         dtype=float,
     )
-    irradiance = _photons_per_s_per_cm2_to_mw_per_mm2(photon_flux, 470.0)
     states = odeint(
         ChR2_H134R_system,
         WILLIAMS_DARK_STATE,
@@ -136,7 +132,7 @@ def fit_compatibility_scales():
     result = least_squares(
         residuals,
         np.log(initial_scales),
-        bounds=(np.log([1e-6, 1e-6]), np.log([1e6, 1e6])),
+        bounds=(np.log([1e-6, 1e-6]), np.log([1, 1e6])),
         xtol=1e-10,
         ftol=1e-10,
         gtol=1e-10,
@@ -266,8 +262,8 @@ def main():
     print("Compatibility fit only; these are not biological parameter estimates.")
     print(f"Legacy amplitudes: {INPUT_AMPLITUDES}")
     print(
-        "Representative local flux per unit command: "
-        f"{LEGACY_PHOTON_FLUX_PER_UNIT_COMMAND:.6g} photons/s/cm^2"
+        "Representative surface irradiance per unit command: "
+        f"{LEGACY_SURFACE_IRRADIANCE_MW_PER_MM2:.6g} mW/mm^2"
     )
 
     (
