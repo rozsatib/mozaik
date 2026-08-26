@@ -6,8 +6,12 @@ This document is the implementation anchor for an optional
 eccentricity-dependent visual topography in Mozaik.
 
 The design has been reviewed at the architectural and scientific-assumption
-level. Implementation is in progress: Phase 1 Stages 0 and 1 are complete,
-and Stage 2 has not started. The work is split by
+level. Implementation is in progress. Phase 1 Stages 0 through 3 are complete.
+Stage 4 production behavior and ordinary tests are implemented, but Stage 4
+acceptance remains incomplete because the full-neuron spatial-frequency
+criterion is deliberately unfinished and the required performance benchmark
+matrix has not been collected. Phase 2 Stages 5 through 7 have not started.
+The work is split by
 [Two-phase implementation boundary](#two-phase-implementation-boundary), with
 the smaller stages listed in [Implementation sequence](#implementation-sequence).
 This document prevents later stages or Phase 2 from silently changing
@@ -15,6 +19,37 @@ decisions made in Phase 1.
 
 The new mode must coexist with the existing uniform Cartesian mode. Legacy
 configurations and legacy numerical results are a hard compatibility boundary.
+
+### Current implementation snapshot
+
+The repository currently contains both LGN input components:
+
+- `SpatioTemporalFilterRetinaLGN` remains the legacy, non-eccentricity path.
+  It uses uniform rectangular ON/OFF sheets, one shared quantized RF per
+  polarity, configured spatial resolution, legacy luminance normalization,
+  and the optional `original_2024_lgn_mode` compatibility behavior.
+- `EccentricityDependentSpatioTemporalFilterRetinaLGN` implements the LGN-only
+  eccentricity path. It uses fixed-count independently sampled ON/OFF disk
+  populations, immutable shared topography, per-cell scaled Cai97 RFs, a
+  resolution derived from the smallest realized centre sigma, corrected
+  summed-kernel luminance handling, current injection, and one-/two-rank
+  reproducibility.
+- Both components expose `visual_space_resolution_deg`. The eccentricity
+  component reuses the legacy presentation, response-cache, gain, current
+  injection, null-input, and per-frame convolution machinery after constructing
+  its distinct populations and RFs.
+- The eccentricity path remains an LGN-only component. No production/example
+  model currently selects it, and no retinotopic cortical sheet,
+  eccentricity-dependent Gabor connector, or end-to-end LGN-to-cortex path has
+  been implemented.
+
+Ordinary legacy and eccentricity LGN tests, including the supported one- and
+two-rank regression probes, pass in the current development environment. The
+full-neuron spatial-frequency characterization remains the one intentional
+failure: it writes diagnostic curves and then fails at the documented
+`TODO Finish` assertion. Direct-script MPI probes require the repository root
+on `PYTHONPATH` so that repository-local test helpers can be imported; this is
+a test-harness requirement rather than an LGN runtime requirement.
 
 ## How to use this document
 
@@ -450,14 +485,14 @@ The following decisions are requirements, not open implementation choices:
 - The first full-neuron spatial-frequency validation intentionally ends in a
   failing test after writing a plot and a `TODO Finish` marker.
 
-## Current Mozaik implementation
+## Legacy Mozaik implementation baseline
 
-This section records the legacy behavior that the implementer must understand
-and preserve.
+This section records the non-eccentricity behavior that the implementation
+must continue to preserve.
 
 ### LGN component and population construction
 
-The current input component is
+The legacy input component is
 `mozaik.models.vision.spatiotemporalfilter.SpatioTemporalFilterRetinaLGN`.
 
 Its relevant parameters are:
@@ -499,7 +534,7 @@ construction so PyNN position generation is reproducible under supported MPI
 execution.
 
 LGN noise seeds are generated for global cell identifiers and instantiated
-only for locally owned cells. The eccentricity implementation must retain this
+only for locally owned cells. The eccentricity implementation retains this
 global-seed/local-construction pattern.
 
 ### Receptive fields
@@ -2757,6 +2792,19 @@ These are order-of-magnitude estimates, not capacity guarantees. Since
 
 ### Required reporting
 
+Current implementation status:
+
+- the Phase 1 initialization report is implemented and emitted before the
+  per-cell allocation loop;
+- it reports the visual domain and cap, realized eccentricity and sigma ranges,
+  derived resolution, kernel-shape range, estimated retained local
+  kernel/contrast memory, and global/local polarity counts;
+- the estimate covers the two dominant retained 3D arrays but not temporary RF
+  construction arrays, response state, stimulus-cache entries, simulator
+  current-source storage, or process overhead;
+- the timing and resident-memory benchmark matrix below has not yet been
+  implemented or collected.
+
 At initialization report:
 
 - `E_max`;
@@ -2811,6 +2859,38 @@ Do not implement these now, but record them near the full-kernel allocation:
 Choose a future optimization only after benchmarks identify the dominant
 bottleneck.
 
+### Current performance blockers
+
+The current implementation deliberately establishes complete-kernel reference
+behavior before optimization. Its known engineering blockers are:
+
+- Every eccentricity-mode local cell retains a complete float64 3D kernel and
+  an equally sized contrast component. Peak RF-construction memory is higher
+  still because quantization and Cai97 evaluation materialize full coordinate,
+  temporal, centre, surround, and result arrays.
+- The smallest realized centre sigma sets one global visual-space resolution.
+  Peripheral supports therefore contain progressively more pixels, and memory
+  and dense-convolution work grow approximately quadratically with spatial
+  sampling density.
+- Every frame is rendered separately for every local ON/OFF cell and followed
+  by a dense contrast-kernel dot product. There is no shared full-field render,
+  batch convolution, separable spatial/temporal evaluation, FFT path, or
+  scale-tier reuse.
+- The in-memory stimulus cache has no size or eviction bound and deep-copies
+  per-cell kernel-response traces. It avoids recomputation across repeated
+  trials but can become a separate memory cost for many distinct stimuli.
+- `mpi_reproducible_noise=True` generates and installs one noise sample per
+  simulator timestep per local cell through `StepCurrentSource`, which is
+  intentionally slower than backend-native noisy current sources.
+- MPI distributes per-cell RF allocation and convolution across locally owned
+  cells, but every rank still regenerates the complete global ON/OFF position
+  arrays and retains global position/RF metadata. Disk rejection sampling also
+  becomes less efficient for large uncapped visual fields.
+
+The legacy path avoids per-cell kernel storage by sharing one RF per polarity,
+but it still uses the same per-cell/per-frame rendering, dense convolution,
+unbounded response cache, and current-injection loops.
+
 ## Implementation sequence
 
 Each stage should be a reviewable chunk with its own focused tests.
@@ -2857,6 +2937,8 @@ extended in place by Phase 2.
 
 ### Stage 2: LGN disk positions
 
+Status: complete.
+
 - Add eccentricity LGN configuration and validation.
 - Add fixed count per polarity.
 - Add disk rejection sampling and explicit-position sheets.
@@ -2867,6 +2949,8 @@ Exit criterion: exact counts and statistically correct positions are
 reproducible without constructing variable RFs.
 
 ### Stage 3: per-cell RFs and resolution
+
+Status: complete.
 
 - Assign per-cell sigmas and support.
 - Derive global stimulus resolution.
@@ -2879,6 +2963,14 @@ Exit criterion: variable RFs render and convolve at the required shared
 resolution.
 
 ### Stage 4: new-mode luminance correction
+
+Status: implementation present; acceptance incomplete.
+
+The summed-luminance behavior, state carry-over, blank and explicit input,
+RF-rescaling characterization, theoretical DoG checks, and regression tests
+are present. The full-neuron characterization test is present in its required
+deliberately failing form. Final scientific protocol/tolerance approval and
+the Phase 1 performance benchmark matrix remain outstanding.
 
 - Add the eccentricity-specific summed-luminance path.
 - Cover starting, blank, explicit, and carried state.
@@ -2894,6 +2986,8 @@ expected failure.
 
 ### Stage 5: retinotopic cortical sheet
 
+Status: not started.
+
 - Add the provider's forward/inverse mapping formulas and Cartesian wrappers.
 - Document mapping units, fixation singularity, and angular seam.
 - Add corner-origin physical cortical coordinates.
@@ -2908,6 +3002,8 @@ scalar magnification assumption.
 
 ### Stage 6: Gabor and connectivity integration
 
+Status: not started.
+
 - Add the eccentricity-specific Gabor connector.
 - Calculate theoretical frequency from unjittered position.
 - Add deterministic jitter rejection.
@@ -2921,6 +3017,8 @@ description while legacy connection lists remain unchanged.
 
 ### Stage 7: functional validation
 
+Status: not started.
+
 - Generate representative Gabor plots.
 - Run the centred disk-to-cortex end-to-end model.
 - Add Phase 2 cortical and connector performance reporting.
@@ -2933,7 +3031,8 @@ acceptance criterion remains visibly separate from the passing Phase 2 suite.
 
 ## Known limitations and future work
 
-The following are accepted limitations, not blockers:
+The following are accepted scientific or compatibility limitations, not
+implementation blockers:
 
 - Density and RF-size fits use cat-derived constraints and are extrapolated in
   parts of the supported range.
@@ -2950,6 +3049,10 @@ The following are accepted limitations, not blockers:
   frequencies from the cortical neuron's theoretical assignment.
 - Nonuniform LGN density can change unique fan-in and aggregate input.
 - Full per-cell 3D kernels may be prohibitively expensive.
+- The response cache is in-memory, unbounded, and non-persistent.
+- Eccentricity mode currently supports only Cai97 `stRF_2d` with
+  `subtract_mean=False`, square spatial pixels, and fixation-centred visual
+  rectangles.
 - Corrected luminance responses may make historical gain values unsuitable.
 - Orientation-map correctness for a selected cortical size is the user's
   responsibility.
@@ -2958,7 +3061,11 @@ The following are accepted limitations, not blockers:
 
 ## Remaining decisions
 
-There are no remaining decisions that block the initial implementation.
+There are no unresolved decisions blocking the already implemented ordinary
+Phase 1 LGN behavior or independent Phase 2 work. Closing Stage 4 scientific
+acceptance still requires an explicit preferred-spatial-frequency protocol and
+tolerance. Selecting a production optimization still requires the outstanding
+performance benchmark matrix.
 
 The following previously implicit compatibility limits are now explicit and
 do not require an implementation guess:
