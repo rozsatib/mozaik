@@ -934,9 +934,11 @@ class TestClosedLoopOpticalStimulatorArray:
         attached_data = object()
         attached_get_data = Mock(return_value=attached_data)
         other = self._fake_sheet("other_cortex", {"v": [0]}, object())
-        fast_get_data = Mock()
+        collect_direct_spike_counts = Mock()
         monkeypatch.setattr(self.sheet, "get_data", attached_get_data)
-        monkeypatch.setattr(self.ds, "get_data", fast_get_data)
+        monkeypatch.setattr(
+            self.ds, "_collect_direct_spike_counts", collect_direct_spike_counts
+        )
         monkeypatch.setattr(self.ds, "set_input_segment", Mock())
         monkeypatch.setattr(self.ds, "active_cells", np.array([], dtype=int))
         monkeypatch.setattr(self.ds, "times", np.array([0.0]), raising=False)
@@ -956,7 +958,7 @@ class TestClosedLoopOpticalStimulatorArray:
 
         self.ds.update_state()
 
-        fast_get_data.assert_called_once_with()
+        collect_direct_spike_counts.assert_called_once_with()
         attached_get_data.assert_called_once_with(clear=False)
         other.get_data.assert_called_once_with(clear=False)
         if retrieve_all:
@@ -1020,7 +1022,7 @@ class TestClosedLoopOpticalStimulatorArray:
         monkeypatch.setattr(mozaik, "mpi_comm", communicator)
         monkeypatch.setattr(self.ds, "update_state_function", update_controller)
         monkeypatch.setattr(self.ds, "_collect_sheet_data", Mock())
-        monkeypatch.setattr(self.ds, "get_data", Mock())
+        monkeypatch.setattr(self.ds, "_collect_direct_spike_counts", Mock())
         monkeypatch.setattr(self.ds, "set_input_segment", Mock())
         monkeypatch.setattr(self.ds, "_set_stimulation_current_schedule", Mock())
         monkeypatch.setattr(self.ds, "times", np.array([0.0]), raising=False)
