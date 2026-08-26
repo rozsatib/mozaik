@@ -873,8 +873,8 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
     # Maybe add calculate input function setter to assert its parameters, etc.?
     def current_time(self): #Maybe make this an attribute and automatically calculate it upon state update?
         if self.start_time is None:
-            self.start_time = self.sheet.sim.get_current_time()
-        return self.sheet.sim.get_current_time() - self.start_time
+            self.start_time = self.sheet.model.simulator_time
+        return self.sheet.model.simulator_time - self.start_time
 
     def actuation_delay(self):
         return self._actuation_delay
@@ -1062,9 +1062,7 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
         """Return the feedback data collected before the current callback."""
         return self.feedback_data
 
-    def get_recording_all_sheets(
-        self, name, t_start=None, t_stop=None, retrieve=True
-    ):
+    def get_recording_all_sheets(self, name, t_start=None, t_stop=None):
         """Read recordings from the already collected feedback-sheet data."""
         return {
             sheet_name: self.get_recording(
@@ -1166,7 +1164,7 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
             self.last_spike_counts = cumulative_counts - self.spike_counts
             self.spike_counts = cumulative_counts
 
-    def get_data(self):
+    def _collect_direct_spike_counts(self):
         if self.use_direct_nest_spike_retrieval:
             self._get_spike_counts_directly_from_nest()
 
@@ -1174,7 +1172,7 @@ class ClosedLoopOpticalStimulatorArray(OpticalStimulatorArrayChR):
     def update_state(self):
         assert self.update_state_function is not None, "Update state function not set!"
         self._collect_sheet_data()
-        self.get_data()
+        self._collect_direct_spike_counts()
         # At this point the controller has data up to current_time(); its output
         # is scheduled actuation_delay later so NEST can deliver it on time.
         self._next_actuation_time = self.current_time() + self.actuation_delay()
