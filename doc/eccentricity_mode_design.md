@@ -9,8 +9,10 @@ The design has been reviewed at the architectural and scientific-assumption
 level. Implementation is in progress. Phase 1 Stages 0 through 3 are complete.
 Stage 4 production behavior and ordinary tests are implemented, but Stage 4
 acceptance remains incomplete because the full-neuron spatial-frequency
-criterion is deliberately unfinished and the required performance benchmark
-matrix has not been collected. Phase 2 Stages 5 through 7 have not started.
+criterion is deliberately unfinished and the full end-to-end performance
+benchmark matrix has not been collected. An isolated RF/operator benchmark of
+the implemented factorization is recorded below. Phase 2 Stages 5 through 7
+have not started.
 The work is split by
 [Two-phase implementation boundary](#two-phase-implementation-boundary), with
 the smaller stages listed in [Implementation sequence](#implementation-sequence).
@@ -30,10 +32,10 @@ The repository currently contains both LGN input components:
   and the optional `original_2024_lgn_mode` compatibility behavior.
 - `EccentricityDependentSpatioTemporalFilterRetinaLGN` implements the LGN-only
   eccentricity path. It uses fixed-count independently sampled ON/OFF disk
-  populations, immutable shared topography, per-cell scaled Cai97 RFs, a
-  resolution derived from the smallest realized centre sigma, corrected
-  summed-kernel luminance handling, current injection, and one-/two-rank
-  reproducibility.
+  populations, immutable shared topography, per-cell scaled and factorized
+  Cai97 RFs, a resolution derived from the smallest realized centre sigma,
+  corrected summed-kernel luminance handling, current injection, and
+  one-/two-rank reproducibility.
 - Both components expose `visual_space_resolution_deg`. The eccentricity
   component reuses the legacy presentation, response-cache, gain, current
   injection, null-input, and per-frame convolution machinery after constructing
@@ -471,7 +473,8 @@ The following decisions are requirements, not open implementation choices:
 - The angular seam is intentionally discontinuous.
 - A smaller user-specified cortical extent crops the represented visual field;
   it does not rescale the retinotopic mapping.
-- Full per-cell 3D LGN kernels are used initially.
+- Full per-cell 3D LGN kernels establish the numerical reference; production
+  Cai97 RFs now use exact centre/surround factorization.
 - Eccentricity mode is incompatible with `original_2024_lgn_mode`.
 - Eccentricity mode initially supports only the Cai97 DoG RF with
   `subtract_mean=False`.
@@ -2006,14 +2009,22 @@ Quantization may expand realised support by less than one pixel because it
 uses `ceil`. Tests must measure this separately from biological support
 scaling.
 
-### Full 3D implementation
+### Receptive-field representation
 
-Construct one complete `SpatioTemporalReceptiveField` for each locally owned
-LGN cell. ON cells use the Cai97 function and OFF cells use its negation.
+The initial implementation constructed one complete 3D
+`SpatioTemporalReceptiveField` for each locally owned LGN cell. Those dense
+kernels remain the numerical reference.
 
-Do not introduce factorization, lazy regeneration, scale bins, or
-interpolation in the first implementation. Full kernels provide the direct
-reference behavior needed to discover the actual bottleneck.
+The production Cai97 path now stores the exact centre and surround terms as
+spatial/temporal factors. Each spatial Gaussian is itself stored as two 1D axis
+arrays. `KernelResponseOperator` evaluates contrast and luminance directly
+from these factors without materializing a 3D kernel. ON/OFF polarity,
+normalization, grids, support, and response semantics remain unchanged.
+
+The representation accepts any number of linear terms. A callable opts in by
+providing a callable `factorize` attribute; callables without one retain the
+dense representation. `SpatioTemporalReceptiveField.as_dense()` reconstructs
+the reference form for tests, visualization, and explicit compatibility use.
 
 ## Stimulus spatial resolution
 
@@ -2771,14 +2782,29 @@ n_{y,i}\mathrel{\mathop{\simeq}}\lceil H_i/dx\rceil,
 n_t=\lceil T/dt\rceil.
 $$
 
-One float64 3D kernel requires approximately:
+One float64 dense 3D kernel requires approximately:
 
 $$
 8n_{x,i}n_{y,i}n_t\ \text{bytes}.
 $$
 
-The current cell path also stores contrast-derived arrays and response state,
-so practical per-cell memory is greater than the raw kernel.
+The dense reference path also stores a contrast array of the same size. With
+coordinates and the temporal luminance kernel included, its dominant retained
+NumPy payload is approximately:
+
+$$
+8(2n_{x,i}n_{y,i}n_t+n_{x,i}+n_{y,i}+2n_t)\ \text{bytes}.
+$$
+
+For the current two-term Cai97 factorization with separable 1D spatial factors,
+the corresponding RF/operator payload is approximately:
+
+$$
+8(3n_{x,i}+3n_{y,i}+6n_t+2)\ \text{bytes}.
+$$
+
+Response state, Python object overhead, stimulus-cache entries, and simulator
+state are additional in either path.
 
 With approximately four samples per centre sigma and reference temporal
 sampling, earlier design estimates were:
@@ -2787,8 +2813,8 @@ sampling, earlier design estimates were:
 - near 25 degrees: roughly `31.8 MiB`;
 - near 90 degrees: potentially about `2 GiB`.
 
-These are order-of-magnitude estimates, not capacity guarantees. Since
-`E_max < 90`, the last case is approached but not reached.
+These are order-of-magnitude dense-reference estimates, not capacity
+guarantees. Since `E_max < 90`, the last case is approached but not reached.
 
 ### Required reporting
 
@@ -2798,12 +2824,12 @@ Current implementation status:
   per-cell allocation loop;
 - it reports the visual domain and cap, realized eccentricity and sigma ranges,
   derived resolution, kernel-shape range, estimated retained local
-  kernel/contrast memory, and global/local polarity counts;
-- the estimate covers the two dominant retained 3D arrays but not temporary RF
+  RF/operator array memory, and global/local polarity counts;
+- the estimate covers the factor and operator arrays but not temporary RF
   construction arrays, response state, stimulus-cache entries, simulator
   current-source storage, or process overhead;
-- the timing and resident-memory benchmark matrix below has not yet been
-  implemented or collected.
+- the isolated factorization benchmark below has been collected; the broader
+  model/MPI timing and resident-memory matrix remains outstanding.
 
 At initialization report:
 
@@ -2843,11 +2869,57 @@ Report scaling with:
 Phase 2 adds cortical-count scaling and separates input-layer cost from
 feedforward/recurrent connection cost.
 
+### Factorized RF/operator benchmark
+
+The following measurements were collected on 2026-08-27 on an Intel Core
+i7-8565U, Linux x86-64, Python 3.12.13, and NumPy 1.26.4. OpenBLAS, OpenMP, and
+MKL thread counts were fixed to one. Each case used the Cai97 centre/surround
+kernel with `subtract_mean=False`, `dx=dy=0.1` degrees, `dt=7 ms`, and a
+200 ms duration (29 temporal samples).
+
+Retained memory is the exact unique NumPy-array payload owned by one RF and its
+operator, including coordinate arrays. Peak allocation is the peak traced
+allocation during RF quantization and operator construction. It includes
+temporary NumPy allocations but excludes interpreter/import memory and other
+model or simulator state.
+
+| Spatial grid | Dense retained | Factorized retained | Retained reduction | Dense peak | Factorized peak |
+|---|---:|---:|---:|---:|---:|
+| 60 x 60 | 1.594 MiB | 4.188 KiB | 390x | 7.671 MiB | 10.764 KiB |
+| 120 x 120 | 6.374 MiB | 7.000 KiB | 932x | 30.671 MiB | 15.451 KiB |
+| 240 x 240 | 25.492 MiB | 12.625 KiB | 2,068x | 122.670 MiB | 24.826 KiB |
+
+The dense peak resident-set-size increases were 8.1, 32.0, and 127.7 MiB,
+respectively, consistent with the traced peaks. Factorized construction did
+not exceed the fresh process's import-time RSS high-water mark, so its small
+RSS increment was below that measurement's resolution; the exact payload and
+traced peaks above remain measurable.
+
+Wall-clock values below are the mean of the medians from two independent runs.
+Each run used seven construction measurements and seven repeated response
+measurements after warm-up. A response measurement applies one operator to one
+random image patch; it excludes rendering, accumulation, gain, noise, and
+simulator-current installation, which are unchanged by this optimization.
+
+| Spatial grid | Dense construction | Factorized construction | Speedup | Dense response | Factorized response | Speedup |
+|---|---:|---:|---:|---:|---:|---:|
+| 60 x 60 | 17.906 ms | 0.334 ms | 53.6x | 37.672 us | 16.134 us | 2.33x |
+| 120 x 120 | 73.812 ms | 0.354 ms | 208x | 117.695 us | 23.359 us | 5.04x |
+| 240 x 240 | 313.208 ms | 0.374 ms | 838x | 853.236 us | 51.421 us | 16.6x |
+
+The benchmark confirms the intended memory reduction and also shows a
+wall-clock improvement in both RF construction and linear-response evaluation.
+The increasing ratios follow the dense path's spatial-times-temporal storage
+and work versus the two-term factorized path. These isolated results do not
+replace the still-required full model/MPI benchmark matrix, where rendering,
+caching, state handling, and simulator work may dominate total runtime.
+
 ### Deferred optimization TODOs
 
-Do not implement these now, but record them near the full-kernel allocation:
+Exact centre/surround factorization is implemented. The following further
+optimizations remain deferred until end-to-end benchmarks identify another
+dominant bottleneck:
 
-- exact centre/surround temporal-spatial factorization;
 - kernel banks at eccentricity tiers;
 - lazy or streaming kernels;
 - recursive Gaussian filtering;
@@ -2861,21 +2933,19 @@ bottleneck.
 
 ### Current performance blockers
 
-The current implementation deliberately establishes complete-kernel reference
-behavior before optimization. Its known engineering blockers are:
+The dense reference established the numerical behavior before factorization.
+The factorized implementation removes its dominant RF storage and construction
+costs, but these engineering blockers remain:
 
-- Every eccentricity-mode local cell retains a complete float64 3D kernel and
-  an equally sized contrast component. Peak RF-construction memory is higher
-  still because quantization and Cai97 evaluation materialize full coordinate,
-  temporal, centre, surround, and result arrays.
+- Each response still projects every per-cell image patch through every
+  spatial factor. For the current two Cai97 terms this is linear in the patch
+  pixel count, but no convolution or projection work is shared across cells.
 - The smallest realized centre sigma sets one global visual-space resolution.
-  Peripheral supports therefore contain progressively more pixels, and memory
-  and dense-convolution work grow approximately quadratically with spatial
-  sampling density.
-- Every frame is rendered separately for every local ON/OFF cell and followed
-  by a dense contrast-kernel dot product. There is no shared full-field render,
-  batch convolution, separable spatial/temporal evaluation, FFT path, or
-  scale-tier reuse.
+  Peripheral supports therefore contain progressively more pixels, and patch
+  rendering and spatial projection work grow approximately quadratically with
+  RF scale.
+- Every frame is rendered separately for every local ON/OFF cell. There is no
+  shared full-field render, batch evaluation, FFT path, or scale-tier reuse.
 - The in-memory stimulus cache has no size or eviction bound and deep-copies
   per-cell kernel-response traces. It avoids recomputation across repeated
   trials but can become a separate memory cost for many distinct stimuli.
@@ -2887,9 +2957,9 @@ behavior before optimization. Its known engineering blockers are:
   arrays and retains global position/RF metadata. Disk rejection sampling also
   becomes less efficient for large uncapped visual fields.
 
-The legacy path avoids per-cell kernel storage by sharing one RF per polarity,
-but it still uses the same per-cell/per-frame rendering, dense convolution,
-unbounded response cache, and current-injection loops.
+The legacy path shares one factorized RF and immutable response operator per
+polarity, but it still uses the same per-cell/per-frame rendering, unbounded
+response cache, and current-injection loops.
 
 ## Implementation sequence
 
@@ -2954,7 +3024,8 @@ Status: complete.
 
 - Assign per-cell sigmas and support.
 - Derive global stimulus resolution.
-- Construct complete per-cell 3D kernels.
+- Construct per-cell RFs; the initial complete 3D reference is now replaced in
+  production by the exact factorized representation described above.
 - Expose the common resolution property.
 - Add extrapolation logging and memory estimates.
 - Add RF/support/resolution tests.
@@ -2983,6 +3054,22 @@ Exit criterion: the new luminance response no longer has the unintended
 `1/s^2` dependence, current changes are reported, all ordinary Phase 1 tests
 pass, and the separately run SF characterization produces its plot before its
 expected failure.
+
+### Stage 4a: factorized RF evaluation
+
+Status: complete.
+
+- Store Cai97 centre/surround RFs as separable spatial and temporal factors.
+- Evaluate contrast and luminance without constructing dense 3D kernels.
+- Preserve a dense fallback and `as_dense()` compatibility reconstruction.
+- Validate dense, 2D-spatial-factor, and separable-1D-spatial-factor paths.
+- Preserve legacy and eccentricity response semantics within the approved
+  numerical tolerances.
+- Measure retained/peak RF memory and RF/operator wall-clock time.
+
+Exit criterion: factorized responses match the dense reference, retained RF
+memory no longer scales with `nx * ny * nt`, and the isolated benchmark reports
+no wall-clock regression.
 
 ### Stage 5: retinotopic cortical sheet
 
@@ -3048,7 +3135,8 @@ implementation blockers:
 - Nearby LGN inputs can have slightly different RF scales and preferred
   frequencies from the cortical neuron's theoretical assignment.
 - Nonuniform LGN density can change unique fan-in and aggregate input.
-- Full per-cell 3D kernels may be prohibitively expensive.
+- RF callables without a factorizer fall back to full per-cell 3D kernels and
+  may still be prohibitively expensive.
 - The response cache is in-memory, unbounded, and non-persistent.
 - Eccentricity mode currently supports only Cai97 `stRF_2d` with
   `subtract_mean=False`, square spatial pixels, and fixation-centred visual
@@ -3064,8 +3152,9 @@ implementation blockers:
 There are no unresolved decisions blocking the already implemented ordinary
 Phase 1 LGN behavior or independent Phase 2 work. Closing Stage 4 scientific
 acceptance still requires an explicit preferred-spatial-frequency protocol and
-tolerance. Selecting a production optimization still requires the outstanding
-performance benchmark matrix.
+tolerance. Exact centre/surround factorization has been selected, implemented,
+and measured. The broader end-to-end performance benchmark matrix remains
+outstanding but no longer blocks that optimization choice.
 
 The following previously implicit compatibility limits are now explicit and
 do not require an implementation guess:
@@ -3098,7 +3187,8 @@ The following later scientific decisions are deliberately deferred:
 - whether the angular seam needs periodic or anatomical treatment;
 - whether eccentricity-dependent fan-in or incoming weight should eventually
   be normalized;
-- which kernel/stimulus optimization should replace full 3D kernels;
+- whether a later stimulus-rendering or cross-cell evaluation optimization is
+  needed after the full benchmark matrix;
 - final protocol and tolerance for theoretical-versus-spiking preferred
   spatial frequency;
 - whether the corrected luminance normalization should eventually become a
