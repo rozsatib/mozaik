@@ -502,8 +502,8 @@ class TestResolutionQuantization:
 
         assert fine.visual_space_resolution_deg < coarse.visual_space_resolution_deg
         assert (
-            fine.input_cells["X_ON"][0].receptive_field.kernel.shape[0]
-            > coarse.input_cells["X_ON"][0].receptive_field.kernel.shape[0]
+            fine.input_cells["X_ON"][0].receptive_field.shape[0]
+            > coarse.input_cells["X_ON"][0].receptive_field.shape[0]
         )
 
     def test_higher_sampling_requirements_converge_complete_kernel_response(self):
@@ -517,7 +517,7 @@ class TestResolutionQuantization:
                 positions, minimum_samples=minimum_samples
             )
             complete_kernel_responses.append(
-                component.input_cells["X_ON"][0].receptive_field.kernel.sum()
+                component.input_cells["X_ON"][0].receptive_field.as_dense().sum()
             )
 
         coarse_change = abs(
@@ -580,7 +580,7 @@ class TestPerCellReceptiveFields:
                     rtol=1e-12,
                     atol=1e-12,
                 )
-                assert rf.kernel.shape == (
+                assert rf.shape == (
                     int(np.ceil(rf.height / component.visual_space_resolution_deg)),
                     int(np.ceil(rf.width / component.visual_space_resolution_deg)),
                     int(
@@ -605,12 +605,12 @@ class TestPerCellReceptiveFields:
         ):
             assert on_cell.receptive_field is not off_cell.receptive_field
             assert np.array_equal(
-                off_cell.receptive_field.kernel,
-                -on_cell.receptive_field.kernel,
+                off_cell.receptive_field.as_dense(),
+                -on_cell.receptive_field.as_dense(),
             )
         assert "rf" not in component.__dict__
         assert any(
-            "estimated local kernel/contrast memory" in record.getMessage()
+            "estimated local RF/operator array memory" in record.getMessage()
             for record in caplog.records
         )
 
@@ -676,7 +676,7 @@ class TestPerCellReceptiveFields:
         cell.initialize(7.0)
         cell.view()
 
-        assert cell.va.shape == cell.receptive_field.kernel.shape[:2]
+        assert cell.va.shape == cell.receptive_field.shape[:2]
         assert np.all(cell.va == component.model.input_space.background_luminance)
         assert (
             cell.visual_region.location_x + cell.visual_region.size_x / 2.0
@@ -732,17 +732,17 @@ def _scaled_eccentricity_cell(
     function_parameters.sigma_c = 0.1 * scale
     function_parameters.sigma_s = 0.2 * scale
     function_parameters.subtract_mean = False
-    rf_function = cai97.stRF_2d
-    if rf_type == "X_OFF":
-        rf_function = lambda x, y, t, p: -cai97.stRF_2d(x, y, t, p)
     receptive_field = SpatioTemporalReceptiveField(
-        rf_function,
+        cai97.stRF_2d,
         function_parameters,
         support * scale,
         support * scale,
         70.0,
+        polarity=1.0 if rf_type == "X_ON" else -1.0,
     )
-    receptive_field.quantize(pixel_size, pixel_size, 7.0)
+    receptive_field.quantize(
+        pixel_size, pixel_size, 7.0, use_factorization=True
+    )
     return EccentricityDependentCellWithReceptiveField(
         0.0,
         0.0,
@@ -755,7 +755,7 @@ def _scaled_eccentricity_cell(
 
 def _scaled_stimulus_metrics(cell, scale, stimulus_name):
     rf = cell.receptive_field
-    vertical_samples, horizontal_samples = rf.kernel.shape[:2]
+    vertical_samples, horizontal_samples = rf.shape[:2]
     pixel_size = rf.spatial_resolution
     width = horizontal_samples * pixel_size
     height = vertical_samples * pixel_size
@@ -788,12 +788,10 @@ def _scaled_stimulus_metrics(cell, scale, stimulus_name):
     else:
         raise ValueError(stimulus_name)
 
-    direct = np.sum(rf.kernel * image[:, :, np.newaxis], axis=(0, 1))
-    contrast = np.dot(
-        rf.kernel_contrast_component,
-        image.reshape(-1) / background,
-    )
-    luminance = rf.kernel_luminance_component * np.mean(image)
+    direct = np.sum(rf.as_dense() * image[:, :, np.newaxis], axis=(0, 1))
+    linear_response = cell.kernel_response_operator(image, background)
+    contrast = linear_response.contrast
+    luminance = linear_response.luminance
     combined = contrast + luminance
     gain = cell.gain_control.non_linear_gain
     current = cell.gain_function(
@@ -821,15 +819,20 @@ class TestEccentricityLuminanceCorrection:
         for rf_type in RF_TYPES:
             cell = component.input_cells[rf_type][0]
             rf = cell.receptive_field
-            spatial_sum = rf.kernel.sum(axis=(0, 1))
+            kernel = rf.as_dense()
+            spatial_sum = kernel.sum(axis=(0, 1))
             np.testing.assert_allclose(
-                rf.kernel_luminance_component,
+                cell.kernel_response_operator.kernel_luminance_component,
                 spatial_sum,
                 rtol=1e-12,
                 atol=1e-12,
             )
+            uniform_response = cell.kernel_response_operator(
+                np.full(rf.shape[:2], cell.background_luminance),
+                cell.background_luminance,
+            )
             np.testing.assert_allclose(
-                rf.kernel_contrast_component.sum(axis=1),
+                uniform_response.contrast,
                 0.0,
                 rtol=0.0,
                 atol=1e-12,
@@ -950,7 +953,7 @@ class TestEccentricityLuminanceCorrection:
         kernel = receptive_field.kernel.copy()
         expected_mean = kernel.mean(axis=(0, 1))
         expected_contrast = kernel - expected_mean
-        CellWithReceptiveField(
+        cell = CellWithReceptiveField(
             0.0,
             0.0,
             receptive_field,
@@ -960,11 +963,11 @@ class TestEccentricityLuminanceCorrection:
         )
 
         assert np.array_equal(
-            receptive_field.kernel_luminance_component,
+            cell.kernel_response_operator.kernel_luminance_component,
             expected_mean,
         )
         assert np.array_equal(
-            receptive_field.kernel_contrast_component,
+            cell.kernel_response_operator.kernel_contrast_component,
             expected_contrast.reshape(-1, expected_contrast.shape[2]).T,
         )
 
@@ -1234,6 +1237,11 @@ def _collect_stage_4_signature():
                     continue
                 cell = retina.input_cells[rf_type][local_index]
                 rf = cell.receptive_field
+                kernel = rf.as_dense()
+                spatial_mean = kernel.mean(axis=(0, 1))
+                contrast_kernel = (kernel - spatial_mean).reshape(
+                    -1, rf.kernel_duration
+                ).T
                 local_rf_parameters.append(
                     (
                         global_index,
@@ -1242,13 +1250,13 @@ def _collect_stage_4_signature():
                             "surround_sigma_deg": float(rf.func_params.sigma_s),
                             "width_deg": float(rf.width),
                             "height_deg": float(rf.height),
-                            "kernel_shape": list(rf.kernel.shape),
-                            "kernel_sha256": _sha256_positions(rf.kernel),
+                            "kernel_shape": list(rf.shape),
+                            "kernel_sha256": _sha256_positions(kernel),
                             "luminance_kernel_sha256": _sha256_positions(
-                                rf.kernel_luminance_component
+                                cell.kernel_response_operator.kernel_luminance_component
                             ),
                             "contrast_kernel_sha256": _sha256_positions(
-                                rf.kernel_contrast_component
+                                contrast_kernel
                             ),
                         },
                     )
@@ -1282,9 +1290,16 @@ def _run_probe(process_count):
         command = ["mpirun", "--oversubscribe", "-np", "2", *command]
     environment = os.environ.copy()
     environment.setdefault("MPLCONFIGDIR", "/tmp/mozaik-matplotlib")
+    repository_root = Path(__file__).resolve().parents[3]
+    environment["PYTHONPATH"] = os.pathsep.join(
+        filter(
+            None,
+            (str(repository_root), environment.get("PYTHONPATH")),
+        )
+    )
     result = subprocess.run(
         command,
-        cwd=Path(__file__).resolve().parents[3],
+        cwd=repository_root,
         env=environment,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

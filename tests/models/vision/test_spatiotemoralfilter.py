@@ -9,6 +9,7 @@ from mozaik.tools.distribution_parametrization import load_parameters
 from mozaik.space import VisualSpace
 from mozaik.models.vision.spatiotemporalfilter import (
     CellWithReceptiveField,
+    KernelResponseOperator,
     SpatioTemporalReceptiveField,
     SpatioTemporalFilterRetinaLGN,
 )
@@ -139,9 +140,247 @@ def test_receptive_field_quantization_preserves_ceil_sample_count():
     assert receptive_field.kernel.shape == (sample_count, sample_count, 2)
 
 
+def test_factorized_and_dense_receptive_fields_are_equivalent():
+    function_parameters = ParameterSet(
+        copy.deepcopy(
+            params["sheets"]["retina_lgn"]["params"]["receptive_field"]["func_params"]
+        )
+    )
+    reconstruction_atol = 1e-20
+    response_atol = 1e-16
+    rng = np.random.RandomState(19)
+
+    # Adapt Cai97's separable spatial factors into the supported 2-D form so
+    # both factorized storage layouts can be compared with the dense kernel.
+    def cai97_with_2d_spatial_factors(x, y, t, parameters):
+        return cai97.stRF_2d(x, y, t, parameters)
+
+    def factorize_cai97_with_2d_spatial_factors(x, y, t, parameters):
+        return tuple(
+            (np.multiply.outer(*spatial), temporal)
+            for spatial, temporal in cai97.stRF_2d.factorize(x, y, t, parameters)
+        )
+
+    cai97_with_2d_spatial_factors.factorize = factorize_cai97_with_2d_spatial_factors
+
+    # Exercise mean subtraction and both ON/OFF polarities through all paths.
+    assert callable(cai97.stRF_2d.factorize)
+    for subtract_mean in (False, True):
+        function_parameters.subtract_mean = subtract_mean
+        positive_dense = None
+        for polarity in (1.0, -1.0):
+            dense = SpatioTemporalReceptiveField(
+                cai97.stRF_2d,
+                function_parameters,
+                6.0,
+                5.0,
+                70.0,
+                polarity=polarity,
+            )
+            factorized_2d = SpatioTemporalReceptiveField(
+                cai97_with_2d_spatial_factors,
+                function_parameters,
+                6.0,
+                5.0,
+                70.0,
+                polarity=polarity,
+            )
+            factorized_1d = SpatioTemporalReceptiveField(
+                cai97.stRF_2d,
+                function_parameters,
+                6.0,
+                5.0,
+                70.0,
+                polarity=polarity,
+            )
+            dense.quantize(0.1, 0.1, 7.0)
+            factorized_2d.quantize(0.1, 0.1, 7.0, use_factorization=True)
+            factorized_1d.quantize(0.1, 0.1, 7.0, use_factorization=True)
+
+            # Factorization must preserve the dense RF's grid and metadata
+            # while storing immutable factors instead of a dense kernel.
+            assert not dense.is_factorized
+            expected_terms = 4 if subtract_mean else 2
+            for factorized in (factorized_2d, factorized_1d):
+                assert factorized.is_factorized
+                assert factorized.kernel is None
+                assert len(factorized.factors) == expected_terms
+                assert factorized.shape == dense.kernel.shape == (50, 60, 10)
+                assert factorized.kernel_duration == dense.kernel_duration == 10
+                assert np.array_equal(factorized.x_coordinates, dense.x_coordinates)
+                assert np.array_equal(factorized.y_coordinates, dense.y_coordinates)
+                assert np.array_equal(factorized.time_points, dense.time_points)
+                for spatial, temporal in factorized.factors:
+                    spatial_arrays = (
+                        spatial if isinstance(spatial, tuple) else (spatial,)
+                    )
+                    assert all(
+                        not array.flags.writeable
+                        for array in (*spatial_arrays, temporal)
+                    )
+                np.testing.assert_allclose(
+                    factorized.as_dense(),
+                    dense.kernel,
+                    rtol=0.0,
+                    atol=reconstruction_atol,
+                )
+
+            # Confirm that the two factorized RFs use their requested spatial
+            # layouts and reconstruct the same 3-D kernel.
+            assert all(
+                isinstance(spatial, np.ndarray) for spatial, _ in factorized_2d.factors
+            )
+            assert all(
+                isinstance(spatial, tuple)
+                and tuple(axis.shape for axis in spatial) == ((50,), (60,))
+                for spatial, _ in factorized_1d.factors
+            )
+            np.testing.assert_allclose(
+                factorized_1d.as_dense(),
+                factorized_2d.as_dense(),
+                rtol=0.0,
+                atol=0.0,
+            )
+
+            # Compare the resulting linear responses for uniform and
+            # spatially varying image patches.
+            operators = tuple(
+                KernelResponseOperator(receptive_field)
+                for receptive_field in (dense, factorized_2d, factorized_1d)
+            )
+            assert operators[0].kernel_contrast_component is not None
+            assert all(
+                operator.kernel_contrast_component is None for operator in operators[1:]
+            )
+            for image in (
+                np.full(dense.shape[:2], 45.0),
+                rng.uniform(0.0, 90.0, dense.shape[:2]),
+                rng.normal(45.0, 20.0, dense.shape[:2]),
+            ):
+                responses = tuple(operator(image, 45.0) for operator in operators)
+                for response in responses[1:]:
+                    np.testing.assert_allclose(
+                        response.contrast,
+                        responses[0].contrast,
+                        rtol=0.0,
+                        atol=response_atol,
+                    )
+                    np.testing.assert_allclose(
+                        response.luminance,
+                        responses[0].luminance,
+                        rtol=0.0,
+                        atol=response_atol,
+                    )
+
+            # OFF factors must reverse the ON kernel without any other change.
+            if polarity == 1.0:
+                positive_dense = factorized_1d.as_dense()
+            else:
+                np.testing.assert_allclose(
+                    factorized_1d.as_dense(),
+                    -positive_dense,
+                    rtol=0.0,
+                    atol=0.0,
+                )
+
+    # Verify that the representation supports an arbitrary number of terms,
+    # rather than depending on Cai97's current centre/surround structure.
+    def three_term_kernel(x, y, t, parameters):
+        return (
+            (x + 2.0 * y) * (t + 1.0)
+            + (x * y + 1.0) * (t**2 + 0.5)
+            + (x**2 - y) * np.cos(t)
+        )
+
+    def factorize_three_term_kernel(x, y, t, parameters):
+        x = x[:, np.newaxis]
+        y = y[np.newaxis, :]
+        return (
+            (x + 2.0 * y, t + 1.0),
+            (x * y + 1.0, t**2 + 0.5),
+            (x**2 - y, np.cos(t)),
+        )
+
+    three_term_kernel.factorize = factorize_three_term_kernel
+    dense = SpatioTemporalReceptiveField(
+        three_term_kernel, ParameterSet({}), 0.6, 0.4, 21.0
+    )
+    factorized = SpatioTemporalReceptiveField(
+        three_term_kernel, ParameterSet({}), 0.6, 0.4, 21.0
+    )
+    dense.quantize(0.1, 0.1, 7.0)
+    factorized.quantize(0.1, 0.1, 7.0, use_factorization=True)
+    assert len(factorized.factors) == 3
+    assert all(isinstance(spatial, np.ndarray) for spatial, _ in factorized.factors)
+    np.testing.assert_allclose(factorized.as_dense(), dense.kernel, rtol=0.0, atol=0.0)
+
+    # Requesting factorization from a callable without a factorizer must fall
+    # back to the dense representation.
+    fallback = SpatioTemporalReceptiveField(
+        lambda x, y, t, parameters: np.zeros_like(x),
+        ParameterSet({}),
+        0.6,
+        0.4,
+        21.0,
+    )
+    fallback.quantize(0.1, 0.1, 7.0, use_factorization=True)
+    assert not fallback.is_factorized
+    assert fallback.kernel.shape == fallback.shape
+
+
+def test_factorized_callable_rejects_malformed_terms():
+    cases = (
+        lambda x, y, t, parameters: (),
+        lambda x, y, t, parameters: (
+            (np.zeros((len(x) + 1, len(y))), np.zeros(len(t))),
+        ),
+        lambda x, y, t, parameters: (
+            (np.zeros((len(x), len(y))), np.zeros(len(t) + 1)),
+        ),
+        lambda x, y, t, parameters: (
+            ((np.zeros(len(x) + 1), np.zeros(len(y))), np.zeros(len(t))),
+        ),
+        lambda x, y, t, parameters: (((np.zeros(len(x)),), np.zeros(len(t))),),
+        lambda x, y, t, parameters: (
+            (np.zeros((len(x), len(y))), np.zeros(len(t))),
+            ("not numeric", np.zeros(len(t))),
+        ),
+    )
+
+    errors = []
+    for factorizer in cases:
+
+        def kernel(x, y, t, parameters):
+            return np.zeros_like(x)
+
+        kernel.factorize = factorizer
+        receptive_field = SpatioTemporalReceptiveField(
+            kernel, ParameterSet({}), 0.6, 0.4, 21.0
+        )
+        with pytest.raises(ValueError, match="matching the RF shape") as error:
+            receptive_field.quantize(0.1, 0.1, 7.0, use_factorization=True)
+        errors.append(str(error.value))
+
+    assert "; factor " not in errors[0]
+    assert "factor 1 has an invalid spatial component" in errors[1]
+    assert "factor 1 has an invalid temporal component" in errors[2]
+    assert "factor 2 has an invalid spatial component" in errors[-1]
+
+    with pytest.raises(ValueError, match="polarity"):
+        SpatioTemporalReceptiveField(
+            lambda x, y, t, parameters: np.zeros_like(x),
+            ParameterSet({}),
+            0.6,
+            0.4,
+            21.0,
+            polarity=0.0,
+        )
+
+
 class TestCellWithReceptiveField:
     receptive_field_on = None
     receptive_field_off = None
+    receptive_fields = None
     cell_on = None
     cell_off = None
     visual_space = None
@@ -163,18 +402,26 @@ class TestCellWithReceptiveField:
         cls.vs_params = base_stim_params.copy()
         cls.vs_params.update({"size_x": size, "size_y": size})
         cls.visual_space = VisualSpace(ParameterSet(params["input_space"]))
-        cls.receptive_field_on = SpatioTemporalReceptiveField(
-            cai97.stRF_2d, ParameterSet(cls.rf_params), size, size, 200
-        )
-        cls.receptive_field_on.quantize(0.1, 0.1, cls.visual_space.update_interval)
-        cls.receptive_field_off = SpatioTemporalReceptiveField(
-            lambda x, y, t, p: -1.0 * cai97.stRF_2d(x, y, t, p),
-            ParameterSet(cls.rf_params),
-            size,
-            size,
-            200,
-        )
-        cls.receptive_field_off.quantize(0.1, 0.1, cls.visual_space.update_interval)
+        cls.receptive_fields = {}
+        for factorized in (False, True):
+            for on in (False, True):
+                receptive_field = SpatioTemporalReceptiveField(
+                    cai97.stRF_2d,
+                    ParameterSet(cls.rf_params),
+                    size,
+                    size,
+                    200,
+                    polarity=1.0 if on else -1.0,
+                )
+                receptive_field.quantize(
+                    0.1,
+                    0.1,
+                    cls.visual_space.update_interval,
+                    use_factorization=factorized,
+                )
+                cls.receptive_fields[on, factorized] = receptive_field
+        cls.receptive_field_on = cls.receptive_fields[True, False]
+        cls.receptive_field_off = cls.receptive_fields[False, False]
 
     def make_cell(
         self,
@@ -183,6 +430,7 @@ class TestCellWithReceptiveField:
         on,
         original_2024_lgn_mode,
         visual_space=None,
+        factorized=False,
     ):
         gain_params = ParameterSet(
             {
@@ -191,7 +439,7 @@ class TestCellWithReceptiveField:
             }
         )
 
-        rf = self.receptive_field_on if on else self.receptive_field_off
+        rf = self.receptive_fields[on, factorized]
 
         return CellWithReceptiveField(
             x,
@@ -205,7 +453,8 @@ class TestCellWithReceptiveField:
     @pytest.mark.parametrize("x", np.random.randint(0, 30, size=5))
     @pytest.mark.parametrize("y", np.random.randint(0, 30, size=5))
     @pytest.mark.parametrize("on", [True, False])
-    def test_impulse_response(self, x, y, on):
+    @pytest.mark.parametrize("factorized", [False, True])
+    def test_impulse_response(self, x, y, on, factorized):
         """
         Check that the impulse response of the receptive field is equal to the receptive
         field kernel at the impulse position. This is only the case when no non-linear
@@ -217,24 +466,33 @@ class TestCellWithReceptiveField:
         self.visual_space.update()
 
         # Impulse is 1st frame, 4 frames null stimulus as sanity check
-        rf = self.receptive_field_on if on else self.receptive_field_off
-        cell = self.make_cell(0, 0, on, original_2024_lgn_mode=True)
+        rf = self.receptive_fields[on, factorized]
+        cell = self.make_cell(
+            0,
+            0,
+            on,
+            original_2024_lgn_mode=True,
+            factorized=factorized,
+        )
         cell.initialize(5)
         cell.view()
 
         # Separately test contrast and luminance response
         # Before applying nonlinear gain, they act as linear filters
-        r = cell.kernel_response.contrast[: rf.kernel.shape[2]]
-        pos = y + x * rf.kernel.shape[0]
-        np.testing.assert_allclose(r, rf.kernel_contrast_component[:, pos])
+        kernel = rf.as_dense()
+        spatial_mean = kernel.mean(axis=(0, 1))
+        contrast_kernel = (kernel - spatial_mean).reshape(-1, rf.kernel_duration).T
+        r = cell.kernel_response.contrast[: rf.kernel_duration]
+        pos = y + x * rf.shape[0]
+        np.testing.assert_allclose(r, contrast_kernel[:, pos])
 
         # The luminance response kernel is equal at all spatial positions, so
         # we don't calculate it for each position, rather multiply the 1D version
         # of it by the mean image luminance.
         # That is equivalent to a 3D luminance kernel which is convolved and with the
         # image and then summed at each time point.
-        r = cell.kernel_response.luminance[: rf.kernel.shape[2]]
-        np.testing.assert_allclose(r, rf.kernel_luminance_component * cell.va.mean())
+        r = cell.kernel_response.luminance[: rf.kernel_duration]
+        np.testing.assert_allclose(r, spatial_mean * cell.va.mean())
 
     @pytest.mark.parametrize("dt_factor", [1, 2, 5, 10])
     def test_subframe_update(self, dt_factor):
@@ -438,6 +696,12 @@ class TestSpatioTemporalFilterRetinaLGN:
         del parameters["visual_field"]
 
         model, retina = self.make_retina(parameters)
+        for rf_type in retina.rf_types:
+            assert all(
+                cell.kernel_response_operator
+                is retina.kernel_response_operators[rf_type]
+                for cell in retina.input_cells[rf_type]
+            )
         stimulus_duration = 28.0
 
         grating_parameters = {
