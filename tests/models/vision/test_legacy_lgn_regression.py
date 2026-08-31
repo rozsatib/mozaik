@@ -401,8 +401,8 @@ def _collect_dense_factorized_comparison():
 
 def _run_probe(process_count):
     command = [sys.executable, str(Path(__file__).resolve()), PROBE_ARGUMENT]
-    if process_count == 2:
-        command = ["mpirun", "--oversubscribe", "-np", "2", *command]
+    if process_count > 1:
+        command = ["mpirun", "--oversubscribe", "-np", str(process_count), *command]
 
     environment = os.environ.copy()
     repository_root = Path(__file__).resolve().parents[3]
@@ -420,6 +420,7 @@ def _run_probe(process_count):
         stderr=subprocess.PIPE,
         text=True,
         check=False,
+        timeout=30,
     )
     if result.returncode != 0:
         pytest.fail(
@@ -487,6 +488,11 @@ def test_legacy_lgn_single_process_regression():
 @pytest.mark.mpi
 def test_legacy_lgn_two_rank_regression():
     _assert_legacy_lgn_signature(_run_probe(process_count=2))
+
+
+@pytest.mark.mpi
+def test_legacy_lgn_uneven_rank_regression():
+    _assert_legacy_lgn_signature(_run_probe(process_count=3))
 
 
 if __name__ == "__main__" and PROBE_ARGUMENT in sys.argv:

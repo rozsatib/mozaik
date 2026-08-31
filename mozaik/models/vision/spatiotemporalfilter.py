@@ -1138,26 +1138,29 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                     )
 
             else:
-                for i, (lgn_cell, input_current, scs, ncs) in enumerate(
-                    zip(
-                        self.sheets[rf_type].pop,
-                        input_currents[rf_type],
-                        self.scs[rf_type],
-                        self.ncs[rf_type],
-                    )
-                ):
-                    assert isinstance(input_current, dict)
-                    t = input_current["times"] + offset
-                    a = self.parameters.linear_scaler * input_current["amplitudes"]
-                    scs.set_parameters(times=t, amplitudes=a, copy=False)
-                    if self.parameters.mpi_reproducible_noise:
-                        t = numpy.arange(0, duration, ts) + offset
-                        amplitudes = (
-                            self.parameters.noise.mean
-                            + self.parameters.noise.stdev
-                            * self.ncs_rng[rf_type][i].randn(len(t))
+                with self.model.sim.state.freeze_time():
+                    for i, (lgn_cell, input_current, scs, ncs) in enumerate(
+                        zip(
+                            self.sheets[rf_type].pop,
+                            input_currents[rf_type],
+                            self.scs[rf_type],
+                            self.ncs[rf_type],
                         )
-                        ncs.set_parameters(times=t, amplitudes=amplitudes, copy=False)
+                    ):
+                        assert isinstance(input_current, dict)
+                        t = input_current["times"] + offset
+                        a = self.parameters.linear_scaler * input_current["amplitudes"]
+                        scs.set_parameters(times=t, amplitudes=a, copy=False)
+                        if self.parameters.mpi_reproducible_noise:
+                            t = numpy.arange(0, duration, ts) + offset
+                            amplitudes = (
+                                self.parameters.noise.mean
+                                + self.parameters.noise.stdev
+                                * self.ncs_rng[rf_type][i].randn(len(t))
+                            )
+                            ncs.set_parameters(
+                                times=t, amplitudes=amplitudes, copy=False
+                            )
 
     def _provide_legacy_null_input(self, visual_space, duration=None, offset=0):
         r"""
@@ -1195,22 +1198,25 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                         amplitude_values=numpy.zeros_like(times) + amplitude * 1000,
                     )
             else:
-                for i, (scs, ncs) in enumerate(
-                    zip(self.scs[rf_type], self.ncs[rf_type])
-                ):
-                    scs.set_parameters(
-                        times=times,
-                        amplitudes=numpy.zeros_like(times) + amplitude,
-                        copy=False,
-                    )
-                    if self.parameters.mpi_reproducible_noise:
-                        t = numpy.arange(0, duration, ts) + offset
-                        amplitudes = (
-                            self.parameters.noise.mean
-                            + self.parameters.noise.stdev
-                            * self.ncs_rng[rf_type][i].randn(len(t))
+                with self.model.sim.state.freeze_time():
+                    for i, (scs, ncs) in enumerate(
+                        zip(self.scs[rf_type], self.ncs[rf_type])
+                    ):
+                        scs.set_parameters(
+                            times=times,
+                            amplitudes=numpy.zeros_like(times) + amplitude,
+                            copy=False,
                         )
-                        ncs.set_parameters(times=t, amplitudes=amplitudes, copy=False)
+                        if self.parameters.mpi_reproducible_noise:
+                            t = numpy.arange(0, duration, ts) + offset
+                            amplitudes = (
+                                self.parameters.noise.mean
+                                + self.parameters.noise.stdev
+                                * self.ncs_rng[rf_type][i].randn(len(t))
+                            )
+                            ncs.set_parameters(
+                                times=t, amplitudes=amplitudes, copy=False
+                            )
 
     def calculate_null_input(self, duration=None):
         r"""
