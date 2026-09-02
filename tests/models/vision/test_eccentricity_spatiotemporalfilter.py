@@ -70,6 +70,10 @@ def eccentricity_parameters(**overrides):
     del parameters["density"]
     del parameters["size"]
     del parameters["receptive_field"]["spatial_resolution"]
+    shared_noise = parameters.pop("noise")
+    parameters["noise"] = {
+        rf_type: copy.deepcopy(shared_noise) for rf_type in RF_TYPES
+    }
     parameters.update(overrides)
     return ParameterSet(parameters)
 
@@ -269,6 +273,7 @@ class TestEccentricityComponentConfiguration:
                 SimpleNamespace(), parameters
             )
         assert seed_calls == []
+
 
     def test_visual_field_must_precede_the_input_component(self):
         with pytest.raises(ValueError, match="model.visual_field must exist"):

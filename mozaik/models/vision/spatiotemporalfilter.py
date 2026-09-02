@@ -1039,6 +1039,11 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
 
         return self.parameters.receptive_field.spatial_resolution
 
+    def _noise_parameters(self, rf_type):
+        """Return the noise parameters used by one response polarity."""
+
+        return self.parameters.noise
+
     def process_input(self, visual_space, stimulus, duration=None, offset=0):
         r"""
         Present a visual stimulus to the model and create currents for the
@@ -1153,11 +1158,10 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                         scs.set_parameters(times=t, amplitudes=a, copy=False)
                         if self.parameters.mpi_reproducible_noise:
                             t = numpy.arange(0, duration, ts) + offset
-                            amplitudes = (
-                                self.parameters.noise.mean
-                                + self.parameters.noise.stdev
-                                * self.ncs_rng[rf_type][i].randn(len(t))
-                            )
+                            noise = self._noise_parameters(rf_type)
+                            amplitudes = noise.mean + noise.stdev * self.ncs_rng[
+                                rf_type
+                            ][i].randn(len(t))
                             ncs.set_parameters(
                                 times=t, amplitudes=amplitudes, copy=False
                             )
@@ -1209,11 +1213,10 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                         )
                         if self.parameters.mpi_reproducible_noise:
                             t = numpy.arange(0, duration, ts) + offset
-                            amplitudes = (
-                                self.parameters.noise.mean
-                                + self.parameters.noise.stdev
-                                * self.ncs_rng[rf_type][i].randn(len(t))
-                            )
+                            noise = self._noise_parameters(rf_type)
+                            amplitudes = noise.mean + noise.stdev * self.ncs_rng[
+                                rf_type
+                            ][i].randn(len(t))
                             ncs.set_parameters(
                                 times=t, amplitudes=amplitudes, copy=False
                             )
@@ -1473,8 +1476,18 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
             },
             "noise": ParameterSet(
                 {
-                    "mean": float,
-                    "stdev": float,
+                    "X_ON": ParameterSet(
+                        {
+                            "mean": float,
+                            "stdev": float,
+                        }
+                    ),
+                    "X_OFF": ParameterSet(
+                        {
+                            "mean": float,
+                            "stdev": float,
+                        }
+                    ),
                 }
             ),
         }
@@ -1502,19 +1515,10 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
 
         if self.parameters.cell.model[-6:] == "_sc_nc":
             self.integrated_cs = True
-            cell = copy.deepcopy(self.parameters.cell)
-            cell.params.update(
-                [
-                    ("mean", self.parameters.noise.mean * 1000),
-                    ("std", self.parameters.noise.stdev * 1000),
-                    ("dt", self.model.sim.get_time_step()),
-                ]
-            )
         else:
             self.integrated_cs = False
             self.scs = OrderedDict()
             self.ncs = OrderedDict()
-            cell = self.parameters.cell
 
         position_seeds = mozaik.get_seeds(2)
         positions_by_type = OrderedDict()
@@ -1526,6 +1530,16 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
             )
 
         for rf_type in self.rf_types:
+            cell = copy.deepcopy(self.parameters.cell)
+            if self.integrated_cs:
+                noise = self._noise_parameters(rf_type)
+                cell.params.update(
+                    [
+                        ("mean", noise.mean * 1000),
+                        ("std", noise.stdev * 1000),
+                        ("dt", self.model.sim.get_time_step()),
+                    ]
+                )
             self.sheets[rf_type] = RetinalInhomogeneousDiskSheet(
                 model,
                 ParameterSet(
@@ -1558,6 +1572,7 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                 "original_2024_lgn_mode=True is incompatible with "
                 "eccentricity-dependent LGN input"
             )
+        self._validate_noise_parameters()
 
         positive_finite_parameters = (
             (
@@ -1580,6 +1595,25 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                 or value <= 0.0
             ):
                 raise ValueError(f"{name} must be positive and finite")
+
+    def _validate_noise_parameters(self):
+        for rf_type in ("X_ON", "X_OFF"):
+            pair = self.parameters.noise[rf_type]
+            for parameter_name in ("mean", "stdev"):
+                value = pair[parameter_name]
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, numbers.Real)
+                    or not numpy.isfinite(value)
+                ):
+                    raise ValueError(
+                        f"noise.{rf_type}.{parameter_name} must be finite"
+                    )
+            if pair.stdev < 0.0:
+                raise ValueError(f"noise.{rf_type}.stdev must be nonnegative")
+
+    def _noise_parameters(self, rf_type):
+        return self.parameters.noise[rf_type]
 
     def _validate_receptive_field_parameters(self):
         receptive_field = self.parameters.receptive_field
@@ -1647,7 +1681,9 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                 if self.parameters.mpi_reproducible_noise:
                     noise_source = sim.StepCurrentSource(times=[0.0], amplitudes=[0.0])
                 else:
-                    noise_source = sim.NoisyCurrentSource(**self.parameters.noise)
+                    noise_source = sim.NoisyCurrentSource(
+                        **self._noise_parameters(rf_type)
+                    )
 
                 if sheet.pop._mask_local[index]:
                     self.ncs_rng[rf_type].append(
