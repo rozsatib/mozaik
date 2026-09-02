@@ -1358,7 +1358,7 @@ It retains:
 - temporal resolution and duration;
 - cell configuration;
 - gain control;
-- noise;
+- explicit polarity-specific noise;
 - recording configuration.
 
 It does not accept legacy `size`; the domain comes from `model.visual_field`.
@@ -1420,9 +1420,18 @@ retain unchanged:
             contrast_gain: float
             contrast_scaler: float
     noise:
-        mean: float
-        stdev: float
+        X_ON:
+            mean: float
+            stdev: float
+        X_OFF:
+            mean: float
+            stdev: float
 ```
+
+The eccentricity component requires both pairs and does not accept a shared
+`mean`/`stdev` fallback. Setting both pairs to equal values preserves the
+previous shared-noise behavior while keeping their configuration and runtime
+handling independent. Noise standard deviations must be nonnegative.
 
 `number_per_polarity` must be an integer greater than zero; do not accept a
 float that happens to be integral despite the parameter framework's historic
