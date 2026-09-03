@@ -1467,8 +1467,10 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                 "gain": float,
                 "non_linear_gain": ParameterSet(
                     {
-                        "luminance_gain": float,
-                        "luminance_scaler": float,
+                        "luminance_gain_ON": float,
+                        "luminance_scaler_ON": float,
+                        "luminance_gain_OFF": float,
+                        "luminance_scaler_OFF": float,
                         "contrast_gain": float,
                         "contrast_scaler": float,
                     }
@@ -1573,6 +1575,7 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                 "eccentricity-dependent LGN input"
             )
         self._validate_noise_parameters()
+        self._validate_gain_control_parameters()
 
         positive_finite_parameters = (
             (
@@ -1611,6 +1614,33 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                     )
             if pair.stdev < 0.0:
                 raise ValueError(f"noise.{rf_type}.stdev must be nonnegative")
+
+    def _validate_gain_control_parameters(self):
+        nonlinear = self.parameters.gain_control.non_linear_gain
+        for name, value in nonlinear.items():
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, numbers.Real)
+                or not numpy.isfinite(value)
+            ):
+                raise ValueError(
+                    f"gain_control.non_linear_gain.{name} must be finite"
+                )
+            if "scaler" in name and value <= 0.0:
+                raise ValueError(
+                    f"gain_control.non_linear_gain.{name} must be positive"
+                )
+
+    def _gain_control_parameters(self, rf_type):
+        gain_control = copy.deepcopy(self.parameters.gain_control)
+        nonlinear = gain_control.non_linear_gain
+        suffix = "ON" if rf_type == "X_ON" else "OFF"
+        nonlinear["luminance_gain"] = nonlinear[f"luminance_gain_{suffix}"]
+        nonlinear["luminance_scaler"] = nonlinear[f"luminance_scaler_{suffix}"]
+        for polarity in ("ON", "OFF"):
+            del nonlinear[f"luminance_gain_{polarity}"]
+            del nonlinear[f"luminance_scaler_{polarity}"]
+        return gain_control
 
     def _noise_parameters(self, rf_type):
         return self.parameters.noise[rf_type]
@@ -1827,6 +1857,7 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
             self.input_cells[rf_type] = []
             parameters = rf_parameters[rf_type]
             positions = self.sheets[rf_type].canonical_positions_deg
+            gain_control = self._gain_control_parameters(rf_type)
             for global_index in numpy.flatnonzero(self.sheets[rf_type].pop._mask_local):
                 per_cell_parameters = copy.deepcopy(function_parameters)
                 per_cell_parameters.sigma_c = float(
@@ -1874,7 +1905,7 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                         positions[0, global_index],
                         positions[1, global_index],
                         receptive_field_for_cell,
-                        self.parameters.gain_control,
+                        gain_control,
                         self.model.input_space,
                         False,
                     )

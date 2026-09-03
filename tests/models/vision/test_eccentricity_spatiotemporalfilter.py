@@ -74,6 +74,17 @@ def eccentricity_parameters(**overrides):
     parameters["noise"] = {
         rf_type: copy.deepcopy(shared_noise) for rf_type in RF_TYPES
     }
+    nonlinear = parameters["gain_control"]["non_linear_gain"]
+    shared_gain = nonlinear.pop("luminance_gain")
+    shared_scaler = nonlinear.pop("luminance_scaler")
+    nonlinear.update(
+        [
+            ("luminance_gain_ON", shared_gain),
+            ("luminance_scaler_ON", shared_scaler),
+            ("luminance_gain_OFF", shared_gain),
+            ("luminance_scaler_OFF", shared_scaler),
+        ]
+    )
     parameters.update(overrides)
     return ParameterSet(parameters)
 
@@ -729,6 +740,10 @@ def _scaled_eccentricity_cell(
     visual_space=None,
 ):
     parameters = eccentricity_parameters()
+    component = object.__new__(
+        EccentricityDependentSpatioTemporalFilterRetinaLGN
+    )
+    component.parameters = parameters
     function_parameters = copy.deepcopy(
         parameters.receptive_field.func_params
     )
@@ -752,7 +767,7 @@ def _scaled_eccentricity_cell(
         0.0,
         0.0,
         receptive_field,
-        parameters.gain_control,
+        component._gain_control_parameters(rf_type),
         visual_space or _StaticVisualSpace(),
         False,
     )
@@ -944,6 +959,11 @@ class TestEccentricityLuminanceCorrection:
 
     def test_legacy_cell_keeps_bitwise_mean_luminance_kernel(self):
         parameters = eccentricity_parameters()
+        gain_control = copy.deepcopy(
+            LEGACY_MODEL_PARAMETERS["sheets"]["retina_lgn"]["params"][
+                "gain_control"
+            ]
+        )
         function_parameters = copy.deepcopy(
             parameters.receptive_field.func_params
         )
@@ -962,7 +982,7 @@ class TestEccentricityLuminanceCorrection:
             0.0,
             0.0,
             receptive_field,
-            parameters.gain_control,
+            gain_control,
             _StaticVisualSpace(),
             False,
         )
