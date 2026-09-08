@@ -55,15 +55,23 @@ def stRF_2d(x, y, t, p):
     return rf
 
 
+def _stable_gamma_component(t, K, c, t0, n):
+    t = np.asarray(t, dtype=float)
+    u = c * (t - t0)
+    out = np.zeros_like(t)
+
+    valid = (u > 0) & (K > 0)
+    if np.any(valid):
+        log_p = np.log(K) + n * np.log(u[valid]) - u[valid] - n * np.log(n) + n
+        out[valid] = np.exp(log_p)
+
+    return out
+
+
 def G(t, K1, K2, c1, c2, t1, t2, n1, n2):
-    p1 = K1 * ((c1*(t - t1))**n1 * np.exp(-c1*(t - t1))) / ((n1**n1) * np.exp(-n1))
-    p2 = K2 * ((c2*(t - t2))**n2 * np.exp(-c2*(t - t2))) / ((n2**n2) * np.exp(-n2))
-    p3 = p1 - p2
-    # For some parameterizations, calculating function values near 0
-    # may be numerically unstable. We set these values to 0.
-    p3[p3==np.inf] = np.nan
-    p3=np.nan_to_num(p3)
-    return p3
+    p1 = _stable_gamma_component(t, K1, c1, t1, n1)
+    p2 = _stable_gamma_component(t, K2, c2, t2, n2)
+    return p1 - p2
 
 
 def F_2d(x, y, A, sigma):
