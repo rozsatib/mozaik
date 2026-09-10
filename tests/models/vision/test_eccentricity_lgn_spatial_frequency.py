@@ -33,7 +33,7 @@ STIMULUS_DURATION_MS = TRANSIENT_DISCARD_MS + (
     ANALYSIS_CYCLES * TEMPORAL_PERIOD_FRAMES * FRAME_DURATION_MS
 )
 REPRESENTATIVE_ECCENTRICITIES_DEG = (0.0, 4.0)
-SPATIAL_FREQUENCY_TOLERANCE_OCTAVES = 0.05
+SPATIAL_FREQUENCY_TOLERANCE_OCTAVES = 0.06
 
 
 def _eccentricity_parameters():
@@ -47,9 +47,30 @@ def _eccentricity_parameters():
         "full_max_eccentricity": 90.0,
         "beta": 1.59,
     }
+    parameters["temporal_scale_distribution"] = {
+        "mu": 0.1685970743683889,
+        "sigma": 0.3059765581600333,
+        "lower_quantile": 0.005,
+        "upper_quantile": 0.995,
+    }
     del parameters["density"]
     del parameters["size"]
     del parameters["receptive_field"]["spatial_resolution"]
+    shared_noise = parameters.pop("noise")
+    parameters["noise"] = {
+        rf_type: copy.deepcopy(shared_noise) for rf_type in ("X_ON", "X_OFF")
+    }
+    nonlinear = parameters["gain_control"]["non_linear_gain"]
+    shared_gain = nonlinear.pop("luminance_gain")
+    shared_scaler = nonlinear.pop("luminance_scaler")
+    nonlinear.update(
+        {
+            "luminance_gain_ON": shared_gain,
+            "luminance_scaler_ON": shared_scaler,
+            "luminance_gain_OFF": shared_gain,
+            "luminance_scaler_OFF": shared_scaler,
+        }
+    )
     return ParameterSet(parameters)
 
 

@@ -13,8 +13,12 @@ import numpy as np
 from parameters import ParameterSet
 import pytest
 from scipy.integrate import quad
-from scipy.stats import chisquare, kstest
+from scipy.stats import chisquare, kstest, lognorm
 
+from devtools.lgn_eccentricity_validation.temporal_scale_validation import (
+    distribution_validation,
+    plot_distribution_validation,
+)
 from mozaik.models.vision import cai97
 from mozaik.models.vision.spatiotemporalfilter import (
     CellWithReceptiveField,
@@ -25,6 +29,8 @@ from mozaik.models.vision.spatiotemporalfilter import (
     SpatioTemporalFilterRetinaLGN,
     _round_down_to_two_significant_digits,
     _sample_lgn_positions,
+    _sample_truncated_lognormal_scales,
+    _temporal_scale_rngs,
 )
 from mozaik.models.vision.topography import RadiallySymmetricLGNTopography
 from mozaik.space import VisualSpace
@@ -66,6 +72,12 @@ def eccentricity_parameters(**overrides):
         "cap_eccentricity": None,
         "full_max_eccentricity": 90.0,
         "beta": 1.59,
+    }
+    parameters["temporal_scale_distribution"] = {
+        "mu": 0.1685970743683889,
+        "sigma": 0.3059765581600333,
+        "lower_quantile": 0.005,
+        "upper_quantile": 0.995,
     }
     del parameters["density"]
     del parameters["size"]
@@ -285,6 +297,37 @@ class TestEccentricityComponentConfiguration:
             )
         assert seed_calls == []
 
+    @pytest.mark.parametrize(
+        "name,value,error",
+        [
+            ("mu", np.nan, "mu must be finite"),
+            ("sigma", 0.0, "sigma must be positive"),
+            ("sigma", np.inf, "sigma must be finite"),
+            ("lower_quantile", 0.0, "quantiles must satisfy"),
+            ("upper_quantile", 1.0, "quantiles must satisfy"),
+        ],
+    )
+    def test_temporal_scale_distribution_is_validated(self, name, value, error):
+        component = object.__new__(
+            EccentricityDependentSpatioTemporalFilterRetinaLGN
+        )
+        component.parameters = eccentricity_parameters()
+        component.parameters.temporal_scale_distribution[name] = value
+
+        with pytest.raises(ValueError, match=error):
+            component._validate_stage_2_parameters()
+
+    def test_temporal_scale_quantiles_must_be_ordered(self):
+        component = object.__new__(
+            EccentricityDependentSpatioTemporalFilterRetinaLGN
+        )
+        component.parameters = eccentricity_parameters()
+        component.parameters.temporal_scale_distribution.lower_quantile = 0.7
+        component.parameters.temporal_scale_distribution.upper_quantile = 0.3
+
+        with pytest.raises(ValueError, match="quantiles must satisfy"):
+            component._validate_stage_2_parameters()
+
 
     def test_visual_field_must_precede_the_input_component(self):
         with pytest.raises(ValueError, match="model.visual_field must exist"):
@@ -368,6 +411,9 @@ def _rf_only_component(
     minimum_samples=4.0,
     width=6.0,
     height=4.0,
+    temporal_resolution=7.0,
+    temporal_scales_by_type=None,
+    receptive_field_function_parameters=None,
 ):
     component = object.__new__(
         EccentricityDependentSpatioTemporalFilterRetinaLGN
@@ -379,6 +425,11 @@ def _rf_only_component(
     parameters.topography.cap_eccentricity = cap_eccentricity
     parameters.receptive_field.width = width
     parameters.receptive_field.height = height
+    parameters.receptive_field.temporal_resolution = temporal_resolution
+    if receptive_field_function_parameters is not None:
+        parameters.receptive_field.func_params = ParameterSet(
+            receptive_field_function_parameters
+        )
     component.parameters = parameters
     component.topography = provider(cap_eccentricity)
     component.rf_types = RF_TYPES
@@ -393,6 +444,7 @@ def _rf_only_component(
             ),
         )
     component.model = SimpleNamespace(
+        parameters=ParameterSet({"pynn_seed": 936395}),
         input_space=VisualSpace(
             ParameterSet(
                 {
@@ -402,6 +454,8 @@ def _rf_only_component(
             )
         )
     )
+    if temporal_scales_by_type is not None:
+        component._sample_temporal_scales = lambda: temporal_scales_by_type
     component._validate_stage_2_parameters()
     component._validate_receptive_field_parameters()
     component._initialize_receptive_fields()
@@ -466,6 +520,199 @@ class TestReceptiveFieldConfiguration:
 
         with pytest.raises(ValueError, match="missing.*td"):
             component._validate_receptive_field_parameters()
+
+
+class TestTemporalScaleSampling:
+    def test_private_pynn_seed_streams_are_reproducible_and_independent(self):
+        distribution = eccentricity_parameters().temporal_scale_distribution
+        first_rngs = _temporal_scale_rngs(936395)
+        repeated_rngs = _temporal_scale_rngs(936395)
+
+        def draw(rng):
+            return _sample_truncated_lognormal_scales(
+                200,
+                distribution.mu,
+                distribution.sigma,
+                distribution.lower_quantile,
+                distribution.upper_quantile,
+                rng,
+            )
+
+        samples = [draw(rng) for rng in first_rngs]
+        repeated = [draw(rng) for rng in repeated_rngs]
+        different_seed = draw(_temporal_scale_rngs(936396)[0])
+        bounds = lognorm.ppf(
+            [distribution.lower_quantile, distribution.upper_quantile],
+            s=distribution.sigma,
+            scale=np.exp(distribution.mu),
+        )
+
+        for actual, expected in zip(samples, repeated):
+            assert np.array_equal(actual, expected)
+            assert np.all(actual >= bounds[0])
+            assert np.all(actual <= bounds[1])
+        assert not np.array_equal(samples[0], samples[1])
+        assert not np.array_equal(samples[0], different_seed)
+
+    def test_component_requires_the_model_pynn_seed(self):
+        component = object.__new__(
+            EccentricityDependentSpatioTemporalFilterRetinaLGN
+        )
+        component.parameters = eccentricity_parameters(number_per_polarity=2)
+        component.rf_types = RF_TYPES
+        component.model = SimpleNamespace(parameters=ParameterSet({}))
+
+        with pytest.raises(ValueError, match="model.parameters.pynn_seed"):
+            component._sample_temporal_scales()
+
+    def test_population_histograms_match_the_truncated_distribution(self, tmp_path):
+        distribution = eccentricity_parameters().temporal_scale_distribution
+        result = distribution_validation(
+            pynn_seed=936395,
+            number_per_polarity=200,
+            number_of_bins=10,
+            mu=distribution.mu,
+            sigma=distribution.sigma,
+            lower_quantile=distribution.lower_quantile,
+            upper_quantile=distribution.upper_quantile,
+        )
+
+        for polarity in RF_TYPES:
+            assert result["samples"][polarity].shape == (200,)
+            assert result["mean_absolute_errors"][polarity] <= 0.02
+
+        plot_path = tmp_path / "temporal_scale_distribution.png"
+        plot_distribution_validation(result, plot_path)
+        assert plot_path.is_file()
+
+
+def _spatial_hat(spatial_frequency, amplitude, sigma):
+    return (
+        amplitude
+        * 2.0
+        * np.pi
+        * sigma**2
+        * np.exp(-2.0 * np.pi**2 * sigma**2 * spatial_frequency**2)
+    )
+
+
+def _refine_frequency_peak(frequencies, amplitudes):
+    peak_index = int(np.argmax(amplitudes))
+    assert 0 < peak_index < len(frequencies) - 1
+    curvature = (
+        amplitudes[peak_index - 1]
+        - 2.0 * amplitudes[peak_index]
+        + amplitudes[peak_index + 1]
+    )
+    offset = (
+        0.5
+        * (amplitudes[peak_index - 1] - amplitudes[peak_index + 1])
+        / curvature
+    )
+    return frequencies[peak_index] + offset * (frequencies[1] - frequencies[0])
+
+
+def _finite_rf_preferred_temporal_frequency(rf):
+    parameters = rf.func_params
+    spatial_frequency = cai97.dog_optimal_spatial_frequency(
+        parameters.Ac,
+        parameters.As,
+        parameters.sigma_c,
+        parameters.sigma_s,
+    )
+    center = _spatial_hat(
+        spatial_frequency, parameters.Ac, parameters.sigma_c
+    )
+    surround = _spatial_hat(
+        spatial_frequency, parameters.As, parameters.sigma_s
+    )
+    center_temporal = cai97.G(
+        rf.time_points,
+        parameters.K1,
+        parameters.K2,
+        parameters.c1,
+        parameters.c2,
+        parameters.t1,
+        parameters.t2,
+        parameters.n1,
+        parameters.n2,
+    )
+    surround_temporal = cai97.G(
+        rf.time_points - parameters.td,
+        parameters.K1,
+        parameters.K2,
+        parameters.c1,
+        parameters.c2,
+        parameters.t1,
+        parameters.t2,
+        parameters.n1,
+        parameters.n2,
+    )
+    finite_response = center * center_temporal - surround * surround_temporal
+    fft_size = 65536
+    frequencies = np.fft.rfftfreq(
+        fft_size, d=rf.temporal_resolution / 1000.0
+    )
+    amplitudes = np.abs(np.fft.rfft(finite_response, n=fft_size))
+    positive = frequencies > 0.0
+    return _refine_frequency_peak(frequencies[positive], amplitudes[positive])
+
+
+class TestTemporalScalePreferredFrequency:
+    def test_ten_finite_kernels_follow_inverse_scale_transform(self):
+        distribution = eccentricity_parameters().temporal_scale_distribution
+        quantiles = np.linspace(
+            distribution.lower_quantile,
+            distribution.upper_quantile,
+            10,
+        )
+        scales = lognorm.ppf(
+            quantiles,
+            s=distribution.sigma,
+            scale=np.exp(distribution.mu),
+        )
+        positions = np.zeros((2, len(scales)))
+        temporal_scales = {
+            "X_ON": scales.copy(),
+            "X_OFF": scales[::-1].copy(),
+        }
+        component = _rf_only_component(
+            {"X_ON": positions.copy(), "X_OFF": positions.copy()},
+            width=20.0,
+            height=20.0,
+            temporal_resolution=3.5,
+            temporal_scales_by_type=temporal_scales,
+            receptive_field_function_parameters={
+                "Ac": 1.0,
+                "As": 0.024588,
+                "sigma_c": 0.381488,
+                "sigma_s": 2.253145,
+                "K1": 1.0,
+                "K2": 0.214140,
+                "c1": 1.323375,
+                "c2": 2.692420,
+                "t1": -117.727302,
+                "t2": -2195.226391,
+                "n1": 197.012103,
+                "n2": 6190.246091,
+                "td": 6.384194,
+                "subtract_mean": False,
+            },
+        )
+
+        measured = np.array(
+            [
+                _finite_rf_preferred_temporal_frequency(cell.receptive_field)
+                for cell in component.input_cells["X_ON"]
+            ]
+        )
+        expected = 5.401611328125 / scales
+        relative_errors = np.abs(measured - expected) / expected
+
+        assert np.max(relative_errors) <= 0.005, (
+            "finite-kernel preferred-TF errors exceed 0.5%: "
+            f"{relative_errors.tolist()}"
+        )
 
 
 class TestResolutionQuantization:
@@ -546,6 +793,34 @@ class TestResolutionQuantization:
 
 
 class TestPerCellReceptiveFields:
+    def test_supported_extremes_set_per_cell_duration_and_temporal_shape(self):
+        positions = {
+            "X_ON": np.array([[0.0, 1.0], [0.0, 0.0]]),
+            "X_OFF": np.array([[0.0, 1.0], [0.0, 0.0]]),
+        }
+        lower_scale = 0.5381885527961483
+        upper_scale = 2.6031974009492385
+        temporal_scales = {
+            "X_ON": np.array([lower_scale, upper_scale]),
+            "X_OFF": np.array([upper_scale, lower_scale]),
+        }
+        component = _rf_only_component(
+            positions,
+            temporal_resolution=3.5,
+            temporal_scales_by_type=temporal_scales,
+        )
+
+        for rf_type in RF_TYPES:
+            for index, scale in enumerate(temporal_scales[rf_type]):
+                rf = component.input_cells[rf_type][index].receptive_field
+                assert rf.duration == pytest.approx(200.0 * scale)
+                assert rf.kernel_duration == int(np.ceil(200.0 * scale / 3.5))
+                assert component._rf_parameters[rf_type]["temporal_samples"][
+                    index
+                ] == rf.kernel_duration
+        assert component.input_cells["X_ON"][0].receptive_field.kernel_duration == 31
+        assert component.input_cells["X_ON"][1].receptive_field.kernel_duration == 149
+
     def test_sigmas_support_and_complete_kernels_follow_position(self, caplog):
         caplog.set_level("INFO", logger="Mozaik")
         positions = {
@@ -557,6 +832,7 @@ class TestPerCellReceptiveFields:
 
         for rf_type in RF_TYPES:
             cells = component.input_cells[rf_type]
+            parameters = component._rf_parameters[rf_type]
             assert len(cells) == 2
             assert all(
                 isinstance(
@@ -564,13 +840,14 @@ class TestPerCellReceptiveFields:
                 )
                 for cell in cells
             )
-            for cell in cells:
+            for global_index, cell in enumerate(cells):
                 rf = cell.receptive_field
                 eccentricity = np.hypot(cell.x, cell.y)
                 expected_center = component.topography.center_sigma_deg(
                     eccentricity
                 )
                 expected_scale = expected_center / reference.sigma_c
+                temporal_scale = parameters["temporal_scales"][global_index]
 
                 np.testing.assert_allclose(
                     rf.func_params.sigma_c,
@@ -602,14 +879,35 @@ class TestPerCellReceptiveFields:
                     int(
                         np.ceil(
                             component.parameters.receptive_field.duration
+                            * temporal_scale
                             / component.parameters.receptive_field.temporal_resolution
                         )
                     ),
                 )
+                np.testing.assert_allclose(
+                    rf.duration,
+                    component.parameters.receptive_field.duration * temporal_scale,
+                    rtol=1e-12,
+                    atol=1e-12,
+                )
                 assert rf.func_params.Ac == reference.Ac
                 assert rf.func_params.As == reference.As
                 assert rf.func_params.K1 == reference.K1
-                assert rf.func_params.td == reference.td
+                np.testing.assert_allclose(
+                    rf.func_params.t1, reference.t1 * temporal_scale
+                )
+                np.testing.assert_allclose(
+                    rf.func_params.t2, reference.t2 * temporal_scale
+                )
+                np.testing.assert_allclose(
+                    rf.func_params.td, reference.td * temporal_scale
+                )
+                np.testing.assert_allclose(
+                    rf.func_params.c1, reference.c1 / temporal_scale
+                )
+                np.testing.assert_allclose(
+                    rf.func_params.c2, reference.c2 / temporal_scale
+                )
                 assert rf.temporal_resolution == (
                     component.parameters.receptive_field.temporal_resolution
                 )
@@ -620,10 +918,12 @@ class TestPerCellReceptiveFields:
             component.input_cells["X_ON"], component.input_cells["X_OFF"]
         ):
             assert on_cell.receptive_field is not off_cell.receptive_field
-            assert np.array_equal(
-                off_cell.receptive_field.as_dense(),
-                -on_cell.receptive_field.as_dense(),
-            )
+            assert on_cell.receptive_field.polarity == 1.0
+            assert off_cell.receptive_field.polarity == -1.0
+        assert not np.array_equal(
+            component._rf_parameters["X_ON"]["temporal_scales"],
+            component._rf_parameters["X_OFF"]["temporal_scales"],
+        )
         assert "rf" not in component.__dict__
         assert any(
             "estimated local RF/operator array memory" in record.getMessage()
@@ -1275,6 +1575,13 @@ def _collect_stage_4_signature():
                             "surround_sigma_deg": float(rf.func_params.sigma_s),
                             "width_deg": float(rf.width),
                             "height_deg": float(rf.height),
+                            "temporal_scale": float(
+                                retina._rf_parameters[rf_type]["temporal_scales"][
+                                    global_index
+                                ]
+                            ),
+                            "nominal_kernel_duration_ms": float(rf.duration),
+                            "kernel_sample_count": int(rf.kernel_duration),
                             "kernel_shape": list(rf.shape),
                             "kernel_sha256": _sha256_positions(kernel),
                             "luminance_kernel_sha256": _sha256_positions(

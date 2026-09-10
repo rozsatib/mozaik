@@ -24,6 +24,7 @@ from builtins import zip
 from collections import OrderedDict
 from dataclasses import dataclass
 import copy
+from scipy.special import ndtri
 
 logger = mozaik.getMozaikLogger()
 
@@ -102,6 +103,30 @@ def _sample_lgn_positions(topography, number, rng):
     if numpy.any(numpy.hypot(positions[0], positions[1]) >= maximum_eccentricity):
         raise AssertionError("LGN position sampling produced a point outside the disk")
     return positions
+
+
+def _sample_truncated_lognormal_scales(
+    number, mu, sigma, lower_quantile, upper_quantile, rng
+):
+    """Sample a log-normal distribution conditioned on a CDF interval."""
+
+    quantiles = rng.uniform(lower_quantile, upper_quantile, size=number)
+    return numpy.exp(mu + sigma * ndtri(quantiles))
+
+
+def _temporal_scale_rngs(pynn_seed):
+    """Return deterministic private ON/OFF streams derived from ``pynn_seed``."""
+
+    # The fixed stream tag isolates temporal-scale sampling from PyNN's shared
+    # RNG state while retaining pynn_seed as the sole source of randomness.
+
+    # TODO: once the seed-separation refactor is merged into this branch,
+    # set this using model_seed!!! and remove this comment.
+    seed_sequence = numpy.random.SeedSequence([int(pynn_seed), 0x4C474E54])
+    return tuple(
+        numpy.random.RandomState(int(child.generate_state(1, dtype=numpy.uint32)[0]))
+        for child in seed_sequence.spawn(2)
+    )
 
 
 def meshgrid3D(x, y, z):
@@ -1425,7 +1450,8 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
 
     Global ON/OFF positions are sampled independently, while each locally
     owned relay cell receives a complete Cai97 kernel whose spatial scale is
-    derived from its eccentricity.
+    derived from its eccentricity and whose temporal scale is sampled from a
+    truncated log-normal distribution.
     """
 
     required_parameters = ParameterSet(
@@ -1437,6 +1463,14 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                     "cap_eccentricity": (float, type(None)),
                     "full_max_eccentricity": float,
                     "beta": float,
+                }
+            ),
+            "temporal_scale_distribution": ParameterSet(
+                {
+                    "mu": float,
+                    "sigma": float,
+                    "lower_quantile": float,
+                    "upper_quantile": float,
                 }
             ),
             "linear_scaler": float,
@@ -1576,6 +1610,7 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
             )
         self._validate_noise_parameters()
         self._validate_gain_control_parameters()
+        self._validate_temporal_scale_distribution()
 
         positive_finite_parameters = (
             (
@@ -1598,6 +1633,58 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                 or value <= 0.0
             ):
                 raise ValueError(f"{name} must be positive and finite")
+
+    def _validate_temporal_scale_distribution(self):
+        distribution = self.parameters.temporal_scale_distribution
+        for name in ("mu", "sigma", "lower_quantile", "upper_quantile"):
+            value = distribution[name]
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, numbers.Real)
+                or not numpy.isfinite(value)
+            ):
+                raise ValueError(
+                    f"temporal_scale_distribution.{name} must be finite"
+                )
+        if distribution.sigma <= 0.0:
+            raise ValueError(
+                "temporal_scale_distribution.sigma must be positive and finite"
+            )
+        if not (
+            0.0
+            < distribution.lower_quantile
+            < distribution.upper_quantile
+            < 1.0
+        ):
+            raise ValueError(
+                "temporal_scale_distribution quantiles must satisfy "
+                "0 < lower_quantile < upper_quantile < 1"
+            )
+
+    def _sample_temporal_scales(self):
+        try:
+            pynn_seed = self.model.parameters.pynn_seed
+        except AttributeError as exc:
+            raise ValueError(
+                "model.parameters.pynn_seed is required for temporal-scale sampling"
+            ) from exc
+
+        distribution = self.parameters.temporal_scale_distribution
+        rngs = _temporal_scale_rngs(pynn_seed)
+        return OrderedDict(
+            (
+                rf_type,
+                _sample_truncated_lognormal_scales(
+                    self.parameters.number_per_polarity,
+                    distribution.mu,
+                    distribution.sigma,
+                    distribution.lower_quantile,
+                    distribution.upper_quantile,
+                    rng,
+                ),
+            )
+            for rf_type, rng in zip(self.rf_types, rngs)
+        )
 
     def _validate_noise_parameters(self):
         for rf_type in ("X_ON", "X_OFF"):
@@ -1729,6 +1816,7 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
         function_parameters = receptive_field.func_params
         reference_center_sigma = float(function_parameters.sigma_c)
         reference_surround_sigma = float(function_parameters.sigma_s)
+        temporal_scales_by_type = self._sample_temporal_scales()
 
         rf_parameters = OrderedDict()
         all_center_sigmas = []
@@ -1740,6 +1828,11 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                 self.topography.center_sigma_deg(eccentricities), dtype=float
             )
             scales = center_sigmas / reference_center_sigma
+            temporal_scales = temporal_scales_by_type[rf_type]
+            durations_ms = receptive_field.duration * temporal_scales
+            temporal_samples = numpy.ceil(
+                durations_ms / receptive_field.temporal_resolution
+            ).astype(int)
             parameters = {
                 "eccentricities_deg": eccentricities,
                 "center_sigmas_deg": center_sigmas,
@@ -1747,6 +1840,9 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                 "scales": scales,
                 "widths_deg": scales * receptive_field.width,
                 "heights_deg": scales * receptive_field.height,
+                "temporal_scales": temporal_scales,
+                "durations_ms": durations_ms,
+                "temporal_samples": temporal_samples,
             }
             for values in parameters.values():
                 values.setflags(write=False)
@@ -1775,9 +1871,6 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                     "minimum samples per centre sigma"
                 )
 
-        temporal_samples = int(
-            numpy.ceil(receptive_field.duration / receptive_field.temporal_resolution)
-        )
         global_shapes = []
         estimated_dense_local_bytes = 0
         estimated_factorized_local_bytes = 0
@@ -1793,7 +1886,7 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                 (
                     vertical_samples,
                     horizontal_samples,
-                    numpy.full(len(horizontal_samples), temporal_samples),
+                    parameters["temporal_samples"],
                 )
             )
             global_shapes.extend(map(tuple, shapes))
@@ -1866,12 +1959,17 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                 per_cell_parameters.sigma_s = float(
                     parameters["surround_sigmas_deg"][global_index]
                 )
+                temporal_scale = float(parameters["temporal_scales"][global_index])
+                for name in ("t1", "t2", "td"):
+                    per_cell_parameters[name] *= temporal_scale
+                for name in ("c1", "c2"):
+                    per_cell_parameters[name] /= temporal_scale
                 receptive_field_for_cell = SpatioTemporalReceptiveField(
                     rf_function,
                     per_cell_parameters,
                     parameters["widths_deg"][global_index],
                     parameters["heights_deg"][global_index],
-                    receptive_field.duration,
+                    parameters["durations_ms"][global_index],
                     polarity=1.0 if rf_type == "X_ON" else -1.0,
                 )
                 receptive_field_for_cell.quantize(
@@ -1893,7 +1991,7 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                             / self.visual_space_resolution_deg
                         )
                     ),
-                    temporal_samples,
+                    int(parameters["temporal_samples"][global_index]),
                 )
                 if receptive_field_for_cell.shape != expected_shape:
                     raise AssertionError(
