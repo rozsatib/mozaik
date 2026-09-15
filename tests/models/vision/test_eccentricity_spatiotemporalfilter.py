@@ -31,6 +31,7 @@ from mozaik.models.vision.spatiotemporalfilter import (
     _sample_lgn_positions,
     _sample_truncated_lognormal_scales,
     _temporal_scale_rngs,
+    _center_sigma_rngs,
 )
 from mozaik.models.vision.topography import RadiallySymmetricLGNTopography
 from mozaik.space import VisualSpace
@@ -79,6 +80,10 @@ def eccentricity_parameters(**overrides):
         "lower_quantile": 0.005,
         "upper_quantile": 0.995,
     }
+    # Default to the deterministic RF-size line; the centre-size scatter is
+    # exercised explicitly by the tests that override this.
+    parameters["center_size_log10_residual_sd"] = 0.0
+    parameters["center_size_truncation_sd"] = 3.0
     del parameters["density"]
     del parameters["size"]
     del parameters["receptive_field"]["spatial_resolution"]
@@ -414,6 +419,7 @@ def _rf_only_component(
     temporal_resolution=7.0,
     temporal_scales_by_type=None,
     receptive_field_function_parameters=None,
+    pynn_seed=936395,
 ):
     component = object.__new__(
         EccentricityDependentSpatioTemporalFilterRetinaLGN
@@ -444,7 +450,7 @@ def _rf_only_component(
             ),
         )
     component.model = SimpleNamespace(
-        parameters=ParameterSet({"pynn_seed": 936395}),
+        parameters=ParameterSet({"pynn_seed": pynn_seed}),
         input_space=VisualSpace(
             ParameterSet(
                 {
@@ -520,6 +526,83 @@ class TestReceptiveFieldConfiguration:
 
         with pytest.raises(ValueError, match="missing.*td"):
             component._validate_receptive_field_parameters()
+
+
+class TestCenterSizeSampling:
+    RESIDUAL_SD = 0.093765
+    TRUNCATION_SD = 3.0
+
+    def _component(
+        self, residual_sd, positions=None, pynn_seed=936395, truncation_sd=None
+    ):
+        if positions is None:
+            positions = {
+                rf_type: np.vstack((np.linspace(0.0, 4.0, 48), np.zeros(48)))
+                for rf_type in RF_TYPES
+            }
+        component = _rf_only_component(positions, pynn_seed=pynn_seed)
+        component.parameters.center_size_log10_residual_sd = residual_sd
+        component.parameters.center_size_truncation_sd = (
+            self.TRUNCATION_SD if truncation_sd is None else truncation_sd
+        )
+        component._initialize_receptive_fields()
+        return component
+
+    def test_resolution_follows_the_configuration_bound(self):
+        component = self._component(self.RESIDUAL_SD)
+
+        smallest_supportable, _ = component.topography.center_sigma_bounds_deg(
+            self.RESIDUAL_SD, self.TRUNCATION_SD
+        )
+        assert component.visual_space_resolution_deg == (
+            _round_down_to_two_significant_digits(
+                smallest_supportable
+                / component.parameters.minimum_samples_per_center_sigma
+            )
+        )
+        # Every drawn cell clears the sampling criterion, because the bound is
+        # by construction no larger than any sigma the draw can produce.
+        for rf_type in RF_TYPES:
+            assert np.all(
+                component._rf_parameters[rf_type]["center_sigmas_deg"]
+                >= smallest_supportable - 1e-12
+            )
+
+    def test_resolution_is_identical_across_seeds(self):
+        resolutions = set()
+        sigma_minima = set()
+        for pynn_seed in (936395, 936396, 11, 12345, 999983):
+            component = self._component(self.RESIDUAL_SD, pynn_seed=pynn_seed)
+            resolutions.add(component.visual_space_resolution_deg)
+            sigma_minima.add(
+                round(
+                    min(
+                        float(
+                            np.min(
+                                component._rf_parameters[rf_type]["center_sigmas_deg"]
+                            )
+                        )
+                        for rf_type in RF_TYPES
+                    ),
+                    9,
+                )
+            )
+
+        # The realized minimum still moves with the seed; the grid must not.
+        assert len(sigma_minima) > 1
+        assert len(resolutions) == 1
+
+    def test_resolution_is_independent_of_population_size(self):
+        resolutions = set()
+        for count in (8, 48, 200):
+            positions = {
+                rf_type: np.vstack((np.linspace(0.0, 4.0, count), np.zeros(count)))
+                for rf_type in RF_TYPES
+            }
+            component = self._component(self.RESIDUAL_SD, positions=positions)
+            resolutions.add(component.visual_space_resolution_deg)
+
+        assert len(resolutions) == 1
 
 
 class TestTemporalScaleSampling:
@@ -737,16 +820,25 @@ class TestResolutionQuantization:
         with pytest.raises(ValueError, match="positive and finite"):
             _round_down_to_two_significant_digits(value)
 
-    def test_smallest_actual_sigma_controls_resolution(self):
+    def test_smallest_supportable_sigma_controls_resolution(self):
         positions = {
             "X_ON": np.array([[2.0, 4.0], [0.0, 0.0]]),
             "X_OFF": np.array([[3.0, 5.0], [0.0, 0.0]]),
         }
         component = _rf_only_component(positions, minimum_samples=4.0)
-        expected_raw = component.topography.center_sigma_deg(2.0) / 4.0
+        smallest_supportable, _ = component.topography.center_sigma_bounds_deg(
+            component.parameters.center_size_log10_residual_sd,
+            component.parameters.center_size_truncation_sd,
+        )
 
+        # The bound, not the realized minimum: no cell here sits at the
+        # smallest supported eccentricity, so the two differ.
+        assert smallest_supportable < min(
+            float(np.min(component._rf_parameters[rf_type]["center_sigmas_deg"]))
+            for rf_type in RF_TYPES
+        )
         assert component.visual_space_resolution_deg == (
-            _round_down_to_two_significant_digits(expected_raw)
+            _round_down_to_two_significant_digits(smallest_supportable / 4.0)
         )
         for rf_type in RF_TYPES:
             assert np.all(

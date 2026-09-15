@@ -53,6 +53,10 @@ def _eccentricity_parameters():
         "lower_quantile": 0.005,
         "upper_quantile": 0.995,
     }
+    # This test checks the deterministic eccentricity/spatial-frequency
+    # relation, so the measured centre-size scatter is switched off here.
+    parameters["center_size_log10_residual_sd"] = 0.0
+    parameters["center_size_truncation_sd"] = 3.0
     del parameters["density"]
     del parameters["size"]
     del parameters["receptive_field"]["spatial_resolution"]

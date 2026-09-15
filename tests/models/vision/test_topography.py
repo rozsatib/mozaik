@@ -15,6 +15,8 @@ from mozaik.models.vision.topography import (
     relative_lgn_cell_density,
     relative_lgn_cell_density_at_eccentricity,
     rf_center_sigma,
+    rf_center_sigma_scatter_factors,
+    sample_rf_center_sigma,
 )
 from mozaik.space import VisualRegion
 
@@ -511,3 +513,62 @@ class TestDogOptimalSpatialFrequency:
         parameters = {**self.REFERENCE_PARAMETERS, **overrides}
         with pytest.raises(ValueError, match=error):
             cai97.dog_optimal_spatial_frequency(**parameters)
+
+
+class TestSampledRfCenterSigma:
+    RESIDUAL_SD = topography_module._RF_CENTER_SIZE_LOG10_RESIDUAL_SD
+
+    def test_zero_residual_sd_reproduces_the_deterministic_line(self):
+        eccentricities = np.array([0.0, 1.0, 5.0, 25.0, 80.0])
+
+        actual = sample_rf_center_sigma(
+            eccentricities, np.random.RandomState(0), log10_residual_sd=0.0
+        )
+        np.testing.assert_allclose(
+            actual, rf_center_sigma(eccentricities), rtol=RTOL, atol=ATOL
+        )
+
+    def test_scatter_is_lognormal_about_the_line_and_constant_in_eccentricity(self):
+        rng = np.random.RandomState(20250914)
+        eccentricities = np.repeat([0.0, 10.0, 25.0], 40000)
+
+        sampled = sample_rf_center_sigma(eccentricities, rng, self.RESIDUAL_SD)
+        residual = np.log10(sampled / rf_center_sigma(eccentricities))
+
+        # Truncation at +/-3 s.d. removes 0.27% of the mass, which lowers the
+        # realized spread slightly below the parent value.
+        for value in (0.0, 10.0, 25.0):
+            group = residual[eccentricities == value]
+            assert abs(group.mean()) < 0.005
+            assert abs(group.std(ddof=1) - 0.9686 * self.RESIDUAL_SD) < 0.002
+
+    def test_sampling_is_reproducible_and_stream_dependent(self):
+        eccentricities = np.linspace(0.0, 25.0, 64)
+
+        first = sample_rf_center_sigma(
+            eccentricities, np.random.RandomState(7), self.RESIDUAL_SD
+        )
+        repeated = sample_rf_center_sigma(
+            eccentricities, np.random.RandomState(7), self.RESIDUAL_SD
+        )
+        different = sample_rf_center_sigma(
+            eccentricities, np.random.RandomState(8), self.RESIDUAL_SD
+        )
+
+        assert np.array_equal(first, repeated)
+        assert not np.array_equal(first, different)
+
+    def test_scatter_factors_bound_the_draw(self):
+        lower, upper = rf_center_sigma_scatter_factors(self.RESIDUAL_SD, 3.0)
+        rng = np.random.RandomState(6)
+        eccentricities = np.linspace(0.0, 25.0, 20000)
+
+        sampled = sample_rf_center_sigma(
+            eccentricities, rng, self.RESIDUAL_SD, truncation_sd=3.0
+        )
+        line = rf_center_sigma(eccentricities)
+
+        assert lower == pytest.approx(10.0 ** (-3.0 * self.RESIDUAL_SD))
+        assert upper == pytest.approx(10.0 ** (3.0 * self.RESIDUAL_SD))
+        assert np.all(sampled >= line * lower - 1e-12)
+        assert np.all(sampled <= line * upper + 1e-12)
