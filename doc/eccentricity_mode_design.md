@@ -33,9 +33,15 @@ The repository currently contains both LGN input components:
 - `EccentricityDependentSpatioTemporalFilterRetinaLGN` implements the LGN-only
   eccentricity path. It uses fixed-count independently sampled ON/OFF disk
   populations, immutable shared topography, per-cell scaled and factorized
-  Cai97 RFs, a resolution derived from the smallest realized centre sigma,
-  corrected summed-kernel luminance handling, current injection, and
+  Cai97 RFs whose centre sigma is drawn about the eccentricity/RF-size line, a
+  resolution derived from the smallest centre sigma the configuration can
+  produce, corrected summed-kernel luminance handling, current injection, and
   one-/two-rank reproducibility.
+- RF centre size is no longer a deterministic function of eccentricity. Each
+  cell draws its own centre sigma from the measured Gaussian residual of the
+  RF-size regression, from deterministic private ON/OFF streams. This gives
+  preferred spatial frequency unbounded support above the foveal optimum of
+  the line, which the validation references require.
 - Both components expose `visual_space_resolution_deg`. The eccentricity
   component reuses the legacy presentation, response-cache, gain, current
   injection, null-input, and per-frame convolution machinery after constructing
@@ -236,6 +242,163 @@ Implementation may continue: Yes
 Resolution: Accepted by explicit maintainer instruction. A future agent must
 stop for an explicit user decision if the PyNN fix changes these anchors and
 must not relax, replace, normalize, or delete them independently.
+```
+
+```text
+Change ID: ECC-P1-S3-001
+Status: Accepted
+Date: 2026-09-15
+Discovered during stage: Phase 1 Stage 3
+Requested by: Human maintainer
+Original requirement: Assign each LGN cell the centre sigma given by the
+deterministic eccentricity/RF-size regression, sigma_c(E) = 10^(0.014E-0.758)
+/ sqrt(2), optionally capped.
+Proposed change: Assign each cell a centre sigma drawn from the measured
+Gaussian residual of that regression, log10(sigma_c,i) = log10(sigma_c(E_i)) +
+N(0, s^2) with s = 0.093765 log10 degrees, constant in eccentricity. Configure
+s through a new required parameter center_size_log10_residual_sd, with 0
+reproducing the deterministic law exactly. Leave the mean law unchanged.
+Reason: Under the deterministic law preferred spatial frequency is a strictly
+decreasing function of eccentricity, so the population ceiling is the foveal
+optimum 0.5774340629 cycles/degree. Several non-skipped validation references
+require optima of 0.65 to 1.0 cycles/degree. Raising E_max lowers the range
+rather than raising it, so no geometry change reaches those bands and no
+neuron count helps, because unsupported bands have zero probability. The fit's
+own residual scatter is the measured, empirically grounded mechanism that
+restores the support.
+Alternatives considered: A revised foveal RF-size model, which would contradict
+the fitted line the rest of the design depends on; an arbitrary spatial RF
+scale distribution, which would not be empirically constrained; increasing
+E_max, which moves the range the wrong way; relaxing the reference targets,
+which would weaken validation rather than fix the model.
+Affected normative sections: Incorporated topography mathematics / RF centre
+size and RF centre-size scatter; Required production API; Mode separation and
+configuration / New LGN parameters; LGN position generation / Centre-size
+stream reproducibility; Per-cell receptive fields / Sigma assignment; Stimulus
+spatial resolution; Theoretical and measured LGN preferred spatial frequency;
+Test plan G and H; Acceptance criteria / Sampling and MPI and RFs, resolution,
+and responses; Known limitations and future work; Remaining decisions.
+Affected production APIs or configuration:
+topography.sample_rf_center_sigma; topography.sample_center_sigma_deg; new
+required parameter center_size_log10_residual_sd on the eccentricity input
+component.
+Affected stages: Stage 3, and every later stage that assigns, reports, or
+validates per-cell RF size or preferred spatial frequency.
+Affected tests and regression anchors:
+tests/models/vision/test_topography.py centre-size sampling coverage;
+tests/models/vision/test_eccentricity_spatiotemporalfilter.py centre-size
+sampling coverage; tests/models/vision/test_eccentricity_lgn_spatial_frequency.py
+and the existing deterministic eccentricity tests, which now configure
+center_size_log10_residual_sd = 0 so that their assertions remain exact.
+Phase 1 / Phase 2 compatibility impact: Legacy mode is untouched. Recorded
+pre-scatter eccentricity behavior remains reproducible by setting the residual
+standard deviation to zero, which the frozen Stage 3/4/5 validation baselines
+do. Phase 2 must read each cell's assigned centre sigma rather than recompute
+it from eccentricity.
+Randomness or MPI impact: Adds two deterministic private streams derived from
+pynn_seed under a stream tag distinct from the temporal-scale streams,
+reconstructed identically on every rank and drawn in global cell order. It
+does not perturb position sampling, noise seeding, or unrelated simulator
+streams. The pynn_seed source is provisional and must move to model_seed after
+the seed-separation refactor, as the source TODO records.
+Scientific or numerical impact: RF size at a given eccentricity becomes a
+distribution rather than a value, so preferred spatial frequency gains
+unbounded support above the foveal optimum and all reference bands become
+reachable in probability. The derived stimulus resolution is now set by the low
+tail of the scatter, which raises memory and runtime cost. Required population
+size becomes a sampling calculation over the reference target list.
+Required acceptance-gate reruns: Stage 3 RF-assignment and stimulus-resolution
+gates; the Stage 4 full-neuron spatial-frequency characterization once its
+protocol is finished; any memory or performance reporting produced before the
+scatter was enabled.
+Normative sections reconciled: Yes
+Implementation may continue: Yes
+Resolution: Accepted by explicit maintainer instruction. The generator was
+ported from the maintainer's external notebook
+cat_center_size_regression_and_generator.ipynb. The mean law was deliberately
+left at the published rounding; truncation of the scatter remains an open
+decision recorded under Remaining decisions.
+```
+
+```text
+Change ID: ECC-P1-S3-002
+Status: Accepted
+Date: 2026-09-15
+Discovered during stage: Phase 1 Stage 3
+Requested by: Human maintainer
+Original requirement: Derive the stimulus resolution from the smallest centre
+sigma actually present in the generated population, and leave the RF
+centre-size scatter untruncated.
+Proposed change: Truncate the centre-size residual symmetrically at
++/- center_size_truncation_sd standard deviations, by conditioning rather than
+clipping, and derive the stimulus resolution from the resulting closed-form
+lower bound sigma_c(E_floor) * 10^(-k s) instead of from the realized minimum.
+Approved truncation width k = 3.0.
+Reason: With an unbounded scatter the resolution is a random variable. Measured
+over 60 seeds at E_max = 25 degrees with 1000 cells per polarity it varied
+between 0.016 and 0.022 degrees, a 2.4 times spread in pixel count for one
+unchanged parametrization, and it drifted with number_per_polarity, so two runs
+intended to be comparable were rendered on different grids and memory could not
+be predicted in advance. A weaker form of the defect predated the scatter,
+because the smallest sampled eccentricity is itself seeded. Truncation is what
+makes a support bound exist to derive from.
+Alternatives considered: Clipping draws at the bound, rejected because it
+places a point mass of identical cells at the highest-preferred-frequency end
+of the population, exactly the band the validation references depend on;
+specifying the resolution directly and deriving the truncation from it,
+rejected because a numerical convenience parameter would then silently reshape
+the biological population; leaving the distribution untouched and failing the
+run when a draw violates the sampling criterion, rejected because runs would
+fail as a function of seed. Truncating at k = 2.5 was proposed and rejected on
+measurement: its reachable ceiling is 0.9906 cycles/degree, which does not
+reach the 1.0 cycles/degree references.
+Affected normative sections: Incorporated topography mathematics / RF
+centre-size scatter; Required production API; Mode separation and
+configuration / New LGN parameters; Per-cell receptive fields / Sigma
+assignment; Stimulus spatial resolution; Test plan G and H; Acceptance criteria
+/ Sampling and MPI and RFs, resolution, and responses; Known limitations and
+future work; Remaining decisions.
+Affected production APIs or configuration:
+topography.center_sigma_bounds_deg; topography.rf_center_sigma_scatter_factors;
+truncation_sd argument on sample_rf_center_sigma and
+sample_center_sigma_deg; new required parameter center_size_truncation_sd.
+Affected stages: Stage 3, and every later stage whose memory, runtime, or
+stimulus rendering depends on the derived resolution.
+Affected tests and regression anchors:
+tests/models/vision/test_topography.py truncation, bound, and
+frequency-ceiling coverage; tests/models/vision/
+test_eccentricity_spatiotemporalfilter.py resolution determinism across seeds
+and population sizes. The two tests that asserted the realized-minimum rule
+were rewritten to the bound rule rather than relaxed.
+Phase 1 / Phase 2 compatibility impact: Legacy mode is untouched. The derived
+resolution changes for every eccentricity profile, including those with
+center_size_log10_residual_sd = 0, because the derivation itself changed. For
+the Stage 3/4/5 controls the value moves from a seed-dependent 0.030 to 0.035
+degrees to a fixed 0.030 degrees. The change is at most one quantization step
+and always toward a finer grid, so no configuration becomes undersampled, but
+those exports are no longer byte-reproducible and must be re-exported or
+explicitly pinned.
+Randomness or MPI impact: The draw is still one deterministic value per global
+cell from the same private ON/OFF streams; only the sampled distribution
+changes. The resolution no longer depends on any random draw at all.
+Scientific or numerical impact: RF size support becomes bounded at both ends.
+The reachable preferred spatial frequency ceiling becomes finite and equal to
+1.1036 cycles/degree at k = 3.0, still above the hardest reference and its
++/-10 percent window. The population no longer represents the full measured
+residual range: 0.27 percent of the parent mass is discarded and the realized
+spread falls to approximately 0.9686 of the fitted value. Required population
+size at the hardest band rises by approximately 14 percent relative to no
+truncation.
+Required acceptance-gate reruns: Stage 3 RF-assignment and stimulus-resolution
+gates; any memory or performance reporting produced under the realized-minimum
+rule; the Stage 3/4/5 control exports if byte reproducibility is required.
+Normative sections reconciled: Yes
+Implementation may continue: Yes
+Resolution: Accepted by explicit maintainer instruction after a written
+comparison of five candidate designs. The maintainer's initially proposed
+truncation width of 2.5 was raised to 3.0 on the measured finding that 2.5
+cannot reach 1.0 cycles/degree, and the maintainer's clipping variant was
+rejected in favour of conditioning for the point-mass reason recorded above.
 ```
 
 ## Version-control ownership
@@ -775,11 +938,14 @@ Use these module-level analytical helper names:
 - `capped_relative_lgn_cell_density_at_eccentricity`;
 - `capped_relative_lgn_cell_density`;
 - `rf_center_sigma`;
+- `sample_rf_center_sigma`;
+- `rf_center_sigma_scatter_factors`;
 - `retinotopic_map_parameters`;
 - `_visual_polar_to_cortical_centered_mm`;
 - `_cortical_centered_mm_to_visual_polar`.
 
-The four density helpers and `rf_center_sigma` are Phase 1.
+The four density helpers, `rf_center_sigma`, `sample_rf_center_sigma`, and
+`rf_center_sigma_scatter_factors` are Phase 1.
 `retinotopic_map_parameters` and the two coordinate helpers are Phase 2.
 Phase 1 may use a narrowly scoped empirical-cap calculation needed to validate
 the unified cap, but must not expose a second temporary mapping API.
@@ -863,6 +1029,117 @@ $$
 The underlying regression was reported below 25 degrees. If `E_max > 25
 degrees`, log one initialization warning that larger-eccentricity RF sizes are
 extrapolated and may not be accurate. Extrapolation is approved.
+
+### RF centre-size scatter
+
+The expression above is the regression line, not the assigned RF size. The
+digitized cat X cells scatter around that line, and the population needs that
+scatter: without it preferred spatial frequency is a strictly decreasing
+function of eccentricity, so the whole population lies at or below
+`f_opt(sigma_c(0))` and the validation references requiring optima up to
+`1.0 cycles/degree` are unreachable at any neuron count.
+
+The residual of the semi-log fit is Gaussian in `log10` units, so the assigned
+centre sigma is log-normal about the line:
+
+$$
+\log_{10}\sigma_{c,i}
+=
+\log_{10}\sigma_c(E_i)+\varepsilon_i,
+\qquad
+\varepsilon_i\sim\mathcal{N}(0,s^2).
+$$
+
+Equivalently:
+
+$$
+\sigma_{c,i}=\sigma_c(E_i)\cdot10^{\varepsilon_i}.
+$$
+
+The residual standard deviation is:
+
+$$
+s=0.093765\ \log_{10}\text{ degrees},
+$$
+
+the pooled value of the Linsenmeier et al. (1982) cat X-cell regression
+refitted on the 46 digitized points below 25 degrees, with 44 degrees of
+freedom. It is constant in eccentricity by construction, so the multiplicative
+spread is identical everywhere and the scatter introduces no new eccentricity
+dependence. A multiplier of `10^s` is approximately `1.241`.
+
+The same factor applies to `r_c` and to `sigma_c` because
+`sigma_c = r_c / sqrt(2)`, so the scatter may be applied directly to the
+centre sigma.
+
+The residual is truncated symmetrically. Let `k` be
+`center_size_truncation_sd`. The residual is drawn from the normal above
+conditioned on:
+
+$$
+|\varepsilon_i|\leq ks,
+$$
+
+so the multiplicative factor applied to the line is confined to:
+
+$$
+10^{-ks}\leq\frac{\sigma_{c,i}}{\sigma_c(E_i)}\leq10^{ks}.
+$$
+
+Truncation must be implemented by conditioning, that is by drawing a uniform
+variate on the quantile interval `[Phi(-k), Phi(k)]` and inverting the normal
+CDF, exactly as the temporal-scale distribution does. Do not implement it by
+clipping draws to the bounds. Clipping places a point mass of identical cells
+on each bound, and the lower bound is the highest-preferred-frequency end of
+the population, which is precisely the band the validation references depend
+on: a study would then be matched by clones produced by the clipping rule
+rather than by a sample. At `k = 2.5` clipping would put `0.62` percent of the
+population, about twelve cells per two thousand, at one identical preferred
+frequency.
+
+Requirements:
+
+- `s` is configuration, supplied through
+  `center_size_log10_residual_sd`, and must be nonnegative and finite;
+- `k` is configuration, supplied through `center_size_truncation_sd`, and must
+  be positive and finite;
+- `s = 0` must reproduce `rf_center_sigma` exactly, so the deterministic law
+  remains available;
+- the scatter is applied after the cap, so a capped cell scatters about
+  `sigma_c(E_cap)`;
+- the mean law is unchanged. The full-precision refit
+  `log10(r_c) = -0.759554 + 0.014336E` rounds to the published
+  `-0.758 + 0.014E` already used above. Adopting the unrounded coefficients
+  would shift `r_c` by approximately two percent at 25 degrees and is a
+  separate decision that must go through the change log.
+
+Truncation bounds the RF-size support at both ends, which is what allows the
+stimulus resolution and the worst-case kernel size to be derived from
+configuration alone rather than from a realized population. See
+[Stimulus spatial resolution](#stimulus-spatial-resolution).
+
+`k` is a scientific parameter, not only a numerical one. The highest reachable
+preferred spatial frequency is `f_opt(sigma_c(0)) * 10^(k*s)`:
+
+| `k` | reachable ceiling | tails discarded |
+| --- | --- | --- |
+| `2.0` | `0.8893 cycles/degree` | `4.55` percent |
+| `2.5` | `0.9906 cycles/degree` | `1.24` percent |
+| `3.0` | `1.1036 cycles/degree` | `0.27` percent |
+
+The approved value is `k = 3.0`. It is the smallest tested width that covers
+the entire `+/-10` percent matching window around the hardest non-skipped
+reference at `1.0 cycles/degree`. `k = 2.5` must not be used: its ceiling of
+`0.9906` does not reach `1.0` at all, reintroducing the support gap this
+scatter exists to close. Narrow truncation is also expensive in neurons,
+because it removes exactly the draws that reach the hardest band: relative to
+no truncation, matching `1.0 cycles/degree` at `E_max = 4.5 degrees` costs
+about `14` percent more neurons at `k = 3.0` and `2.3` times as many at
+`k = 2.576`.
+
+Truncation discards mass, so the realized residual spread is smaller than the
+parent `s`. At `k = 3.0` the realized standard deviation is approximately
+`0.9686 s`. Tests must compare against the truncated value, not against `s`.
 
 ### DoG optimum
 
@@ -1123,6 +1400,8 @@ The following modules and public class names are required:
 ```text
 mozaik/models/vision/topography.py
     RadiallySymmetricLGNTopography
+    rf_center_sigma_scatter_factors
+    sample_rf_center_sigma
 
 mozaik/models/vision/spatiotemporalfilter.py
     EccentricityDependentCellWithReceptiveField
@@ -1192,6 +1471,8 @@ topography.mapping_axis_extent_mm
 topography.relative_density_at_eccentricity(eccentricity_deg)
 topography.relative_density_xy(x_deg, y_deg)
 topography.center_sigma_deg(eccentricity_deg)
+topography.sample_center_sigma_deg(eccentricity_deg, rng, log10_residual_sd, truncation_sd)
+topography.center_sigma_bounds_deg(log10_residual_sd, truncation_sd)
 topography.visual_to_cortical_mm(x_deg, y_deg)
 topography.cortical_to_visual_deg(u_mm, a_mm)
 topography.validate_visual_position(x_deg, y_deg)
@@ -1205,8 +1486,22 @@ user_cap_eccentricity_deg
 relative_density_at_eccentricity
 relative_density_xy
 center_sigma_deg
+sample_center_sigma_deg
+center_sigma_bounds_deg
 validate_visual_position
 ```
+
+`center_sigma_deg` returns the deterministic line value and remains the
+reference for tests and for analytical comparisons.
+`sample_center_sigma_deg` returns the drawn value and is what the input
+component assigns to cells. Both apply the configured cap. Neither stores
+state on the provider, which remains immutable: the caller owns the stream.
+
+`center_sigma_bounds_deg` returns the smallest and largest centre sigma the
+configuration can produce, as a pair, without drawing anything. It is the
+required source of the derived stimulus resolution and of the memory estimate.
+`rf_center_sigma_scatter_factors` returns the corresponding pair of
+multiplicative scatter factors `10**(-k*s)` and `10**(k*s)`.
 
 Phase 2 adds `mapping_cap_eccentricity_deg`,
 `mapping_axis_extent_mm`, `visual_to_cortical_mm`, and
@@ -1349,7 +1644,12 @@ The eccentricity LGN component replaces legacy `density` with:
 - `minimum_samples_per_center_sigma`: positive finite float;
 - `topography.cap_eccentricity`: `None` or positive finite degrees;
 - `topography.full_max_eccentricity`: default `90.0`;
-- `topography.beta`: default `1.59`.
+- `topography.beta`: default `1.59`;
+- `center_size_log10_residual_sd`: nonnegative finite float, the `log10`
+  residual standard deviation of the RF-size regression;
+- `center_size_truncation_sd`: positive finite float, the symmetric truncation
+  half-width of that residual in standard deviations;
+- `temporal_scale_distribution`: the per-cell temporal-scale distribution.
 
 It retains:
 
@@ -1392,6 +1692,13 @@ add:
         cap_eccentricity: (float, type(None))
         full_max_eccentricity: float
         beta: float
+    center_size_log10_residual_sd: float
+    center_size_truncation_sd: float
+    temporal_scale_distribution:
+        mu: float
+        sigma: float
+        lower_quantile: float
+        upper_quantile: float
 
 retain unchanged:
     linear_scaler: float
@@ -1432,6 +1739,19 @@ The eccentricity component requires both pairs and does not accept a shared
 `mean`/`stdev` fallback. Setting both pairs to equal values preserves the
 previous shared-noise behavior while keeping their configuration and runtime
 handling independent. Noise standard deviations must be nonnegative.
+
+`center_size_log10_residual_sd` must be nonnegative and finite. Zero is valid
+and selects the deterministic RF-size law. `center_size_truncation_sd` must be
+positive and finite; zero is rejected, because an empty support is not a
+degenerate case of a truncated distribution. Both participate in the derived
+stimulus resolution even when the residual standard deviation is zero.
+
+`temporal_scale_distribution` is listed here so that this schema remains the
+complete key set the component validates. Its normative treatment, including
+its distribution, truncation, and per-cell dilation requirements, is not yet
+incorporated into this document; the operational description currently lives in
+`lgn_eccentricity_handover_condensed.md`. Do not infer temporal-spread
+requirements from this schema entry alone.
 
 `number_per_polarity` must be an integer greater than zero; do not accept a
 float that happens to be integral despite the parameter framework's historic
@@ -1894,6 +2214,31 @@ Requirements:
 The new sheet should force position realization during initialization as the
 legacy sheet does.
 
+### Centre-size stream reproducibility
+
+RF centre-size scatter is drawn from its own deterministic streams, not from
+the position streams and not from global `mozaik.rng` or `mozaik.pynn_rng`.
+
+Derive the streams from a `numpy.random.SeedSequence` over the model's
+`pynn_seed` and a fixed stream tag distinct from every other tagged stream in
+this component, then spawn one child per polarity in `X_ON`, `X_OFF` order.
+Requirements:
+
+- the streams are reconstructed identically on every MPI rank, so assignment
+  does not depend on rank count or on local cell ownership;
+- ON and OFF draws are independent;
+- the draw order is the global cell order, so a cell's sigma depends on its
+  global index rather than on which rank owns it;
+- the same configuration and seed give identical assignments;
+- drawing does not perturb position sampling, noise seeding, or any unrelated
+  simulator stream.
+
+Using `pynn_seed` is provisional. It is the only seed currently available to
+the component. After the seed-separation refactor is merged, this must move to
+`model_seed`; the source carries a `TODO` at the derivation point. Do not
+change the seed source before that dependency exists, because doing so
+silently invalidates every recorded assignment.
+
 After population construction, retain a read-only canonical `(2, N)` position
 array on each retinal sheet for test/debug comparison and assert that PyNN's
 realized first two position rows are exactly equal to it. Noise seeding then
@@ -1958,17 +2303,38 @@ $$
 E_i=\sqrt{x_i^2+y_i^2}.
 $$
 
-If no user cap:
+Let the effective line value be:
 
 $$
-\sigma_{c,i}=\sigma_c(E_i).
+\bar{\sigma}_{c,i}=\sigma_c(E_i)
 $$
 
-With an explicit cap:
+without a user cap, and:
 
 $$
-\sigma_{c,i}=\sigma_c(\max(E_i,E_{\mathrm{cap}})).
+\bar{\sigma}_{c,i}=\sigma_c(\max(E_i,E_{\mathrm{cap}}))
 $$
+
+with an explicit cap. The assigned centre sigma is then drawn about that value:
+
+$$
+\sigma_{c,i}=\bar{\sigma}_{c,i}\cdot10^{\varepsilon_i},
+\qquad
+\varepsilon_i\sim\mathcal{N}(0,s^2),
+$$
+
+with `s` taken from `center_size_log10_residual_sd` and the residual truncated
+at `+/- k s` with `k` from `center_size_truncation_sd`, both as defined in
+[RF centre-size scatter](#rf-centre-size-scatter). Each cell draws its own
+independent residual, so two cells at the same eccentricity receive different
+centre sigmas. With `s = 0` this reduces to
+`sigma_{c,i} = bar{sigma}_{c,i}`.
+
+Every downstream quantity is derived from the assigned `sigma_{c,i}`, never
+re-derived from `E_i`. In particular, a cell's preferred spatial frequency,
+surround sigma, spatial support, and stimulus-resolution contribution all
+follow the drawn value. Analysis code must read the exported per-cell centre
+sigma rather than recomputing it from eccentricity.
 
 Let reference parameters be:
 
@@ -1999,7 +2365,9 @@ $$
 \frac{\sigma_{s,\mathrm{ref}}}{\sigma_{c,\mathrm{ref}}}.
 $$
 
-Keep `Ac`, `As`, and all temporal parameters unchanged.
+Keep `Ac`, `As`, and all temporal parameters unchanged. The surround-to-centre
+ratio is therefore preserved per cell despite the scatter, because the drawn
+sigma sets `scale_i`.
 
 ### Spatial support
 
@@ -2038,12 +2406,12 @@ the reference form for tests, visualization, and explicit compatibility use.
 ## Stimulus spatial resolution
 
 Use minimum samples per centre sigma as the numerical sampling criterion. It
-corresponds directly to the value returned by `rf_center_sigma` and does not
-depend on an arbitrary support multiplier.
+corresponds directly to each cell's assigned centre sigma and does not depend
+on an arbitrary support multiplier.
 
 After both global LGN populations have been generated:
 
-1. Calculate every cell's effective centre sigma.
+1. Calculate every cell's assigned centre sigma, including its drawn residual.
 2. Find the smallest sigma actually present.
 3. Calculate:
 
@@ -2088,6 +2456,57 @@ $$
 $$
 
 for every cell.
+
+The minimum must be the smallest centre sigma the configuration **can**
+produce, not the smallest one a particular draw did produce. Because the
+scatter is truncated, that bound exists in closed form:
+
+$$
+\sigma_{c,\min}
+=
+\sigma_c(E_{\mathrm{floor}})\cdot10^{-ks},
+\qquad
+E_{\mathrm{floor}}
+=
+\begin{cases}
+E_{\mathrm{cap}} & \text{with an explicit cap}\\
+0 & \text{otherwise,}
+\end{cases}
+$$
+
+and the matching upper bound is `sigma_c(E_max) * 10^(k s)`.
+
+Deriving `dx` from `sigma_{c,min}` is normative. Deriving it from the realized
+minimum is not permitted, because the realized minimum is a random variable:
+it moves with the seed and drifts with `number_per_polarity`. Measured over 60
+seeds at `E_max = 25 degrees` with 1000 cells per polarity, the realized-minimum
+rule produced `dx` between `0.016` and `0.022` degrees, a `2.4` times spread in
+pixel count for one unchanged parametrization. The same defect, in weaker form,
+predates the scatter, because the smallest sampled eccentricity is itself
+seeded.
+
+Consequences that are normative:
+
+- `dx` depends only on `E_floor`, `E_max`, `s`, `k`, and
+  `minimum_samples_per_center_sigma`. It must be identical across seeds and
+  across population sizes for one parametrization, and it may be computed
+  before any cell is drawn;
+- the bound rule never yields a coarser `dx` than the realized-minimum rule,
+  because the bound is by construction no larger than any drawn sigma and the
+  two-significant-digit downward rounding is monotonic. No configuration is
+  undersampled by adopting it;
+- the cost of the bound over the realization is small: the bound sits
+  approximately `1.03` to `1.11` times below the typical realized minimum,
+  about `1.06` to `1.23` times the pixels;
+- memory reporting required by
+  [Performance and memory](#performance-and-memory) must use the bounds, which
+  makes the reported estimate a function of configuration alone. The upper
+  bound fixes the largest receptive-field support and hence the worst-case
+  kernel shape.
+
+The per-cell verification above remains, and with the bound rule it is an
+invariant check rather than a constraint that shapes `dx`: every drawn sigma is
+at least `sigma_{c,min}`, so the criterion cannot be violated.
 
 Expose the common input-component property
 `visual_space_resolution_deg`:
@@ -2280,7 +2699,12 @@ For each cortical neuron:
 
 1. Obtain its unjittered visual RF centre through `cortical_to_visual`.
 2. Calculate unjittered visual eccentricity.
-3. Calculate local centre sigma using the cap policy.
+3. Calculate local centre sigma using the cap policy. Use the deterministic
+   line value here, not a draw from the RF centre-size scatter: this is the
+   cortical neuron's expected afferent scale, and it must be a reproducible
+   function of its position rather than a fresh random variable. The resulting
+   mismatch against individual scattered LGN afferents is recorded under
+   [Known limitations and future work](#known-limitations-and-future-work).
 4. Calculate local surround sigma with the LGN reference ratio.
 5. Use the exact LGN reference `Ac` and `As`.
 6. Calculate theoretical `dog_optimal_spatial_frequency`.
@@ -2395,12 +2819,17 @@ future, separately validated model change.
 
 ### Theoretical value
 
-For each representative eccentricity:
+For each representative cell:
 
 1. construct the same effective centre and surround parameters used by the LGN
-   cell;
+   cell, taking its assigned centre sigma;
 2. calculate the analytical DoG optimum;
 3. record the theoretical cycles-per-degree value.
+
+The theoretical value is per cell, not per eccentricity. With the centre-size
+scatter active, eccentricity alone does not determine a cell's optimum, so a
+comparison keyed on eccentricity is only valid when
+`center_size_log10_residual_sd = 0`.
 
 Also verify the analytical formula against a dense numerical Fourier-domain
 evaluation of the continuous DoG.
@@ -2569,7 +2998,24 @@ pass/fail gate.
 
 ### G. RF assignment and support
 
-- Each cell receives its position-derived centre sigma.
+- Each cell receives its own drawn centre sigma, and cells at equal
+  eccentricity receive different sigmas.
+- `center_size_log10_residual_sd = 0` reproduces the deterministic law exactly.
+- The drawn residual is Gaussian in `log10` units with the configured standard
+  deviation, and its mean and standard deviation do not vary with eccentricity.
+- Assignment is reproducible for a fixed seed, differs between seeds, and
+  differs between ON and OFF.
+- The centre-size streams are independent of the temporal-scale streams.
+- The drawn sigma reaches the built kernel, so `func_params.sigma_c` equals the
+  assigned value.
+- The scatter reaches preferred spatial frequencies above the deterministic
+  foveal optimum.
+- No draw leaves `+/- k s`, and both ends of that interval are populated, so
+  the bound genuinely binds.
+- No probability mass accumulates on either bound, which distinguishes
+  conditioning from clipping.
+- The configured truncation width sets the reachable frequency ceiling, and
+  `k = 2.5` demonstrably fails to reach `1.0 cycles/degree`.
 - Eccentricity is measured from global `(0, 0)`.
 - Explicit caps and no-cap behavior are correct.
 - Surround-to-centre sigma ratio is constant.
@@ -2583,7 +3029,12 @@ pass/fail gate.
 
 ### H. Stimulus resolution
 
-- The smallest actual centre sigma controls global resolution.
+- The smallest centre sigma the configuration can produce controls global
+  resolution, and it differs from the realized minimum of any particular draw.
+- The resolution is identical across seeds while the realized minimum is not.
+- The resolution is identical across population sizes.
+- The bounds enclose every drawn sigma over the whole domain, and follow the
+  cap when one is configured.
 - The configured samples-per-sigma criterion is satisfied.
 - Downward two-significant-digit rounding is deterministic.
 - Decimal-boundary cases are stable.
@@ -2693,6 +3144,20 @@ the design conversation.
 - Exact count, domain membership, fixed-seed equality, and different-seed
   inequality are deterministic assertions independent of the statistical
   tests.
+- For the RF centre-size scatter, draw at least `40,000` residuals per tested
+  eccentricity from one fixed test seed. Require the sample mean of the `log10`
+  residual to be within `0.005` of zero and its sample standard deviation to be
+  within `0.002` of the configured value, at each of several eccentricities
+  spanning the supported range. The eccentricity-independence requirement is
+  checked by applying the same bounds at every tested eccentricity, not by
+  comparing groups to each other.
+- With `center_size_log10_residual_sd = 0`, sampled and deterministic sigmas
+  must be equal with `rtol=1e-12`, `atol=1e-12`.
+- Compare the realized residual standard deviation against the truncated
+  value, approximately `0.9686 s` at `k = 3.0`, not against the parent `s`.
+- The derived resolution must be exactly equal across at least five seeds and
+  at least three population sizes, while the realized minimum sigma is shown to
+  differ across those same seeds.
 - The mandatory MPI matrix is one and two ranks. Phase 1 compares canonical
   global ON/OFF positions and per-global-ID RF parameters with
   `numpy.array_equal`. Phase 2 additionally compares cortical positions and
@@ -2703,8 +3168,14 @@ the design conversation.
 ### RFs, resolution, and responses
 
 - Centre and surround parameter assignments use `rtol=1e-12`,
-  `atol=1e-12`. Quantized dimensions must equal the documented `ceil`
-  calculation exactly.
+  `atol=1e-12` against each cell's assigned centre sigma. Do not assert an
+  assignment against a sigma recomputed from eccentricity unless the test
+  configures `center_size_log10_residual_sd = 0`. Quantized dimensions must
+  equal the documented `ceil` calculation exactly.
+- Tests that check the deterministic eccentricity/RF-size or
+  eccentricity/spatial-frequency relation must configure
+  `center_size_log10_residual_sd = 0` rather than widen their tolerance to
+  absorb the scatter.
 - The rounded pixel size must equal the expected `Decimal` result exactly as a
   float, and every cell must satisfy the sampling lower bound with
   `atol=1e-12`.
@@ -2949,10 +3420,11 @@ costs, but these engineering blockers remain:
 - Each response still projects every per-cell image patch through every
   spatial factor. For the current two Cai97 terms this is linear in the patch
   pixel count, but no convolution or projection work is shared across cells.
-- The smallest realized centre sigma sets one global visual-space resolution.
-  Peripheral supports therefore contain progressively more pixels, and patch
-  rendering and spatial projection work grow approximately quadratically with
-  RF scale.
+- The smallest supportable centre sigma sets one global visual-space
+  resolution. Peripheral supports therefore contain progressively more pixels,
+  and patch rendering and spatial projection work grow approximately
+  quadratically with RF scale. The scatter widens this spread at both ends, and
+  the truncation width bounds it.
 - Every frame is rendered separately for every local ON/OFF cell. There is no
   shared full-field render, batch evaluation, FFT path, or scale-tier reuse.
 - The in-memory stimulus cache has no size or eviction bound and deep-copies
@@ -3142,7 +3614,23 @@ implementation blockers:
   envelope.
 - Recurrent connectivity changes with the new Gabor annotations.
 - Nearby LGN inputs can have slightly different RF scales and preferred
-  frequencies from the cortical neuron's theoretical assignment.
+  frequencies from the cortical neuron's theoretical assignment. The
+  centre-size scatter increases this spread deliberately: it is now the
+  dominant source of RF-size variation between neighbours, not a residual
+  effect of position.
+- The RF-size scatter is truncated, so the population does not represent the
+  full measured residual range and the realized spread is approximately
+  `0.9686` of the fitted value at `k = 3.0`.
+- The derived stimulus resolution is conservative: it is set by the smallest
+  supportable centre sigma, which a realized population typically does not
+  contain, costing approximately `1.06` to `1.23` times the pixels a
+  realization-derived grid would need.
+- The scatter uses the residual of a fit whose own residuals are not perfectly
+  Gaussian. The reported Shapiro-Wilk `p` is `0.005` with skew `-0.48` and
+  excess kurtosis `+2.20`, and the residual spread grows with eccentricity
+  (`0.056` below `15.3` degrees against `0.120` above). The constant pooled
+  value is an approved simplification; nominal coverage of its tails is
+  optimistic.
 - Nonuniform LGN density can change unique fan-in and aggregate input.
 - RF callables without a factorizer fall back to full per-cell 3D kernels and
   may still be prohibitively expensive.
@@ -3191,6 +3679,8 @@ do not require an implementation guess:
 
 The following later scientific decisions are deliberately deferred:
 
+- whether the unrounded RF-size regression coefficients
+  `-0.759554 + 0.014336E` should replace the published rounding;
 - whether and how to recalibrate LGN luminance/contrast gains after measuring
   corrected new-mode currents;
 - whether the angular seam needs periodic or anatomical treatment;
