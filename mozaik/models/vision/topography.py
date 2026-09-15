@@ -3,7 +3,9 @@
 LGN positions use Cartesian visual-field coordinates in degrees.  The density
 fit is an area density with respect to ``dx dy``; it contains no polar
 Jacobian.  The receptive-field fit returns the conventional Gaussian standard
-deviation used by :func:`mozaik.models.vision.cai97.F_2d`.
+deviation used by :func:`mozaik.models.vision.cai97.F_2d`; its sampled
+counterpart adds the measured Gaussian scatter of that fit, so RF size is
+log-normal about the line rather than a deterministic function of eccentricity.
 
 The density fit is empirically poorly constrained above approximately 60
 degrees, and the RF-size fit was reported below 25 degrees.  Larger supported
@@ -15,6 +17,7 @@ import numbers
 
 import numpy
 from scipy.optimize import brentq
+from scipy.special import ndtr, ndtri
 
 import mozaik
 
@@ -32,6 +35,19 @@ _MAX_SUPPORTED_ECCENTRICITY_DEG = 90.0
 _VISUAL_FIELD_CENTER_TOLERANCE_DEG = 1e-12
 _DENSITY_EMPIRICAL_LIMIT_DEG = 60.0
 _RF_SIZE_EMPIRICAL_LIMIT_DEG = 25.0
+
+# Pooled residual standard deviation of the Linsenmeier et al. (1982) cat
+# X-cell semi-log regression of RF centre size on eccentricity, refitted on the
+# 46 digitized points below 25 degrees (44 degrees of freedom).  Units are
+# log10 degrees; it is deliberately constant across eccentricity.
+_RF_CENTER_SIZE_LOG10_RESIDUAL_SD = 0.093765
+
+# Half-width, in residual standard deviations, of the symmetric interval the
+# centre-size scatter is drawn from.  Truncation bounds the RF-size support, so
+# the smallest and largest centre sigma a configuration can produce are known
+# before any cell is drawn.  The derived visual-space resolution follows from
+# that bound and is therefore independent of seed and population size.
+_RF_CENTER_SIZE_TRUNCATION_SD = 3.0
 
 _TOPOGRAPHY_PARAMETER_NAMES = {
     "cap_eccentricity",
@@ -144,6 +160,92 @@ def rf_center_sigma(eccentricity_deg, cap_eccentricity_deg=None):
     sigma_deg = numpy.power(10.0, 0.014 * eccentricity - 0.758) / numpy.sqrt(2.0)
     if not numpy.all(numpy.isfinite(sigma_deg)):
         raise ValueError("eccentricity_deg is outside the numerically supported range")
+    return _scalar_or_array(sigma_deg)
+
+
+def _log10_residual_sd(value):
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, numbers.Real)
+        or not numpy.isfinite(value)
+        or value < 0.0
+    ):
+        raise ValueError("log10_residual_sd must be nonnegative and finite")
+    return float(value)
+
+
+def _truncation_sd(value):
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, numbers.Real)
+        or not numpy.isfinite(value)
+        or value <= 0.0
+    ):
+        raise ValueError("truncation_sd must be positive and finite")
+    return float(value)
+
+
+def rf_center_sigma_scatter_factors(
+    log10_residual_sd=_RF_CENTER_SIZE_LOG10_RESIDUAL_SD,
+    truncation_sd=_RF_CENTER_SIZE_TRUNCATION_SD,
+):
+    """Return the smallest and largest multiplicative scatter factors.
+
+    The scatter is drawn from a normal residual truncated symmetrically at
+    ``+/- truncation_sd`` standard deviations, so the factor applied to the
+    regression line is confined to
+    ``[10**(-k*s), 10**(+k*s)]``.  Both ends are needed up front: the lower
+    factor fixes the finest centre sigma a configuration can produce and hence
+    the derived stimulus resolution, and the upper factor fixes the largest
+    receptive-field support and hence the worst-case kernel size.
+    """
+
+    residual_sd = _log10_residual_sd(log10_residual_sd)
+    half_width = _truncation_sd(truncation_sd) * residual_sd
+    return float(numpy.power(10.0, -half_width)), float(numpy.power(10.0, half_width))
+
+
+def sample_rf_center_sigma(
+    eccentricity_deg,
+    rng,
+    log10_residual_sd=_RF_CENTER_SIZE_LOG10_RESIDUAL_SD,
+    cap_eccentricity_deg=None,
+    truncation_sd=_RF_CENTER_SIZE_TRUNCATION_SD,
+):
+    """Draw Cai97 centre sigmas scattered about the RF-size regression line.
+
+    The digitized Linsenmeier et al. (1982) cat X cells scatter around the
+    semi-log fit with a Gaussian residual in ``log10`` units,
+
+        log10(r_c) = a + b * eccentricity + N(0, log10_residual_sd**2),
+
+    so ``r_c`` -- and with it ``sigma_c = r_c / sqrt(2)`` -- is log-normal
+    about the line.  The residual standard deviation is pooled over the fitted
+    range and does not vary with eccentricity, so the multiplicative scatter is
+    identical at every eccentricity.  This is what lets the population reach
+    preferred spatial frequencies above the deterministic foveal optimum.
+
+    The residual is drawn from that normal conditioned on
+    ``|residual| <= truncation_sd * log10_residual_sd``, by inverting the
+    normal CDF on the corresponding quantile interval.  Conditioning rather
+    than clipping keeps the drawn density continuous: clipping would place a
+    point mass of identical cells at each bound, and the lower bound is exactly
+    the highest-preferred-frequency end of the population.
+
+    ``log10_residual_sd=0.0`` reproduces :func:`rf_center_sigma` exactly.
+    """
+
+    residual_sd = _log10_residual_sd(log10_residual_sd)
+    truncation = _truncation_sd(truncation_sd)
+    mean_sigma_deg = rf_center_sigma(eccentricity_deg, cap_eccentricity_deg)
+    upper_quantile = float(ndtr(truncation))
+    quantiles = rng.uniform(
+        1.0 - upper_quantile, upper_quantile, size=numpy.shape(mean_sigma_deg)
+    )
+    residual = residual_sd * ndtri(quantiles)
+    sigma_deg = mean_sigma_deg * numpy.power(10.0, residual)
+    if not numpy.all(numpy.isfinite(sigma_deg)) or numpy.any(sigma_deg <= 0.0):
+        raise ValueError("sampled centre sigma is outside the supported range")
     return _scalar_or_array(sigma_deg)
 
 
@@ -362,6 +464,61 @@ class RadiallySymmetricLGNTopography:
         """Return the effective conventional centre sigma in visual degrees."""
 
         return rf_center_sigma(eccentricity_deg, self.user_cap_eccentricity_deg)
+
+    def sample_center_sigma_deg(
+        self,
+        eccentricity_deg,
+        rng,
+        log10_residual_sd=_RF_CENTER_SIZE_LOG10_RESIDUAL_SD,
+        truncation_sd=_RF_CENTER_SIZE_TRUNCATION_SD,
+    ):
+        """Return centre sigmas drawn about the effective centre-sigma line."""
+
+        return sample_rf_center_sigma(
+            eccentricity_deg,
+            rng,
+            log10_residual_sd,
+            self.user_cap_eccentricity_deg,
+            truncation_sd,
+        )
+
+    def center_sigma_bounds_deg(
+        self,
+        log10_residual_sd=_RF_CENTER_SIZE_LOG10_RESIDUAL_SD,
+        truncation_sd=_RF_CENTER_SIZE_TRUNCATION_SD,
+    ):
+        """Return the smallest and largest centre sigma this domain can produce.
+
+        The bounds combine the extremes of the eccentricity domain with the
+        truncated scatter, so they depend only on configuration.  No cell has
+        been drawn yet and none needs to be: the finest centre sigma is the
+        line value at the smallest supported eccentricity scaled by the lower
+        scatter factor, and the coarsest is the line value at ``E_max`` scaled
+        by the upper factor.
+
+        Deriving the visual-space resolution from the lower bound rather than
+        from the realized minimum is what makes that resolution reproducible
+        across seeds and independent of ``number_per_polarity``.
+        """
+
+        lower_factor, upper_factor = rf_center_sigma_scatter_factors(
+            log10_residual_sd, truncation_sd
+        )
+        smallest_eccentricity_deg = (
+            0.0
+            if self.user_cap_eccentricity_deg is None
+            else self.user_cap_eccentricity_deg
+        )
+        minimum_line_sigma = rf_center_sigma(
+            smallest_eccentricity_deg, self.user_cap_eccentricity_deg
+        )
+        maximum_line_sigma = rf_center_sigma(
+            self.max_eccentricity_deg, self.user_cap_eccentricity_deg
+        )
+        return (
+            float(minimum_line_sigma) * lower_factor,
+            float(maximum_line_sigma) * upper_factor,
+        )
 
     def validate_visual_position(self, x_deg, y_deg):
         """Raise ``ValueError`` unless all positions lie within the LGN disk."""

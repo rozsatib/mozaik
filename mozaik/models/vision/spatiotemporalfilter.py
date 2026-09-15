@@ -129,6 +129,23 @@ def _temporal_scale_rngs(pynn_seed):
     )
 
 
+def _center_sigma_rngs(pynn_seed):
+    """Return deterministic private ON/OFF streams derived from ``pynn_seed``."""
+
+    # The stream tag differs from the temporal-scale one so that RF centre-size
+    # sampling is independent both of PyNN's shared RNG state and of the
+    # temporal-scale draws, while pynn_seed remains the sole source of
+    # randomness.
+
+    # TODO: once the seed-separation refactor is merged into this branch,
+    # set this using model_seed!!! and remove this comment.
+    seed_sequence = numpy.random.SeedSequence([int(pynn_seed), 0x4C474E53])
+    return tuple(
+        numpy.random.RandomState(int(child.generate_state(1, dtype=numpy.uint32)[0]))
+        for child in seed_sequence.spawn(2)
+    )
+
+
 def meshgrid3D(x, y, z):
     r"""A slimmed-down version of http://www.scipy.org/scipy/numpy/attachment/ticket/966/meshgrid.py"""
     x = numpy.asarray(x)
@@ -1473,6 +1490,8 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                     "upper_quantile": float,
                 }
             ),
+            "center_size_log10_residual_sd": float,
+            "center_size_truncation_sd": float,
             "linear_scaler": float,
             "mpi_reproducible_noise": bool,
             "recorders": ParameterSet,
@@ -1611,6 +1630,7 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
         self._validate_noise_parameters()
         self._validate_gain_control_parameters()
         self._validate_temporal_scale_distribution()
+        self._validate_center_size_distribution()
 
         positive_finite_parameters = (
             (
@@ -1660,6 +1680,53 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                 "temporal_scale_distribution quantiles must satisfy "
                 "0 < lower_quantile < upper_quantile < 1"
             )
+
+    def _validate_center_size_distribution(self):
+        value = self.parameters.center_size_log10_residual_sd
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, numbers.Real)
+            or not numpy.isfinite(value)
+            or value < 0.0
+        ):
+            raise ValueError(
+                "center_size_log10_residual_sd must be nonnegative and finite"
+            )
+        truncation = self.parameters.center_size_truncation_sd
+        if (
+            isinstance(truncation, bool)
+            or not isinstance(truncation, numbers.Real)
+            or not numpy.isfinite(truncation)
+            or truncation <= 0.0
+        ):
+            raise ValueError("center_size_truncation_sd must be positive and finite")
+
+    def _sample_center_sigmas(self, eccentricities_by_type):
+        try:
+            pynn_seed = self.model.parameters.pynn_seed
+        except AttributeError as exc:
+            raise ValueError(
+                "model.parameters.pynn_seed is required for centre-size sampling"
+            ) from exc
+
+        residual_sd = self.parameters.center_size_log10_residual_sd
+        truncation_sd = self.parameters.center_size_truncation_sd
+        rngs = _center_sigma_rngs(pynn_seed)
+        return OrderedDict(
+            (
+                rf_type,
+                numpy.asarray(
+                    self.topography.sample_center_sigma_deg(
+                        eccentricities_by_type[rf_type],
+                        rng,
+                        residual_sd,
+                        truncation_sd,
+                    ),
+                    dtype=float,
+                ),
+            )
+            for rf_type, rng in zip(self.rf_types, rngs)
+        )
 
     def _sample_temporal_scales(self):
         try:
@@ -1817,16 +1884,24 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
         reference_center_sigma = float(function_parameters.sigma_c)
         reference_surround_sigma = float(function_parameters.sigma_s)
         temporal_scales_by_type = self._sample_temporal_scales()
+        eccentricities_by_type = OrderedDict(
+            (
+                rf_type,
+                numpy.hypot(
+                    self.sheets[rf_type].canonical_positions_deg[0],
+                    self.sheets[rf_type].canonical_positions_deg[1],
+                ),
+            )
+            for rf_type in self.rf_types
+        )
+        center_sigmas_by_type = self._sample_center_sigmas(eccentricities_by_type)
 
         rf_parameters = OrderedDict()
         all_center_sigmas = []
         all_eccentricities = []
         for rf_type in self.rf_types:
-            positions = self.sheets[rf_type].canonical_positions_deg
-            eccentricities = numpy.hypot(positions[0], positions[1])
-            center_sigmas = numpy.asarray(
-                self.topography.center_sigma_deg(eccentricities), dtype=float
-            )
+            eccentricities = eccentricities_by_type[rf_type]
+            center_sigmas = center_sigmas_by_type[rf_type]
             scales = center_sigmas / reference_center_sigma
             temporal_scales = temporal_scales_by_type[rf_type]
             durations_ms = receptive_field.duration * temporal_scales
@@ -1851,8 +1926,16 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
             all_eccentricities.append(eccentricities)
         self._rf_parameters = rf_parameters
 
-        minimum_center_sigma = min(
-            float(numpy.min(values)) for values in all_center_sigmas
+        # The resolution comes from the smallest centre sigma this
+        # configuration can produce, not from the smallest one this draw
+        # happened to produce. The scatter is truncated, so that bound exists
+        # and depends only on the domain, the residual spread, and the
+        # truncation width. Deriving it here keeps the stimulus grid identical
+        # across seeds and across number_per_polarity, at the cost of a grid
+        # slightly finer than the realized population strictly requires.
+        minimum_center_sigma, _ = self.topography.center_sigma_bounds_deg(
+            self.parameters.center_size_log10_residual_sd,
+            self.parameters.center_size_truncation_sd,
         )
         raw_resolution = (
             minimum_center_sigma / self.parameters.minimum_samples_per_center_sigma
