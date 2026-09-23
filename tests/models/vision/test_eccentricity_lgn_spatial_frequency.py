@@ -41,7 +41,10 @@ def _eccentricity_parameters():
         LEGACY_MODEL_PARAMETERS["sheets"]["retina_lgn"]["params"]
     )
     parameters["number_per_polarity"] = len(REPRESENTATIVE_ECCENTRICITIES_DEG)
+    parameters["minimum_eccentricity_deg"] = 0.0
+    parameters["maximum_eccentricity_deg"] = None
     parameters["minimum_samples_per_center_sigma"] = 8.0
+    parameters["visual_space_pixel_size_deg"] = None
     parameters["topography"] = {
         "cap_eccentricity": None,
         "full_max_eccentricity": 90.0,
@@ -285,7 +288,9 @@ def test_lgn_spike_spatial_frequency_characterization(tmp_path, monkeypatch):
     monkeypatch.setattr(
         spatiotemporalfilter,
         "_sample_lgn_positions",
-        lambda topography, number, rng: fixed_positions.copy(),
+        lambda topography, number, rng, minimum_eccentricity_deg: (
+            fixed_positions.copy()
+        ),
     )
 
     model_parameters = copy.deepcopy(LEGACY_MODEL_PARAMETERS)

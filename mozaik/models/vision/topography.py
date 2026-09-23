@@ -333,7 +333,8 @@ class RadiallySymmetricLGNTopography:
     """Immutable provider for eccentricity-dependent LGN properties.
 
     The visual domain is a fixation-centred rectangle, while modelled LGN RF
-    centres occupy the inscribed disk with radius ``max_eccentricity_deg``.
+    centres occupy a disk with radius ``max_eccentricity_deg`` no larger than
+    the rectangle's inscribed disk.
     An explicit cap plateaus both density and centre sigma.  ``None`` leaves
     these retinal functions uncapped; an independently resolved empirical cap
     is retained for cortical mapping.
@@ -349,7 +350,7 @@ class RadiallySymmetricLGNTopography:
         "_frozen",
     )
 
-    def __init__(self, visual_field, parameters):
+    def __init__(self, visual_field, parameters, maximum_eccentricity_deg=None):
         location_x = _visual_field_value(visual_field, "location_x")
         location_y = _visual_field_value(visual_field, "location_y")
         size_x = _visual_field_value(visual_field, "size_x")
@@ -371,11 +372,24 @@ class RadiallySymmetricLGNTopography:
                 "fixation-centred visual rectangle"
             )
 
-        max_eccentricity_deg = min(size_x, size_y) / 2.0
+        visual_field_radius_deg = min(size_x, size_y) / 2.0
+        if maximum_eccentricity_deg is None:
+            max_eccentricity_deg = visual_field_radius_deg
+        else:
+            max_eccentricity_deg = _finite_real(
+                maximum_eccentricity_deg, "maximum_eccentricity_deg"
+            )
+            if max_eccentricity_deg <= 0.0:
+                raise ValueError("maximum_eccentricity_deg must be positive and finite")
+            if max_eccentricity_deg > visual_field_radius_deg:
+                raise ValueError(
+                    "maximum_eccentricity_deg must not exceed the visual-field "
+                    f"radius ({visual_field_radius_deg:.12g} degrees)"
+                )
         if max_eccentricity_deg >= _MAX_SUPPORTED_ECCENTRICITY_DEG:
             raise ValueError(
-                "visual_field produces E_max >= 90 degrees; eccentricity mode "
-                "requires an inscribed LGN domain with E_max < 90 degrees"
+                "E_max >= 90 degrees; eccentricity mode requires "
+                "maximum_eccentricity_deg below 90 degrees"
             )
 
         cap, full_max_eccentricity, beta = _topography_parameters(parameters)
@@ -486,6 +500,7 @@ class RadiallySymmetricLGNTopography:
         self,
         log10_residual_sd=_RF_CENTER_SIZE_LOG10_RESIDUAL_SD,
         truncation_sd=_RF_CENTER_SIZE_TRUNCATION_SD,
+        minimum_eccentricity_deg=0.0,
     ):
         """Return the smallest and largest centre sigma this domain can produce.
 
@@ -501,16 +516,22 @@ class RadiallySymmetricLGNTopography:
         across seeds and independent of ``number_per_polarity``.
         """
 
+        if (
+            isinstance(minimum_eccentricity_deg, bool)
+            or not isinstance(minimum_eccentricity_deg, numbers.Real)
+            or not numpy.isfinite(minimum_eccentricity_deg)
+            or minimum_eccentricity_deg < 0.0
+        ):
+            raise ValueError("minimum_eccentricity_deg must be nonnegative and finite")
+        minimum_eccentricity_deg = float(minimum_eccentricity_deg)
+        if minimum_eccentricity_deg > self.max_eccentricity_deg:
+            raise ValueError("minimum_eccentricity_deg must not exceed E_max")
+
         lower_factor, upper_factor = rf_center_sigma_scatter_factors(
             log10_residual_sd, truncation_sd
         )
-        smallest_eccentricity_deg = (
-            0.0
-            if self.user_cap_eccentricity_deg is None
-            else self.user_cap_eccentricity_deg
-        )
         minimum_line_sigma = rf_center_sigma(
-            smallest_eccentricity_deg, self.user_cap_eccentricity_deg
+            minimum_eccentricity_deg, self.user_cap_eccentricity_deg
         )
         maximum_line_sigma = rf_center_sigma(
             self.max_eccentricity_deg, self.user_cap_eccentricity_deg

@@ -61,15 +61,38 @@ def _round_down_to_two_significant_digits(value):
     return float(decimal_value.quantize(quantum, rounding=ROUND_FLOOR))
 
 
-def _sample_lgn_positions(topography, number, rng):
-    """Sample fixed-count Cartesian RF centres from the radial area density."""
+def _sample_lgn_positions(
+    topography,
+    number,
+    rng,
+    minimum_eccentricity_deg=0.0,
+):
+    """Sample fixed-count Cartesian RF centres from an annular area density."""
 
     maximum_eccentricity = topography.max_eccentricity_deg
-    maximum_density = topography.relative_density_at_eccentricity(
-        topography.user_cap_eccentricity_deg
-        if topography.user_cap_eccentricity_deg is not None
-        else 0.0
-    )
+    if (
+        isinstance(minimum_eccentricity_deg, bool)
+        or not isinstance(minimum_eccentricity_deg, numbers.Real)
+        or not numpy.isfinite(minimum_eccentricity_deg)
+        or minimum_eccentricity_deg < 0.0
+        or minimum_eccentricity_deg >= maximum_eccentricity
+    ):
+        raise ValueError(
+            "minimum_eccentricity_deg must be finite and satisfy "
+            "0 <= minimum_eccentricity_deg < E_max"
+        )
+    if minimum_eccentricity_deg == 0.0:
+        # Retain the original expression and density reference so seeded disk
+        # runs produce exactly the same proposals as before annular support.
+        maximum_density = topography.relative_density_at_eccentricity(
+            topography.user_cap_eccentricity_deg
+            if topography.user_cap_eccentricity_deg is not None
+            else 0.0
+        )
+    else:
+        maximum_density = topography.relative_density_at_eccentricity(
+            minimum_eccentricity_deg
+        )
     accepted_x = []
     accepted_y = []
     accepted_count = 0
@@ -81,7 +104,14 @@ def _sample_lgn_positions(topography, number, rng):
         uniform_angle = rng.uniform(size=proposal_count)
         uniform_acceptance = rng.uniform(size=proposal_count)
 
-        radius = maximum_eccentricity * numpy.sqrt(uniform_radius)
+        if minimum_eccentricity_deg == 0.0:
+            radius = maximum_eccentricity * numpy.sqrt(uniform_radius)
+        else:
+            radius = numpy.sqrt(
+                minimum_eccentricity_deg**2
+                + (maximum_eccentricity**2 - minimum_eccentricity_deg**2)
+                * uniform_radius
+            )
         angle = 2.0 * numpy.pi * uniform_angle - numpy.pi
         density = topography.relative_density_at_eccentricity(radius)
         accepted = uniform_acceptance < density / maximum_density
@@ -100,8 +130,13 @@ def _sample_lgn_positions(topography, number, rng):
         raise AssertionError(
             "LGN position sampling did not produce the requested count"
         )
-    if numpy.any(numpy.hypot(positions[0], positions[1]) >= maximum_eccentricity):
-        raise AssertionError("LGN position sampling produced a point outside the disk")
+    radii = numpy.hypot(positions[0], positions[1])
+    if numpy.any(radii < minimum_eccentricity_deg) or numpy.any(
+        radii >= maximum_eccentricity
+    ):
+        raise AssertionError(
+            "LGN position sampling produced a point outside the annulus"
+        )
     return positions
 
 
@@ -1053,8 +1088,7 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
 
         self.rf = {"X_ON": rf_ON, "X_OFF": rf_OFF}
         self.kernel_response_operators = {
-            rf_type: KernelResponseOperator(rf)
-            for rf_type, rf in self.rf.items()
+            rf_type: KernelResponseOperator(rf) for rf_type, rf in self.rf.items()
         }
 
         # create population of CellWithReceptiveFields, setting the receptive
@@ -1474,7 +1508,10 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
     required_parameters = ParameterSet(
         {
             "number_per_polarity": int,
+            "minimum_eccentricity_deg": float,
+            "maximum_eccentricity_deg": (float, type(None)),
             "minimum_samples_per_center_sigma": float,
+            "visual_space_pixel_size_deg": (float, type(None)),
             "topography": ParameterSet(
                 {
                     "cap_eccentricity": (float, type(None)),
@@ -1560,8 +1597,11 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
             )
 
         self.topography = RadiallySymmetricLGNTopography(
-            model.visual_field, self.parameters.topography
+            model.visual_field,
+            self.parameters.topography,
+            self.parameters.maximum_eccentricity_deg,
         )
+        self._validate_eccentricity_domain()
         self.rf_types = ("X_ON", "X_OFF")
         self.sheets = OrderedDict()
         self.pops = OrderedDict()
@@ -1582,6 +1622,7 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                 self.topography,
                 self.parameters.number_per_polarity,
                 numpy.random.RandomState(seed=position_seeds[index]),
+                self.parameters.minimum_eccentricity_deg,
             )
 
         for rf_type in self.rf_types:
@@ -1632,6 +1673,35 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
         self._validate_temporal_scale_distribution()
         self._validate_center_size_distribution()
 
+        minimum_eccentricity = self.parameters.minimum_eccentricity_deg
+        if (
+            isinstance(minimum_eccentricity, bool)
+            or not isinstance(minimum_eccentricity, numbers.Real)
+            or not numpy.isfinite(minimum_eccentricity)
+            or minimum_eccentricity < 0.0
+        ):
+            raise ValueError("minimum_eccentricity_deg must be nonnegative and finite")
+        maximum_eccentricity = self.parameters.maximum_eccentricity_deg
+        if maximum_eccentricity is not None and (
+            isinstance(maximum_eccentricity, bool)
+            or not isinstance(maximum_eccentricity, numbers.Real)
+            or not numpy.isfinite(maximum_eccentricity)
+            or maximum_eccentricity <= 0.0
+        ):
+            raise ValueError(
+                "maximum_eccentricity_deg must be None or positive and finite"
+            )
+        pixel_size = self.parameters.visual_space_pixel_size_deg
+        if pixel_size is not None and (
+            isinstance(pixel_size, bool)
+            or not isinstance(pixel_size, numbers.Real)
+            or not numpy.isfinite(pixel_size)
+            or pixel_size <= 0.0
+        ):
+            raise ValueError(
+                "visual_space_pixel_size_deg must be None or positive and finite"
+            )
+
         positive_finite_parameters = (
             (
                 "minimum_samples_per_center_sigma",
@@ -1654,6 +1724,16 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
             ):
                 raise ValueError(f"{name} must be positive and finite")
 
+    def _validate_eccentricity_domain(self):
+        if (
+            self.parameters.minimum_eccentricity_deg
+            >= self.topography.max_eccentricity_deg
+        ):
+            raise ValueError(
+                "minimum_eccentricity_deg must be smaller than E_max "
+                f"({self.topography.max_eccentricity_deg:g} deg)"
+            )
+
     def _validate_temporal_scale_distribution(self):
         distribution = self.parameters.temporal_scale_distribution
         for name in ("mu", "sigma", "lower_quantile", "upper_quantile"):
@@ -1663,19 +1743,12 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                 or not isinstance(value, numbers.Real)
                 or not numpy.isfinite(value)
             ):
-                raise ValueError(
-                    f"temporal_scale_distribution.{name} must be finite"
-                )
+                raise ValueError(f"temporal_scale_distribution.{name} must be finite")
         if distribution.sigma <= 0.0:
             raise ValueError(
                 "temporal_scale_distribution.sigma must be positive and finite"
             )
-        if not (
-            0.0
-            < distribution.lower_quantile
-            < distribution.upper_quantile
-            < 1.0
-        ):
+        if not (0.0 < distribution.lower_quantile < distribution.upper_quantile < 1.0):
             raise ValueError(
                 "temporal_scale_distribution quantiles must satisfy "
                 "0 < lower_quantile < upper_quantile < 1"
@@ -1708,7 +1781,6 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
             raise ValueError(
                 "model.parameters.pynn_seed is required for centre-size sampling"
             ) from exc
-
         residual_sd = self.parameters.center_size_log10_residual_sd
         truncation_sd = self.parameters.center_size_truncation_sd
         rngs = _center_sigma_rngs(pynn_seed)
@@ -1735,7 +1807,6 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
             raise ValueError(
                 "model.parameters.pynn_seed is required for temporal-scale sampling"
             ) from exc
-
         distribution = self.parameters.temporal_scale_distribution
         rngs = _temporal_scale_rngs(pynn_seed)
         return OrderedDict(
@@ -1763,9 +1834,7 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                     or not isinstance(value, numbers.Real)
                     or not numpy.isfinite(value)
                 ):
-                    raise ValueError(
-                        f"noise.{rf_type}.{parameter_name} must be finite"
-                    )
+                    raise ValueError(f"noise.{rf_type}.{parameter_name} must be finite")
             if pair.stdev < 0.0:
                 raise ValueError(f"noise.{rf_type}.stdev must be nonnegative")
 
@@ -1777,9 +1846,7 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                 or not isinstance(value, numbers.Real)
                 or not numpy.isfinite(value)
             ):
-                raise ValueError(
-                    f"gain_control.non_linear_gain.{name} must be finite"
-                )
+                raise ValueError(f"gain_control.non_linear_gain.{name} must be finite")
             if "scaler" in name and value <= 0.0:
                 raise ValueError(
                     f"gain_control.non_linear_gain.{name} must be positive"
@@ -1936,13 +2003,26 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
         minimum_center_sigma, _ = self.topography.center_sigma_bounds_deg(
             self.parameters.center_size_log10_residual_sd,
             self.parameters.center_size_truncation_sd,
+            self.parameters.minimum_eccentricity_deg,
         )
-        raw_resolution = (
+        maximum_pixel_size = (
             minimum_center_sigma / self.parameters.minimum_samples_per_center_sigma
         )
-        self.visual_space_resolution_deg = _round_down_to_two_significant_digits(
-            raw_resolution
-        )
+        self.maximum_visual_space_pixel_size_deg = maximum_pixel_size
+        configured_pixel_size = self.parameters.visual_space_pixel_size_deg
+        if configured_pixel_size is None:
+            self.visual_space_resolution_deg = _round_down_to_two_significant_digits(
+                maximum_pixel_size
+            )
+        else:
+            if configured_pixel_size > maximum_pixel_size:
+                raise ValueError(
+                    "visual_space_pixel_size_deg is too coarse for "
+                    "minimum_samples_per_center_sigma: configured "
+                    f"{configured_pixel_size:g} deg/pixel, maximum "
+                    f"{maximum_pixel_size:g} deg/pixel"
+                )
+            self.visual_space_resolution_deg = float(configured_pixel_size)
         for center_sigmas in all_center_sigmas:
             samples_per_sigma = center_sigmas / self.visual_space_resolution_deg
             if numpy.any(
@@ -2003,12 +2083,13 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
             for rf_type in self.rf_types
         }
         logger.info(
-            "Eccentricity LGN RF plan: E_max=%g deg; user cap=%s; "
+            "Eccentricity LGN RF plan: domain=[%g, %g) deg; user cap=%s; "
             "resolved mapping cap=%g deg; eccentricity range=[%g, %g] "
             "deg; centre sigma range=[%g, %g] deg; surround sigma "
             "range=[%g, %g] deg; resolution=%g deg/pixel; kernel shape "
             "range=%s..%s; estimated local RF/operator array memory=%.3f MiB "
             "(dense reference %.3f MiB); global counts=%s; local counts=%s",
+            self.parameters.minimum_eccentricity_deg,
             self.topography.max_eccentricity_deg,
             self.topography.user_cap_eccentricity_deg,
             self.topography._resolved_mapping_cap_eccentricity_deg,

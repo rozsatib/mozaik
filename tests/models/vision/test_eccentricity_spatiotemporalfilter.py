@@ -13,7 +13,7 @@ import numpy as np
 from parameters import ParameterSet
 import pytest
 from scipy.integrate import quad
-from scipy.stats import chisquare, kstest, lognorm
+from scipy.stats import chisquare, ks_2samp, kstest, lognorm
 
 from devtools.lgn_eccentricity_validation.temporal_scale_validation import (
     distribution_validation,
@@ -40,7 +40,6 @@ from devtools.dummy_model import DummyModel
 from mozaik.experiments.vision import VisualExperiment
 from tests.models.vision.test_legacy_lgn_regression import LEGACY_MODEL_PARAMETERS
 
-
 RF_TYPES = ("X_ON", "X_OFF")
 PROBE_ARGUMENT = "--eccentricity-stage-4-probe"
 SIGNATURE_PREFIX = "ECCENTRICITY_STAGE_4_SIGNATURE="
@@ -66,9 +65,14 @@ def topography_parameters(cap_eccentricity=None):
 
 
 def eccentricity_parameters(**overrides):
-    parameters = copy.deepcopy(LEGACY_MODEL_PARAMETERS["sheets"]["retina_lgn"]["params"])
+    parameters = copy.deepcopy(
+        LEGACY_MODEL_PARAMETERS["sheets"]["retina_lgn"]["params"]
+    )
     parameters["number_per_polarity"] = 32
+    parameters["minimum_eccentricity_deg"] = 0.0
+    parameters["maximum_eccentricity_deg"] = None
     parameters["minimum_samples_per_center_sigma"] = 4.0
+    parameters["visual_space_pixel_size_deg"] = None
     parameters["topography"] = {
         "cap_eccentricity": None,
         "full_max_eccentricity": 90.0,
@@ -88,9 +92,7 @@ def eccentricity_parameters(**overrides):
     del parameters["size"]
     del parameters["receptive_field"]["spatial_resolution"]
     shared_noise = parameters.pop("noise")
-    parameters["noise"] = {
-        rf_type: copy.deepcopy(shared_noise) for rf_type in RF_TYPES
-    }
+    parameters["noise"] = {rf_type: copy.deepcopy(shared_noise) for rf_type in RF_TYPES}
     nonlinear = parameters["gain_control"]["non_linear_gain"]
     shared_gain = nonlinear.pop("luminance_gain")
     shared_scaler = nonlinear.pop("luminance_scaler")
@@ -106,17 +108,17 @@ def eccentricity_parameters(**overrides):
     return ParameterSet(parameters)
 
 
-def provider(cap_eccentricity=None):
+def provider(cap_eccentricity=None, maximum_eccentricity_deg=None):
     return RadiallySymmetricLGNTopography(
-        visual_field(), topography_parameters(cap_eccentricity)
+        visual_field(),
+        topography_parameters(cap_eccentricity),
+        maximum_eccentricity_deg,
     )
 
 
 class TestExplicitPositions:
     def test_generate_positions_requires_exact_count_and_returns_a_copy(self):
-        positions = np.array(
-            [[1.0, 2.0], [3.0, 4.0], [0.0, 0.0]], dtype=float
-        )
+        positions = np.array([[1.0, 2.0], [3.0, 4.0], [0.0, 0.0]], dtype=float)
         structure = ExplicitPositions(positions)
         positions[0, 0] = 99.0
 
@@ -146,9 +148,7 @@ class TestExplicitPositions:
 class TestLGNPositionSampling:
     def test_count_domain_seed_reproducibility_and_independence(self):
         topography = provider()
-        first = _sample_lgn_positions(
-            topography, 500, np.random.RandomState(seed=1234)
-        )
+        first = _sample_lgn_positions(topography, 500, np.random.RandomState(seed=1234))
         repeated = _sample_lgn_positions(
             topography, 500, np.random.RandomState(seed=1234)
         )
@@ -160,6 +160,78 @@ class TestLGNPositionSampling:
         assert np.array_equal(first, repeated)
         assert not np.array_equal(first, different)
         assert np.all(np.hypot(first[0], first[1]) < topography.max_eccentricity_deg)
+
+    def test_none_maximum_preserves_seeded_positions_exactly(self):
+        default_topography = RadiallySymmetricLGNTopography(
+            visual_field(), topography_parameters()
+        )
+        explicit_none_topography = RadiallySymmetricLGNTopography(
+            visual_field(), topography_parameters(), None
+        )
+
+        default = _sample_lgn_positions(
+            default_topography, 500, np.random.RandomState(seed=1234)
+        )
+        explicit_none = _sample_lgn_positions(
+            explicit_none_topography, 500, np.random.RandomState(seed=1234)
+        )
+
+        assert np.array_equal(default, explicit_none)
+
+    def test_explicit_maximum_restricts_position_domain(self):
+        topography = provider(maximum_eccentricity_deg=3.0)
+        positions = _sample_lgn_positions(
+            topography, 5_000, np.random.RandomState(seed=1234), 1.0
+        )
+        radii = np.hypot(positions[0], positions[1])
+
+        assert topography.max_eccentricity_deg == 3.0
+        assert np.all(radii >= 1.0)
+        assert np.all(radii < 3.0)
+
+    @pytest.mark.parametrize("cap_eccentricity", [None, 2.0])
+    def test_annular_radial_distribution(self, cap_eccentricity):
+        topography = provider(cap_eccentricity)
+        minimum_eccentricity = 2.5
+        sample_count = 50_000
+        positions = _sample_lgn_positions(
+            topography,
+            sample_count,
+            np.random.RandomState(seed=932_105),
+            minimum_eccentricity,
+        )
+        radii = np.hypot(positions[0], positions[1])
+        maximum_eccentricity = topography.max_eccentricity_deg
+
+        def radial_mass(radius):
+            return radius * topography.relative_density_at_eccentricity(radius)
+
+        cdf_grid = np.linspace(minimum_eccentricity, maximum_eccentricity, 4097)
+        cdf_values = np.zeros_like(cdf_grid)
+        for index in range(1, len(cdf_grid)):
+            cdf_values[index] = (
+                cdf_values[index - 1]
+                + quad(
+                    radial_mass,
+                    cdf_grid[index - 1],
+                    cdf_grid[index],
+                    epsabs=1e-12,
+                    epsrel=1e-12,
+                )[0]
+            )
+        cdf_values /= cdf_values[-1]
+
+        assert np.all(radii >= minimum_eccentricity)
+        assert np.all(radii < maximum_eccentricity)
+        assert (
+            kstest(radii, lambda values: np.interp(values, cdf_grid, cdf_values)).pvalue
+            >= 1e-3
+        )
+
+    @pytest.mark.parametrize("minimum", [-1.0, 8.0, 9.0, np.nan, np.inf, True])
+    def test_invalid_annular_inner_bound_is_rejected(self, minimum):
+        with pytest.raises(ValueError, match="minimum_eccentricity_deg"):
+            _sample_lgn_positions(provider(), 1, np.random.RandomState(seed=1), minimum)
 
     @pytest.mark.parametrize("cap_eccentricity", [None, 2.0])
     def test_radial_and_two_dimensional_distribution(self, cap_eccentricity):
@@ -185,13 +257,16 @@ class TestLGNPositionSampling:
         cdf_grid = np.linspace(0.0, maximum_eccentricity, 4097)
         cdf_values = np.zeros_like(cdf_grid)
         for index in range(1, len(cdf_grid)):
-            cdf_values[index] = cdf_values[index - 1] + quad(
-                radial_mass,
-                cdf_grid[index - 1],
-                cdf_grid[index],
-                epsabs=1e-12,
-                epsrel=1e-12,
-            )[0]
+            cdf_values[index] = (
+                cdf_values[index - 1]
+                + quad(
+                    radial_mass,
+                    cdf_grid[index - 1],
+                    cdf_grid[index],
+                    epsabs=1e-12,
+                    epsrel=1e-12,
+                )[0]
+            )
         cdf_values /= normalization
 
         radial_result = kstest(
@@ -209,9 +284,7 @@ class TestLGNPositionSampling:
 
         radial_edges = np.linspace(0.0, maximum_eccentricity, 9)
         angular_edges = np.linspace(0.0, 2.0 * np.pi, 13)
-        observed = np.histogram2d(
-            radii, angles, bins=(radial_edges, angular_edges)
-        )[0]
+        observed = np.histogram2d(radii, angles, bins=(radial_edges, angular_edges))[0]
         radial_probabilities = np.array(
             [
                 quad(
@@ -225,19 +298,175 @@ class TestLGNPositionSampling:
                 for index in range(8)
             ]
         )
-        expected = (
-            sample_count * radial_probabilities[:, np.newaxis] / 12.0
-        )
+        expected = sample_count * radial_probabilities[:, np.newaxis] / 12.0
         expected = np.broadcast_to(expected, observed.shape)
         assert np.all(expected >= 5.0)
         assert chisquare(observed.ravel(), expected.ravel()).pvalue >= 1e-3
 
 
+class TestAnnularPopulationEquivalence:
+    """A density-weighted union of annular models reproduces a full model."""
+
+    FULL_POPULATION = 3_000
+    ANNULUS_EDGES_DEG = np.linspace(0.0, 25.0, 6)
+    DENSITY_CDF_ERROR = 0.03
+    # Separate runs restart the same private temporal stream, so concatenating
+    # five finite prefixes has slightly more sampling error than one 3,000-cell
+    # draw. The fixed realization is 3.27%; 4% retains margin without accepting
+    # the originally suggested, more permissive 5% bound.
+    POOLED_TEMPORAL_CDF_ERROR = 0.04
+    SPATIAL_BIN_PROBABILITY_ERROR = 0.03
+    SPATIAL_CONDITIONAL_MEAN_ERROR = 0.03
+    CENTER_SIZE_LOG10_RESIDUAL_SD = 0.093765
+    CENTER_SIZE_TRUNCATION_SD = 3.0
+
+    @staticmethod
+    def _topography(maximum_eccentricity_deg):
+        return RadiallySymmetricLGNTopography(
+            visual_field(size_x=70.288, size_y=70.288),
+            topography_parameters(),
+            maximum_eccentricity_deg,
+        )
+
+    @classmethod
+    def _annular_counts(cls, topography):
+        def radial_mass(radius):
+            return radius * topography.relative_density_at_eccentricity(radius)
+
+        masses = np.array(
+            [
+                quad(
+                    radial_mass,
+                    lower,
+                    upper,
+                    epsabs=1e-12,
+                    epsrel=1e-12,
+                )[0]
+                for lower, upper in zip(
+                    cls.ANNULUS_EDGES_DEG[:-1], cls.ANNULUS_EDGES_DEG[1:]
+                )
+            ]
+        )
+        ideal_counts = cls.FULL_POPULATION * masses / np.sum(masses)
+        counts = np.floor(ideal_counts).astype(int)
+        remainder_order = np.argsort(-(ideal_counts - counts))
+        counts[remainder_order[: cls.FULL_POPULATION - np.sum(counts)]] += 1
+        return counts
+
+    @classmethod
+    def _sample_model(cls, topography, number, minimum_eccentricity_deg):
+        # Identical seeds model separate runs restarted from the same configured
+        # seed. The streams are private by quantity, as in the component.
+        positions = _sample_lgn_positions(
+            topography,
+            number,
+            np.random.RandomState(seed=932_104),
+            minimum_eccentricity_deg,
+        )
+        eccentricities = np.hypot(positions[0], positions[1])
+        center_sigmas = topography.sample_center_sigma_deg(
+            eccentricities,
+            _center_sigma_rngs(936395)[0],
+            cls.CENTER_SIZE_LOG10_RESIDUAL_SD,
+            cls.CENTER_SIZE_TRUNCATION_SD,
+        )
+        reference_center_sigma = 0.381488
+        reference_optimum = cai97.dog_optimal_spatial_frequency(
+            1.0, 0.024588, reference_center_sigma, 2.253145
+        )
+        preferred_spatial_frequencies = (
+            reference_optimum * reference_center_sigma / center_sigmas
+        )
+
+        distribution = eccentricity_parameters().temporal_scale_distribution
+        temporal_scales = _sample_truncated_lognormal_scales(
+            number,
+            distribution.mu,
+            distribution.sigma,
+            distribution.lower_quantile,
+            distribution.upper_quantile,
+            _temporal_scale_rngs(936395)[0],
+        )
+        preferred_temporal_frequencies = 1.0 / temporal_scales
+        return {
+            "eccentricity": eccentricities,
+            "spatial_frequency": preferred_spatial_frequencies,
+            "temporal_frequency": preferred_temporal_frequencies,
+        }
+
+    def test_five_annular_models_reproduce_full_population_distributions(self):
+        full_topography = self._topography(25.0)
+        full = self._sample_model(full_topography, self.FULL_POPULATION, 0.0)
+
+        annular_counts = self._annular_counts(full_topography)
+        annular_models = [
+            self._topography(float(maximum)) for maximum in self.ANNULUS_EDGES_DEG[1:]
+        ]
+        annular_populations = [
+            self._sample_model(model, int(count), float(minimum))
+            for model, count, minimum in zip(
+                annular_models, annular_counts, self.ANNULUS_EDGES_DEG[:-1]
+            )
+        ]
+        sliced = {
+            quantity: np.concatenate(
+                [population[quantity] for population in annular_populations]
+            )
+            for quantity in full
+        }
+
+        assert len(annular_models) == 5
+        assert np.sum(annular_counts) == self.FULL_POPULATION
+        assert len(sliced["eccentricity"]) == self.FULL_POPULATION
+
+        density_error = ks_2samp(full["eccentricity"], sliced["eccentricity"]).statistic
+        temporal_error = ks_2samp(
+            full["temporal_frequency"], sliced["temporal_frequency"]
+        ).statistic
+
+        # Compare the joint SF/eccentricity distribution. Quantile SF bins
+        # retain useful occupancy throughout the five fixed eccentricity bins.
+        spatial_edges = np.quantile(
+            np.concatenate([full["spatial_frequency"], sliced["spatial_frequency"]]),
+            np.linspace(0.0, 1.0, 9),
+        )
+        spatial_edges[0] = np.nextafter(spatial_edges[0], -np.inf)
+        spatial_edges[-1] = np.nextafter(spatial_edges[-1], np.inf)
+        full_spatial = np.histogram2d(
+            full["eccentricity"],
+            full["spatial_frequency"],
+            bins=(self.ANNULUS_EDGES_DEG, spatial_edges),
+        )[0]
+        sliced_spatial = np.histogram2d(
+            sliced["eccentricity"],
+            sliced["spatial_frequency"],
+            bins=(self.ANNULUS_EDGES_DEG, spatial_edges),
+        )[0]
+        spatial_bin_error = np.max(
+            np.abs(full_spatial - sliced_spatial) / self.FULL_POPULATION
+        )
+
+        conditional_mean_errors = []
+        for lower, upper in zip(
+            self.ANNULUS_EDGES_DEG[:-1], self.ANNULUS_EDGES_DEG[1:]
+        ):
+            full_mask = (full["eccentricity"] >= lower) & (full["eccentricity"] < upper)
+            sliced_mask = (sliced["eccentricity"] >= lower) & (
+                sliced["eccentricity"] < upper
+            )
+            full_mean = np.mean(full["spatial_frequency"][full_mask])
+            sliced_mean = np.mean(sliced["spatial_frequency"][sliced_mask])
+            conditional_mean_errors.append(abs(full_mean - sliced_mean) / full_mean)
+
+        assert density_error <= self.DENSITY_CDF_ERROR
+        assert temporal_error <= self.POOLED_TEMPORAL_CDF_ERROR
+        assert spatial_bin_error <= self.SPATIAL_BIN_PROBABILITY_ERROR
+        assert max(conditional_mean_errors) <= self.SPATIAL_CONDITIONAL_MEAN_ERROR
+
+
 class TestEccentricityComponentConfiguration:
     def test_schema_replaces_all_legacy_only_keys(self):
-        component = object.__new__(
-            EccentricityDependentSpatioTemporalFilterRetinaLGN
-        )
+        component = object.__new__(EccentricityDependentSpatioTemporalFilterRetinaLGN)
         component.check_parameters(eccentricity_parameters())
 
         with_spatial_resolution = eccentricity_parameters()
@@ -255,9 +484,7 @@ class TestEccentricityComponentConfiguration:
 
     @pytest.mark.parametrize("number", [0, -1, 3.0, True])
     def test_number_per_polarity_requires_a_positive_integer(self, number):
-        component = object.__new__(
-            EccentricityDependentSpatioTemporalFilterRetinaLGN
-        )
+        component = object.__new__(EccentricityDependentSpatioTemporalFilterRetinaLGN)
         component.parameters = eccentricity_parameters(number_per_polarity=number)
         with pytest.raises(ValueError, match="integer greater than zero"):
             component._validate_stage_2_parameters()
@@ -282,12 +509,43 @@ class TestEccentricityComponentConfiguration:
             target = target[part]
         target[parts[-1]] = value
 
-        component = object.__new__(
-            EccentricityDependentSpatioTemporalFilterRetinaLGN
-        )
+        component = object.__new__(EccentricityDependentSpatioTemporalFilterRetinaLGN)
         component.parameters = parameters
         with pytest.raises(ValueError, match="positive and finite"):
             component._validate_stage_2_parameters()
+
+    @pytest.mark.parametrize("value", [-1.0, np.nan, np.inf, True])
+    def test_minimum_eccentricity_must_be_nonnegative_and_finite(self, value):
+        component = object.__new__(EccentricityDependentSpatioTemporalFilterRetinaLGN)
+        component.parameters = eccentricity_parameters(minimum_eccentricity_deg=value)
+        with pytest.raises(ValueError, match="nonnegative and finite"):
+            component._validate_stage_2_parameters()
+
+    @pytest.mark.parametrize("value", [0.0, -1.0, np.nan, np.inf, True])
+    def test_maximum_eccentricity_must_be_positive_and_finite(self, value):
+        component = object.__new__(EccentricityDependentSpatioTemporalFilterRetinaLGN)
+        component.parameters = eccentricity_parameters(maximum_eccentricity_deg=value)
+        with pytest.raises(ValueError, match="None or positive and finite"):
+            component._validate_stage_2_parameters()
+
+    @pytest.mark.parametrize("value", [0.0, -1.0, np.nan, np.inf, True])
+    def test_explicit_pixel_size_must_be_positive_and_finite(self, value):
+        component = object.__new__(EccentricityDependentSpatioTemporalFilterRetinaLGN)
+        component.parameters = eccentricity_parameters(
+            visual_space_pixel_size_deg=value
+        )
+        with pytest.raises(ValueError, match="None or positive and finite"):
+            component._validate_stage_2_parameters()
+
+    def test_minimum_eccentricity_must_be_smaller_than_domain_maximum(self):
+        component = object.__new__(EccentricityDependentSpatioTemporalFilterRetinaLGN)
+        component.parameters = eccentricity_parameters(
+            minimum_eccentricity_deg=2.0,
+            maximum_eccentricity_deg=2.0,
+        )
+        component.topography = provider(maximum_eccentricity_deg=2.0)
+        with pytest.raises(ValueError, match="smaller than E_max"):
+            component._validate_eccentricity_domain()
 
     def test_original_2024_mode_is_rejected_before_position_seeding(self, monkeypatch):
         parameters = eccentricity_parameters(original_2024_lgn_mode=True)
@@ -313,9 +571,7 @@ class TestEccentricityComponentConfiguration:
         ],
     )
     def test_temporal_scale_distribution_is_validated(self, name, value, error):
-        component = object.__new__(
-            EccentricityDependentSpatioTemporalFilterRetinaLGN
-        )
+        component = object.__new__(EccentricityDependentSpatioTemporalFilterRetinaLGN)
         component.parameters = eccentricity_parameters()
         component.parameters.temporal_scale_distribution[name] = value
 
@@ -323,9 +579,7 @@ class TestEccentricityComponentConfiguration:
             component._validate_stage_2_parameters()
 
     def test_temporal_scale_quantiles_must_be_ordered(self):
-        component = object.__new__(
-            EccentricityDependentSpatioTemporalFilterRetinaLGN
-        )
+        component = object.__new__(EccentricityDependentSpatioTemporalFilterRetinaLGN)
         component.parameters = eccentricity_parameters()
         component.parameters.temporal_scale_distribution.lower_quantile = 0.7
         component.parameters.temporal_scale_distribution.upper_quantile = 0.3
@@ -333,16 +587,13 @@ class TestEccentricityComponentConfiguration:
         with pytest.raises(ValueError, match="quantiles must satisfy"):
             component._validate_stage_2_parameters()
 
-
     def test_visual_field_must_precede_the_input_component(self):
         with pytest.raises(ValueError, match="model.visual_field must exist"):
             EccentricityDependentSpatioTemporalFilterRetinaLGN(
                 SimpleNamespace(), eccentricity_parameters()
             )
 
-    def test_position_seeds_are_requested_once_before_noise_seeds(
-        self, monkeypatch
-    ):
+    def test_position_seeds_are_requested_once_before_noise_seeds(self, monkeypatch):
         seed_calls = []
         sampler_draws = []
 
@@ -352,8 +603,14 @@ class TestEccentricityComponentConfiguration:
                 return np.array([101, 202])
             return np.arange(size[0], dtype=np.uint32)
 
-        def fake_sampler(topography, number, rng):
-            sampler_draws.append(rng.randint(2**31))
+        def fake_sampler(topography, number, rng, minimum_eccentricity_deg):
+            sampler_draws.append(
+                (
+                    rng.randint(2**31),
+                    minimum_eccentricity_deg,
+                    topography.max_eccentricity_deg,
+                )
+            )
             return np.zeros((2, number))
 
         class FakeCell:
@@ -398,13 +655,18 @@ class TestEccentricityComponentConfiguration:
         )
         model = SimpleNamespace(sim=FakeSim(), visual_field=visual_field())
         retina = EccentricityDependentSpatioTemporalFilterRetinaLGN(
-            model, eccentricity_parameters(number_per_polarity=3)
+            model,
+            eccentricity_parameters(
+                number_per_polarity=3,
+                minimum_eccentricity_deg=1.0,
+                maximum_eccentricity_deg=3.0,
+            ),
         )
 
         assert seed_calls == [2, (3,), (3,)]
         assert sampler_draws == [
-            np.random.RandomState(101).randint(2**31),
-            np.random.RandomState(202).randint(2**31),
+            (np.random.RandomState(101).randint(2**31), 1.0, 3.0),
+            (np.random.RandomState(202).randint(2**31), 1.0, 3.0),
         ]
         assert retina.sheets["X_ON"].topography is retina.topography
         assert retina.sheets["X_OFF"].topography is retina.topography
@@ -413,20 +675,26 @@ class TestEccentricityComponentConfiguration:
 def _rf_only_component(
     positions_by_type,
     cap_eccentricity=None,
+    minimum_eccentricity_deg=0.0,
+    maximum_eccentricity_deg=None,
     minimum_samples=4.0,
+    visual_space_pixel_size_deg=None,
     width=6.0,
     height=4.0,
     temporal_resolution=7.0,
     temporal_scales_by_type=None,
     receptive_field_function_parameters=None,
     pynn_seed=936395,
+    visual_field_size_x=16.0,
+    visual_field_size_y=20.0,
 ):
-    component = object.__new__(
-        EccentricityDependentSpatioTemporalFilterRetinaLGN
-    )
+    component = object.__new__(EccentricityDependentSpatioTemporalFilterRetinaLGN)
     parameters = eccentricity_parameters(
         number_per_polarity=positions_by_type["X_ON"].shape[1],
+        minimum_eccentricity_deg=minimum_eccentricity_deg,
+        maximum_eccentricity_deg=maximum_eccentricity_deg,
         minimum_samples_per_center_sigma=minimum_samples,
+        visual_space_pixel_size_deg=visual_space_pixel_size_deg,
     )
     parameters.topography.cap_eccentricity = cap_eccentricity
     parameters.receptive_field.width = width
@@ -437,7 +705,11 @@ def _rf_only_component(
             receptive_field_function_parameters
         )
     component.parameters = parameters
-    component.topography = provider(cap_eccentricity)
+    component.topography = RadiallySymmetricLGNTopography(
+        visual_field(visual_field_size_x, visual_field_size_y),
+        topography_parameters(cap_eccentricity),
+        maximum_eccentricity_deg,
+    )
     component.rf_types = RF_TYPES
     component.sheets = {}
     for rf_type in RF_TYPES:
@@ -458,11 +730,12 @@ def _rf_only_component(
                     "background_luminance": 45.0,
                 }
             )
-        )
+        ),
     )
     if temporal_scales_by_type is not None:
         component._sample_temporal_scales = lambda: temporal_scales_by_type
     component._validate_stage_2_parameters()
+    component._validate_eccentricity_domain()
     component._validate_receptive_field_parameters()
     component._initialize_receptive_fields()
     return component
@@ -477,9 +750,7 @@ class TestReceptiveFieldConfiguration:
         ],
     )
     def test_only_cai97_spatiotemporal_rf_is_supported(self, func):
-        component = object.__new__(
-            EccentricityDependentSpatioTemporalFilterRetinaLGN
-        )
+        component = object.__new__(EccentricityDependentSpatioTemporalFilterRetinaLGN)
         component.parameters = eccentricity_parameters()
         component.parameters.receptive_field.func = func
 
@@ -487,9 +758,7 @@ class TestReceptiveFieldConfiguration:
             component._validate_receptive_field_parameters()
 
     def test_subtract_mean_is_rejected(self):
-        component = object.__new__(
-            EccentricityDependentSpatioTemporalFilterRetinaLGN
-        )
+        component = object.__new__(EccentricityDependentSpatioTemporalFilterRetinaLGN)
         component.parameters = eccentricity_parameters()
         component.parameters.receptive_field.func_params.subtract_mean = True
 
@@ -508,9 +777,7 @@ class TestReceptiveFieldConfiguration:
     def test_cai97_parameters_must_be_finite_and_sigmas_positive(
         self, name, value, error
     ):
-        component = object.__new__(
-            EccentricityDependentSpatioTemporalFilterRetinaLGN
-        )
+        component = object.__new__(EccentricityDependentSpatioTemporalFilterRetinaLGN)
         component.parameters = eccentricity_parameters()
         component.parameters.receptive_field.func_params[name] = value
 
@@ -518,9 +785,7 @@ class TestReceptiveFieldConfiguration:
             component._validate_receptive_field_parameters()
 
     def test_missing_cai97_parameter_is_rejected(self):
-        component = object.__new__(
-            EccentricityDependentSpatioTemporalFilterRetinaLGN
-        )
+        component = object.__new__(EccentricityDependentSpatioTemporalFilterRetinaLGN)
         component.parameters = eccentricity_parameters()
         del component.parameters.receptive_field.func_params["td"]
 
@@ -638,9 +903,7 @@ class TestTemporalScaleSampling:
         assert not np.array_equal(samples[0], different_seed)
 
     def test_component_requires_the_model_pynn_seed(self):
-        component = object.__new__(
-            EccentricityDependentSpatioTemporalFilterRetinaLGN
-        )
+        component = object.__new__(EccentricityDependentSpatioTemporalFilterRetinaLGN)
         component.parameters = eccentricity_parameters(number_per_polarity=2)
         component.rf_types = RF_TYPES
         component.model = SimpleNamespace(parameters=ParameterSet({}))
@@ -687,11 +950,7 @@ def _refine_frequency_peak(frequencies, amplitudes):
         - 2.0 * amplitudes[peak_index]
         + amplitudes[peak_index + 1]
     )
-    offset = (
-        0.5
-        * (amplitudes[peak_index - 1] - amplitudes[peak_index + 1])
-        / curvature
-    )
+    offset = 0.5 * (amplitudes[peak_index - 1] - amplitudes[peak_index + 1]) / curvature
     return frequencies[peak_index] + offset * (frequencies[1] - frequencies[0])
 
 
@@ -703,12 +962,8 @@ def _finite_rf_preferred_temporal_frequency(rf):
         parameters.sigma_c,
         parameters.sigma_s,
     )
-    center = _spatial_hat(
-        spatial_frequency, parameters.Ac, parameters.sigma_c
-    )
-    surround = _spatial_hat(
-        spatial_frequency, parameters.As, parameters.sigma_s
-    )
+    center = _spatial_hat(spatial_frequency, parameters.Ac, parameters.sigma_c)
+    surround = _spatial_hat(spatial_frequency, parameters.As, parameters.sigma_s)
     center_temporal = cai97.G(
         rf.time_points,
         parameters.K1,
@@ -733,9 +988,7 @@ def _finite_rf_preferred_temporal_frequency(rf):
     )
     finite_response = center * center_temporal - surround * surround_temporal
     fft_size = 65536
-    frequencies = np.fft.rfftfreq(
-        fft_size, d=rf.temporal_resolution / 1000.0
-    )
+    frequencies = np.fft.rfftfreq(fft_size, d=rf.temporal_resolution / 1000.0)
     amplitudes = np.abs(np.fft.rfft(finite_response, n=fft_size))
     positive = frequencies > 0.0
     return _refine_frequency_peak(frequencies[positive], amplitudes[positive])
@@ -861,6 +1114,62 @@ class TestResolutionQuantization:
             > coarse.input_cells["X_ON"][0].receptive_field.shape[0]
         )
 
+    def test_annulus_inner_bound_controls_automatic_pixel_size(self):
+        positions = {
+            "X_ON": np.array([[3.0], [0.0]]),
+            "X_OFF": np.array([[3.5], [0.0]]),
+        }
+        disk = _rf_only_component(positions)
+        annulus = _rf_only_component(positions, minimum_eccentricity_deg=2.5)
+        smallest_supportable, _ = annulus.topography.center_sigma_bounds_deg(
+            annulus.parameters.center_size_log10_residual_sd,
+            annulus.parameters.center_size_truncation_sd,
+            2.5,
+        )
+
+        assert annulus.visual_space_resolution_deg == (
+            _round_down_to_two_significant_digits(smallest_supportable / 4.0)
+        )
+        assert annulus.visual_space_resolution_deg > disk.visual_space_resolution_deg
+
+    def test_explicit_pixel_size_is_identical_across_annuli(self):
+        positions = {
+            "X_ON": np.array([[3.0], [0.0]]),
+            "X_OFF": np.array([[3.5], [0.0]]),
+        }
+        disk = _rf_only_component(positions, visual_space_pixel_size_deg=0.016)
+        annulus = _rf_only_component(
+            positions,
+            minimum_eccentricity_deg=2.5,
+            visual_space_pixel_size_deg=0.016,
+        )
+
+        assert disk.visual_space_resolution_deg == 0.016
+        assert annulus.visual_space_resolution_deg == 0.016
+
+    def test_explicit_finer_pixel_size_is_accepted(self):
+        positions = {rf_type: np.array([[1.0], [0.0]]) for rf_type in RF_TYPES}
+        component = _rf_only_component(positions, visual_space_pixel_size_deg=0.001)
+        assert component.visual_space_resolution_deg == 0.001
+
+    def test_explicit_pixel_size_at_raw_support_bound_is_accepted(self):
+        positions = {rf_type: np.array([[1.0], [0.0]]) for rf_type in RF_TYPES}
+        automatic = _rf_only_component(positions)
+        bound = automatic.maximum_visual_space_pixel_size_deg
+        exact = _rf_only_component(positions, visual_space_pixel_size_deg=bound)
+
+        assert exact.visual_space_resolution_deg == bound
+        with pytest.raises(ValueError, match="too coarse"):
+            _rf_only_component(
+                positions,
+                visual_space_pixel_size_deg=np.nextafter(bound, np.inf),
+            )
+
+    def test_explicit_pixel_size_coarser_than_support_is_rejected(self):
+        positions = {rf_type: np.array([[1.0], [0.0]]) for rf_type in RF_TYPES}
+        with pytest.raises(ValueError, match="too coarse"):
+            _rf_only_component(positions, visual_space_pixel_size_deg=1.0)
+
     def test_higher_sampling_requirements_converge_complete_kernel_response(self):
         positions = {
             "X_ON": np.array([[1.0], [0.0]]),
@@ -868,19 +1177,13 @@ class TestResolutionQuantization:
         }
         complete_kernel_responses = []
         for minimum_samples in (4.0, 8.0, 16.0):
-            component = _rf_only_component(
-                positions, minimum_samples=minimum_samples
-            )
+            component = _rf_only_component(positions, minimum_samples=minimum_samples)
             complete_kernel_responses.append(
                 component.input_cells["X_ON"][0].receptive_field.as_dense().sum()
             )
 
-        coarse_change = abs(
-            complete_kernel_responses[1] - complete_kernel_responses[0]
-        )
-        fine_change = abs(
-            complete_kernel_responses[2] - complete_kernel_responses[1]
-        )
+        coarse_change = abs(complete_kernel_responses[1] - complete_kernel_responses[0])
+        fine_change = abs(complete_kernel_responses[2] - complete_kernel_responses[1])
         assert fine_change < coarse_change
 
 
@@ -907,9 +1210,10 @@ class TestPerCellReceptiveFields:
                 rf = component.input_cells[rf_type][index].receptive_field
                 assert rf.duration == pytest.approx(200.0 * scale)
                 assert rf.kernel_duration == int(np.ceil(200.0 * scale / 3.5))
-                assert component._rf_parameters[rf_type]["temporal_samples"][
-                    index
-                ] == rf.kernel_duration
+                assert (
+                    component._rf_parameters[rf_type]["temporal_samples"][index]
+                    == rf.kernel_duration
+                )
         assert component.input_cells["X_ON"][0].receptive_field.kernel_duration == 31
         assert component.input_cells["X_ON"][1].receptive_field.kernel_duration == 149
 
@@ -927,17 +1231,13 @@ class TestPerCellReceptiveFields:
             parameters = component._rf_parameters[rf_type]
             assert len(cells) == 2
             assert all(
-                isinstance(
-                    cell, EccentricityDependentCellWithReceptiveField
-                )
+                isinstance(cell, EccentricityDependentCellWithReceptiveField)
                 for cell in cells
             )
             for global_index, cell in enumerate(cells):
                 rf = cell.receptive_field
                 eccentricity = np.hypot(cell.x, cell.y)
-                expected_center = component.topography.center_sigma_deg(
-                    eccentricity
-                )
+                expected_center = component.topography.center_sigma_deg(eccentricity)
                 expected_scale = expected_center / reference.sigma_c
                 temporal_scale = parameters["temporal_scales"][global_index]
 
@@ -1056,8 +1356,7 @@ class TestPerCellReceptiveFields:
             parameters["surround_sigmas_deg"][1]
         )
         np.testing.assert_allclose(
-            parameters["surround_sigmas_deg"]
-            / parameters["center_sigmas_deg"],
+            parameters["surround_sigmas_deg"] / parameters["center_sigmas_deg"],
             component.parameters.receptive_field.func_params.sigma_s
             / component.parameters.receptive_field.func_params.sigma_c,
             rtol=1e-12,
@@ -1132,13 +1431,9 @@ def _scaled_eccentricity_cell(
     visual_space=None,
 ):
     parameters = eccentricity_parameters()
-    component = object.__new__(
-        EccentricityDependentSpatioTemporalFilterRetinaLGN
-    )
+    component = object.__new__(EccentricityDependentSpatioTemporalFilterRetinaLGN)
     component.parameters = parameters
-    function_parameters = copy.deepcopy(
-        parameters.receptive_field.func_params
-    )
+    function_parameters = copy.deepcopy(parameters.receptive_field.func_params)
     function_parameters.Ac = 1.0
     function_parameters.As = 0.2
     function_parameters.sigma_c = 0.1 * scale
@@ -1152,9 +1447,7 @@ def _scaled_eccentricity_cell(
         70.0,
         polarity=1.0 if rf_type == "X_ON" else -1.0,
     )
-    receptive_field.quantize(
-        pixel_size, pixel_size, 7.0, use_factorization=True
-    )
+    receptive_field.quantize(pixel_size, pixel_size, 7.0, use_factorization=True)
     return EccentricityDependentCellWithReceptiveField(
         0.0,
         0.0,
@@ -1187,16 +1480,10 @@ def _scaled_stimulus_metrics(cell, scale, stimulus_name):
         image = np.full_like(x_grid, 1.5 * background)
     elif stimulus_name == "gaussian":
         image = background * (
-            1.0
-            + np.exp(
-                -(x_grid**2 + y_grid**2)
-                / (2.0 * (0.12 * scale) ** 2)
-            )
+            1.0 + np.exp(-(x_grid**2 + y_grid**2) / (2.0 * (0.12 * scale) ** 2))
         )
     elif stimulus_name == "grating":
-        image = background * (
-            1.0 + np.cos(2.0 * np.pi * x_grid / (0.4 * scale))
-        )
+        image = background * (1.0 + np.cos(2.0 * np.pi * x_grid / (0.4 * scale)))
     else:
         raise ValueError(stimulus_name)
 
@@ -1208,9 +1495,7 @@ def _scaled_stimulus_metrics(cell, scale, stimulus_name):
     gain = cell.gain_control.non_linear_gain
     current = cell.gain_function(
         contrast, gain.contrast_gain, gain.contrast_scaler
-    ) + cell.gain_function(
-        luminance, gain.luminance_gain, gain.luminance_scaler
-    )
+    ) + cell.gain_function(luminance, gain.luminance_gain, gain.luminance_scaler)
     return {
         "direct": float(np.max(np.abs(direct))),
         "contrast": float(np.max(np.abs(contrast))),
@@ -1220,7 +1505,98 @@ def _scaled_stimulus_metrics(cell, scale, stimulus_name):
     }
 
 
+@pytest.fixture(scope="module")
+def spatial_temporal_scale_grid():
+    eccentricities_deg = np.linspace(0.0, 25.0, 5)
+    distribution = eccentricity_parameters().temporal_scale_distribution
+    temporal_scales = lognorm.ppf(
+        np.linspace(
+            distribution.lower_quantile,
+            distribution.upper_quantile,
+            5,
+        ),
+        s=distribution.sigma,
+        scale=np.exp(distribution.mu),
+    )
+    positions = np.vstack(
+        (
+            np.repeat(eccentricities_deg, len(temporal_scales)),
+            np.zeros(len(eccentricities_deg) * len(temporal_scales)),
+        )
+    )
+    per_cell_temporal_scales = np.tile(temporal_scales, len(eccentricities_deg))
+    component = _rf_only_component(
+        {rf_type: positions.copy() for rf_type in RF_TYPES},
+        maximum_eccentricity_deg=25.0,
+        visual_space_pixel_size_deg=0.016,
+        width=14.644822535845982,
+        height=14.644822535845982,
+        temporal_resolution=3.5,
+        temporal_scales_by_type={
+            rf_type: per_cell_temporal_scales.copy() for rf_type in RF_TYPES
+        },
+        receptive_field_function_parameters={
+            "Ac": 1.0,
+            "As": 0.024588,
+            "sigma_c": 0.381488,
+            "sigma_s": 2.253145,
+            "K1": 1.0,
+            "K2": 0.214140,
+            "c1": 1.323375,
+            "c2": 2.692420,
+            "t1": -117.727302,
+            "t2": -2195.226391,
+            "n1": 197.012103,
+            "n2": 6190.246091,
+            "td": 6.384194,
+            "subtract_mean": False,
+        },
+        visual_field_size_x=70.288,
+        visual_field_size_y=70.288,
+    )
+    cells = np.asarray(component.input_cells["X_ON"], dtype=object).reshape(5, 5)
+    return SimpleNamespace(
+        cells=cells,
+        eccentricities_deg=eccentricities_deg,
+        temporal_scales=temporal_scales,
+        reference_cell=cells[2, 2],
+    )
+
+
 class TestEccentricityLuminanceCorrection:
+
+    @pytest.mark.parametrize("luminance", np.geomspace(0.01, 100.0, 5))
+    @pytest.mark.parametrize("spatial_scale_index", range(5))
+    @pytest.mark.parametrize("temporal_scale_index", range(5))
+    def test_uniform_luminance_dc_response_is_scale_invariant(
+        self,
+        spatial_temporal_scale_grid,
+        luminance,
+        spatial_scale_index,
+        temporal_scale_index,
+    ):
+        """Uniform-field DC gain should not depend on spatial or temporal scale."""
+
+        grid = spatial_temporal_scale_grid
+        cell = grid.cells[spatial_scale_index, temporal_scale_index]
+
+        def dc_response(candidate):
+            image = np.full(candidate.receptive_field.shape[:2], luminance)
+            response = candidate.kernel_response_operator(image, luminance)
+            np.testing.assert_allclose(response.contrast, 0.0, atol=1e-12)
+            return float(response.luminance.sum())
+
+        reference_response = dc_response(grid.reference_cell)
+        response = dc_response(cell)
+        relative_error = abs(response - reference_response) / abs(reference_response)
+
+        assert relative_error <= 0.011, (
+            "uniform-field DC response differs from the middle spatial/temporal "
+            f"scale by {relative_error:.6%} at luminance={luminance:g}, "
+            f"eccentricity={grid.eccentricities_deg[spatial_scale_index]:g} deg, "
+            f"temporal_scale={grid.temporal_scales[temporal_scale_index]:.12g}"
+        )
+
     def test_kernel_components_and_all_luminance_states_use_spatial_sum(self):
         positions = {
             "X_ON": np.array([[0.0], [0.0]]),
@@ -1258,16 +1634,13 @@ class TestEccentricityLuminanceCorrection:
             kernel_cumsum = np.cumsum(spatial_sum)
             np.testing.assert_allclose(
                 cell.starting_luminance_kernel_state,
-                cell.background_luminance
-                * (kernel_cumsum[-1] - kernel_cumsum[:-1]),
+                cell.background_luminance * (kernel_cumsum[-1] - kernel_cumsum[:-1]),
                 rtol=1e-12,
                 atol=1e-12,
             )
             np.testing.assert_allclose(
                 cell.luminance_step_response,
-                np.concatenate(
-                    [[0.0], cell.background_luminance * kernel_cumsum]
-                ),
+                np.concatenate([[0.0], cell.background_luminance * kernel_cumsum]),
                 rtol=1e-12,
                 atol=1e-12,
             )
@@ -1352,13 +1725,9 @@ class TestEccentricityLuminanceCorrection:
     def test_legacy_cell_keeps_bitwise_mean_luminance_kernel(self):
         parameters = eccentricity_parameters()
         gain_control = copy.deepcopy(
-            LEGACY_MODEL_PARAMETERS["sheets"]["retina_lgn"]["params"][
-                "gain_control"
-            ]
+            LEGACY_MODEL_PARAMETERS["sheets"]["retina_lgn"]["params"]["gain_control"]
         )
-        function_parameters = copy.deepcopy(
-            parameters.receptive_field.func_params
-        )
+        function_parameters = copy.deepcopy(parameters.receptive_field.func_params)
         receptive_field = SpatioTemporalReceptiveField(
             cai97.stRF_2d,
             function_parameters,
@@ -1388,9 +1757,7 @@ class TestEccentricityLuminanceCorrection:
             expected_contrast.reshape(-1, expected_contrast.shape[2]).T,
         )
 
-    def test_geometric_rf_rescaling_is_response_invariant(
-        self, record_property
-    ):
+    def test_geometric_rf_rescaling_is_response_invariant(self, record_property):
         scales = (0.5, 1.0, 2.0, 4.0)
         stimulus_names = ("uniform", "gaussian", "grating")
         pixel_size = 0.00625
@@ -1403,10 +1770,7 @@ class TestEccentricityLuminanceCorrection:
                     rf_type,
                     pixel_size=pixel_size,
                 )
-                assert (
-                    cell.receptive_field.func_params.sigma_c / pixel_size
-                    >= 8.0
-                )
+                assert cell.receptive_field.func_params.sigma_c / pixel_size >= 8.0
                 assert (
                     cell.visual_region.size_x + 2.0 * pixel_size
                     <= boundary_free_window_size
@@ -1416,10 +1780,8 @@ class TestEccentricityLuminanceCorrection:
                     <= boundary_free_window_size
                 )
                 for stimulus_name in stimulus_names:
-                    metrics[(rf_type, scale, stimulus_name)] = (
-                        _scaled_stimulus_metrics(
-                            cell, scale, stimulus_name
-                        )
+                    metrics[(rf_type, scale, stimulus_name)] = _scaled_stimulus_metrics(
+                        cell, scale, stimulus_name
                     )
 
         for rf_type in RF_TYPES:
@@ -1466,12 +1828,12 @@ class TestEccentricityLuminanceCorrection:
             False,
         )
 
-        corrected_current = _scaled_stimulus_metrics(
-            corrected_cell, 1.0, "uniform"
-        )["current"]
-        legacy_current = _scaled_stimulus_metrics(
-            legacy_cell, 1.0, "uniform"
-        )["current"]
+        corrected_current = _scaled_stimulus_metrics(corrected_cell, 1.0, "uniform")[
+            "current"
+        ]
+        legacy_current = _scaled_stimulus_metrics(legacy_cell, 1.0, "uniform")[
+            "current"
+        ]
         relative_change = abs(corrected_current - legacy_current) / max(
             abs(legacy_current), 1e-12
         )
@@ -1490,43 +1852,29 @@ class TestEccentricityLuminanceCorrection:
                 "X_ON",
                 support=support,
             )
-            responses[support] = _scaled_stimulus_metrics(
-                cell, 1.0, "uniform"
-            )["direct"]
-        relative_deviation = abs(responses[0.5] - responses[0.8]) / abs(
-            responses[0.8]
-        )
+            responses[support] = _scaled_stimulus_metrics(cell, 1.0, "uniform")[
+                "direct"
+            ]
+        relative_deviation = abs(responses[0.5] - responses[0.8]) / abs(responses[0.8])
         record_property(
             "support_truncation_relative_deviation",
             relative_deviation,
         )
         assert relative_deviation > 0.0
 
-    def test_stimulus_boundary_effect_is_reported_separately(
-        self, record_property
-    ):
+    def test_stimulus_boundary_effect_is_reported_separately(self, record_property):
         background = 45.0
 
         def renderer(x_grid, y_grid):
-            inside_stimulus = (np.abs(x_grid) <= 0.35) & (
-                np.abs(y_grid) <= 0.35
-            )
+            inside_stimulus = (np.abs(x_grid) <= 0.35) & (np.abs(y_grid) <= 0.35)
             pattern = background * (
-                1.0
-                + np.exp(
-                    -(x_grid**2 + y_grid**2)
-                    / (2.0 * 0.12**2)
-                )
+                1.0 + np.exp(-(x_grid**2 + y_grid**2) / (2.0 * 0.12**2))
             )
             return np.where(inside_stimulus, pattern, background)
 
         visual_space = _StaticVisualSpace(renderer=renderer)
-        center_cell = _scaled_eccentricity_cell(
-            1.0, "X_ON", visual_space=visual_space
-        )
-        edge_cell = _scaled_eccentricity_cell(
-            1.0, "X_ON", visual_space=visual_space
-        )
+        center_cell = _scaled_eccentricity_cell(1.0, "X_ON", visual_space=visual_space)
+        edge_cell = _scaled_eccentricity_cell(1.0, "X_ON", visual_space=visual_space)
         edge_cell.x = 0.35
         edge_cell.visual_region.location_x = 0.35
 
@@ -1534,14 +1882,9 @@ class TestEccentricityLuminanceCorrection:
         for cell in (center_cell, edge_cell):
             cell.initialize(7.0)
             cell.view()
-            combined = (
-                cell.kernel_response.contrast
-                + cell.kernel_response.luminance
-            )
+            combined = cell.kernel_response.contrast + cell.kernel_response.luminance
             responses.append(float(np.max(np.abs(combined))))
-        relative_deviation = abs(responses[1] - responses[0]) / abs(
-            responses[0]
-        )
+        relative_deviation = abs(responses[1] - responses[0]) / abs(responses[0])
         record_property(
             "stimulus_boundary_relative_deviation",
             relative_deviation,
@@ -1600,9 +1943,9 @@ def _collect_stage_4_signature():
     from pyNN import nest
 
     model_parameters = copy.deepcopy(LEGACY_MODEL_PARAMETERS)
-    model_parameters["sheets"]["retina_lgn"]["params"] = (
-        eccentricity_parameters(number_per_polarity=16).as_dict()
-    )
+    model_parameters["sheets"]["retina_lgn"]["params"] = eccentricity_parameters(
+        number_per_polarity=16
+    ).as_dict()
     parameters = ParameterSet(model_parameters)
     mozaik.setup_mpi(parameters.mpi_seed, parameters.pynn_seed)
     model = Model(nest, 1, parameters)
@@ -1656,9 +1999,9 @@ def _collect_stage_4_signature():
                 rf = cell.receptive_field
                 kernel = rf.as_dense()
                 spatial_mean = kernel.mean(axis=(0, 1))
-                contrast_kernel = (kernel - spatial_mean).reshape(
-                    -1, rf.kernel_duration
-                ).T
+                contrast_kernel = (
+                    (kernel - spatial_mean).reshape(-1, rf.kernel_duration).T
+                )
                 local_rf_parameters.append(
                     (
                         global_index,
@@ -1758,8 +2101,7 @@ def test_eccentricity_lgn_single_process_construction():
     assert len(signature["X_ON"]["rf_parameters"]) == 16
     assert len(signature["X_OFF"]["rf_parameters"]) == 16
     assert (
-        signature["X_ON"]["positions_sha256"]
-        != signature["X_OFF"]["positions_sha256"]
+        signature["X_ON"]["positions_sha256"] != signature["X_OFF"]["positions_sha256"]
     )
 
 

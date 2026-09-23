@@ -182,6 +182,51 @@ class TestRadiallySymmetricLGNTopography:
         assert provider.max_eccentricity_deg == 4.0
         assert provider.user_cap_eccentricity_deg is None
 
+    def test_explicit_maximum_can_leave_a_stimulus_support_margin(self):
+        provider = RadiallySymmetricLGNTopography(
+            visual_field(size_x=20.0, size_y=18.0),
+            topography_parameters(),
+            maximum_eccentricity_deg=4.0,
+        )
+
+        assert provider.max_eccentricity_deg == 4.0
+        assert provider.validate_visual_position(4.0, 0.0) is None
+        with pytest.raises(ValueError, match="outside"):
+            provider.validate_visual_position(4.0 + 1e-12, 0.0)
+
+    @pytest.mark.parametrize(
+        "maximum,error",
+        [
+            (0.0, "positive and finite"),
+            (-1.0, "positive and finite"),
+            (np.nan, "finite real scalar"),
+            (np.inf, "finite real scalar"),
+            (True, "finite real scalar"),
+            (4.1, "must not exceed the visual-field radius"),
+        ],
+    )
+    def test_invalid_explicit_maximum_is_rejected(self, maximum, error):
+        with pytest.raises(ValueError, match=error):
+            RadiallySymmetricLGNTopography(
+                visual_field(), topography_parameters(), maximum
+            )
+
+    def test_cap_must_not_exceed_explicit_maximum(self):
+        with pytest.raises(ValueError, match="cap_eccentricity.*E_max"):
+            RadiallySymmetricLGNTopography(
+                visual_field(),
+                topography_parameters(cap_eccentricity=3.0),
+                maximum_eccentricity_deg=2.5,
+            )
+
+    def test_explicit_maximum_below_90_allows_a_larger_rendering_field(self):
+        provider = RadiallySymmetricLGNTopography(
+            visual_field(size_x=180.0, size_y=180.0),
+            topography_parameters(),
+            maximum_eccentricity_deg=25.0,
+        )
+        assert provider.max_eccentricity_deg == 25.0
+
     @pytest.mark.parametrize(
         "location_x,location_y",
         [(1e-12, -1e-12), (-1e-12, 1e-12)],
@@ -414,6 +459,35 @@ class TestRadiallySymmetricLGNTopography:
         y = np.array([[0.0, 1.0, 2.0]])
         assert provider.relative_density_xy(x, y).shape == (2, 3)
         assert provider.center_sigma_deg(np.zeros((2, 3))).shape == (2, 3)
+
+    def test_center_sigma_bounds_follow_annulus_inner_bound_and_cap(self):
+        uncapped = RadiallySymmetricLGNTopography(
+            visual_field(), topography_parameters()
+        )
+        capped = RadiallySymmetricLGNTopography(
+            visual_field(), topography_parameters(cap_eccentricity=2.0)
+        )
+        lower_factor, _ = rf_center_sigma_scatter_factors(0.1, 3.0)
+
+        uncapped_minimum, _ = uncapped.center_sigma_bounds_deg(0.1, 3.0, 3.0)
+        capped_inside_minimum, _ = capped.center_sigma_bounds_deg(0.1, 3.0, 1.0)
+        capped_outside_minimum, _ = capped.center_sigma_bounds_deg(0.1, 3.0, 3.0)
+
+        assert uncapped_minimum == pytest.approx(rf_center_sigma(3.0) * lower_factor)
+        assert capped_inside_minimum == pytest.approx(
+            rf_center_sigma(2.0) * lower_factor
+        )
+        assert capped_outside_minimum == pytest.approx(
+            rf_center_sigma(3.0) * lower_factor
+        )
+
+    @pytest.mark.parametrize("minimum", [-1.0, 4.1, np.nan, np.inf, True])
+    def test_center_sigma_bounds_reject_invalid_inner_bound(self, minimum):
+        provider = RadiallySymmetricLGNTopography(
+            visual_field(), topography_parameters()
+        )
+        with pytest.raises(ValueError, match="minimum_eccentricity_deg"):
+            provider.center_sigma_bounds_deg(0.1, 3.0, minimum)
 
     def test_extrapolation_warnings_are_emitted_once_at_initialization(self, caplog):
         caplog.set_level(logging.WARNING, logger="Mozaik")
