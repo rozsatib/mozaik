@@ -6,13 +6,13 @@ This document is the implementation anchor for an optional
 eccentricity-dependent visual topography in Mozaik.
 
 The design has been reviewed at the architectural and scientific-assumption
-level. Implementation is in progress. Phase 1 Stages 0 through 3 are complete.
-Stage 4 production behavior and ordinary tests are implemented, but Stage 4
-acceptance remains incomplete because the full-neuron spatial-frequency
-criterion is deliberately unfinished and the full end-to-end performance
-benchmark matrix has not been collected. An isolated RF/operator benchmark of
-the implemented factorization is recorded below. Phase 2 Stages 5 through 7
-have not started.
+level. Phase 1 Stages 0 through 4a are implemented. The repository-level
+full-neuron spatial-frequency criterion is complete and passes at the approved
+`0.06`-octave tolerance. The full end-to-end performance benchmark matrix has
+not been collected; an isolated RF/operator benchmark of the implemented
+factorization is recorded below. Historical-study population validation is
+tracked separately in `lgn_eccentricity_handover_condensed.md`. Phase 2 Stages
+5 through 7 have not started.
 The work is split by
 [Two-phase implementation boundary](#two-phase-implementation-boundary), with
 the smaller stages listed in [Implementation sequence](#implementation-sequence).
@@ -31,17 +31,20 @@ The repository currently contains both LGN input components:
   polarity, configured spatial resolution, legacy luminance normalization,
   and the optional `original_2024_lgn_mode` compatibility behavior.
 - `EccentricityDependentSpatioTemporalFilterRetinaLGN` implements the LGN-only
-  eccentricity path. It uses fixed-count independently sampled ON/OFF disk
+  eccentricity path. It uses fixed-count independently sampled ON/OFF disk or
+  annular
   populations, immutable shared topography, per-cell scaled and factorized
   Cai97 RFs whose centre sigma is drawn about the eccentricity/RF-size line, a
-  resolution derived from the smallest centre sigma the configuration can
-  produce, corrected summed-kernel luminance handling, current injection, and
+  resolution either derived from the smallest centre sigma the configured
+  domain can produce or fixed explicitly after a sampling-adequacy check,
+  corrected summed-kernel luminance handling, current injection, and
   one-/two-rank reproducibility.
 - RF centre size is no longer a deterministic function of eccentricity. Each
   cell draws its own centre sigma from the measured Gaussian residual of the
-  RF-size regression, from deterministic private ON/OFF streams. This gives
-  preferred spatial frequency unbounded support above the foveal optimum of
-  the line, which the validation references require.
+  RF-size regression, from deterministic private ON/OFF streams. The accepted
+  `+/-3` residual-SD truncation gives finite preferred-spatial-frequency
+  support through `1.1036 cycles/degree`, above the foveal optimum of the line
+  and all non-skipped validation targets.
 - Both components expose `visual_space_resolution_deg`. The eccentricity
   component reuses the legacy presentation, response-cache, gain, current
   injection, null-input, and per-frame convolution machinery after constructing
@@ -53,11 +56,11 @@ The repository currently contains both LGN input components:
 
 Ordinary legacy and eccentricity LGN tests, including the supported one- and
 two-rank regression probes, pass in the current development environment. The
-full-neuron spatial-frequency characterization remains the one intentional
-failure: it writes diagnostic curves and then fails at the documented
-`TODO Finish` assertion. Direct-script MPI probes require the repository root
-on `PYTHONPATH` so that repository-local test helpers can be imported; this is
-a test-harness requirement rather than an LGN runtime requirement.
+full-neuron spatial-frequency characterization now writes its diagnostic plot
+and passes at the approved `0.06`-octave tolerance. Direct-script MPI probes
+require the repository root on `PYTHONPATH` so that repository-local test
+helpers can be imported; this is a test-harness requirement rather than an LGN
+runtime requirement.
 
 ## How to use this document
 
@@ -81,8 +84,8 @@ current code:
 3. do not substitute an approximation or a different scientific convention;
 4. obtain a design decision before continuing.
 
-The intentionally failing full-neuron spatial-frequency test is the only
-planned test failure. All other tests introduced by this work must pass.
+No planned test failure remains. All tests introduced by this work, including
+the full-neuron spatial-frequency criterion, must pass.
 
 ## Design changes during implementation
 
@@ -302,11 +305,13 @@ does not perturb position sampling, noise seeding, or unrelated simulator
 streams. The pynn_seed source is provisional and must move to model_seed after
 the seed-separation refactor, as the source TODO records.
 Scientific or numerical impact: RF size at a given eccentricity becomes a
-distribution rather than a value, so preferred spatial frequency gains
-unbounded support above the foveal optimum and all reference bands become
-reachable in probability. The derived stimulus resolution is now set by the low
-tail of the scatter, which raises memory and runtime cost. Required population
-size becomes a sampling calculation over the reference target list.
+distribution rather than a value. At this point in the change history its
+untruncated form gave preferred spatial frequency unbounded support above the
+foveal optimum and made all reference bands reachable in probability;
+ECC-P1-S3-002 subsequently bounded that support at `+/-3` residual standard
+deviations. The derived stimulus resolution is now set by the low tail of the
+scatter, which raises memory and runtime cost. Required population size becomes
+a sampling calculation over the reference target list.
 Required acceptance-gate reruns: Stage 3 RF-assignment and stimulus-resolution
 gates; the Stage 4 full-neuron spatial-frequency characterization once its
 protocol is finished; any memory or performance reporting produced before the
@@ -401,6 +406,258 @@ cannot reach 1.0 cycles/degree, and the maintainer's clipping variant was
 rejected in favour of conditioning for the point-mass reason recorded above.
 ```
 
+```text
+Change ID: ECC-P1-VAL-001
+Status: Accepted
+Date: 2026-09-22
+Discovered during stage: Historical-study validation planning
+Requested by: Human maintainer
+Original requirement: Leave the scientific visual-field/eccentricity domain
+unresolved while comparing population-size estimates for E_max = 4.5 and 25
+degrees.
+Proposed change: Fix the LGN scientific-validation domain at E_max = 25
+degrees. A derived scientific profile uses a centred 50-by-50-degree visual
+field; the existing 9-by-9-degree profile remains a smoke/control profile.
+Reason: The maintainer selected the upper domain of the RF-size regression as
+the scientific domain. This removes geometry as an open population-sizing
+choice and avoids extrapolating the RF-size fit beyond its reported range.
+Alternatives considered: Retain E_max = 4.5 degrees, rejected because it is
+only the current smoke geometry; use the mathematical E_max -> 90-degree
+limit, rejected because the density fit is poorly constrained at large
+eccentricity and the RF-size fit was reported only through 25 degrees.
+Affected normative sections: Approved decisions; Visual and cortical domains /
+Visual domain; Remaining decisions.
+Affected production APIs or configuration: No API change. A new derived
+scientific validation profile must set model.visual_field.size to (50, 50).
+The smoke/control and frozen Stage 3/4/5 profiles remain unchanged.
+Affected stages: Historical-study luminance, contrast, spatial-frequency,
+temporal-frequency, variability, sparse-noise, and final full-suite validation.
+Affected tests and regression anchors: No existing regression anchor changes.
+Population sizing and matched-study selection must be recomputed for E_max =
+25 degrees before scientific runs.
+Phase 1 / Phase 2 compatibility impact: The generic Phase 1 API continues to
+support any centred domain with 0 < E_max < 90 degrees. This decision fixes
+only the scientific LGN validation profile and does not alter mapping APIs.
+Randomness or MPI impact: None to stream definitions or draw order. The larger
+population and domain change the realized arrays in the new profile only.
+Scientific or numerical impact: The complete RF-size fit domain is sampled.
+The hardest single SF band requires about 3,245 cells per polarity for a 95
+percent chance of at least one match; joint multi-study coverage will require
+more. Preferred SF is not uniquely determined by eccentricity because RF-size
+scatter is active. At the reported 6.7-degree anchor, Cudeiro Figure 2 remains
+incompatible with the provisional +/-10 percent window around 1.0
+cycles/degree and requires a separate validation decision.
+Required acceptance-gate reruns: Recompute joint match probabilities; rerun
+the canonical luminance gate in the new representative population before
+contrast and tuning validation.
+Normative sections reconciled: Yes
+Implementation may continue: Yes, except Cudeiro Figure 2 cannot be called a
+replication until its eccentricity/support mismatch is resolved.
+Resolution: Accepted by explicit maintainer instruction.
+```
+
+```text
+Change ID: ECC-P1-VAL-002
+Status: Accepted
+Date: 2026-09-23
+Discovered during stage: Historical-study validation planning
+Requested by: Human maintainer
+Original requirement: Sample the complete disk from fixation to E_max and
+always derive the shared visual-space pixel size from that disk's smallest
+supportable centre sigma.
+Proposed change: Add minimum_eccentricity_deg so a validation run may sample
+the annulus E_min <= E < E_max, and add optional
+visual_space_pixel_size_deg. None retains the bound-derived behavior; an
+explicit value is used exactly when it is no coarser than
+sigma_min/minimum_samples_per_center_sigma and otherwise raises ValueError.
+Reason: Study-specific annuli avoid simulating irrelevant eccentricities, while
+one explicit grid makes their outputs numerically comparable and permits a
+later full-domain validation without changing resolution.
+Alternatives considered: Recompute minimum_samples_per_center_sigma for each
+annulus, rejected because it conflates a sampling-quality criterion with grid
+selection; implement annuli only in validation code, rejected because the
+production sampler and support bound would then disagree with the simulated
+domain; silently refine an invalid explicit grid, rejected because it hides a
+configuration error.
+Affected normative sections: Current implementation snapshot; Approved
+decisions; Required production API; New LGN parameters; Visual domain; LGN
+position generation; Stimulus spatial resolution; Acceptance criteria.
+Affected production APIs or configuration: New required component keys
+minimum_eccentricity_deg and visual_space_pixel_size_deg; optional third
+minimum_eccentricity_deg argument on center_sigma_bounds_deg; optional fourth
+argument on the private position sampler.
+Affected stages: Historical-study validation profiles and the final full-domain
+validation. Legacy LGN and cortex are unaffected.
+Affected tests and regression anchors: Add annular capped/uncapped distribution,
+domain validation, annular support-bound, and fixed-grid acceptance/rejection
+coverage. Existing disk profiles set 0.0 and None and retain seeded positions
+and derived resolution.
+Phase 1 / Phase 2 compatibility impact: Phase 1 gains an inner LGN boundary.
+Phase 2 must treat the source population as annular when such a profile is
+used; no cortical implementation is changed here.
+Randomness or MPI impact: The E_min=0 branch retains the original proposal and
+random draw order. E_min>0 changes positions by definition but uses the same
+private per-polarity streams and remains rank-independent.
+Scientific or numerical impact: Density is conditioned on the configured
+annulus. Its smallest RF support is evaluated at E_min (subject to cap
+plateauing). An explicit pixel size never relaxes the configured samples-per-
+sigma minimum; finer values are allowed.
+Required acceptance-gate reruns: Focused topography, eccentricity-component,
+MPI position, profile-schema, and validation-harness suites; run each new
+annular scientific profile before the final full-domain profile.
+Normative sections reconciled: Yes
+Implementation may continue: Yes
+Resolution: Accepted by explicit maintainer instruction.
+```
+
+```text
+Change ID: ECC-P1-VAL-003
+Status: Accepted
+Date: 2026-09-23
+Discovered during stage: Study-specific validation-domain design
+Requested by: Human maintainer
+Original requirement: Derive the RF-centre E_max unconditionally as half the
+smaller visual-field edge.
+Proposed change: Add optional maximum_eccentricity_deg beside
+minimum_eccentricity_deg. None retains the original derivation. An explicit
+value bounds RF centres independently and must not exceed half the smaller
+visual-field edge, leaving the remaining rectangle available as RF-support
+margin.
+Reason: Study-specific annuli need a centre-domain boundary independent of the
+larger stimulus rectangle required to contain their finite RF supports. This
+lets existing experiments continue to render from model.visual_field without
+validation-only stimulus mutation.
+Alternatives considered: Add a separate validation stimulus-region override,
+rejected as the primary design because many experiment classes read
+model.visual_field directly; reject or resample RFs crossing the centre-domain
+boundary, rejected because E_max is a centre boundary and such conditioning
+would alter the RF-size distribution.
+Affected normative sections: Provider constructor; Approved decisions; New LGN
+parameters; Visual domain; LGN position generation; cap validation; test plan
+and acceptance criteria.
+Affected production APIs or configuration: New required optional component key
+maximum_eccentricity_deg; optional third provider-constructor argument.
+Affected stages: Study-specific validation profiles and final full-domain
+validation. Legacy LGN is unchanged.
+Affected tests and regression anchors: Add explicit maximum, visual-field
+upper-bound, cap interaction, support-margin, seeded-None equivalence, schema,
+and metadata tests. Existing profiles configure None.
+Phase 1 / Phase 2 compatibility impact: Phase 2 consumes the resolved centre
+E_max exactly as before. The visual rectangle may now be larger than its
+centre disk.
+Randomness or MPI impact: None preserves the existing position proposals and
+draw order exactly. An explicit maximum changes the intended sampling domain
+but not stream ownership or rank reproducibility.
+Scientific or numerical impact: The density and RF-size laws retain their
+original joint distribution on the explicitly configured annulus. Stimulus
+pixels in the support-margin band remain available without adding centres.
+Required acceptance-gate reruns: Topography, eccentricity component, MPI
+position, profile-schema, validation-harness, neuron spatial-frequency, and
+legacy LGN suites.
+Normative sections reconciled: Yes
+Implementation may continue: Yes
+Resolution: Accepted by explicit maintainer instruction.
+```
+
+```text
+Change ID: ECC-P1-VAL-004
+Status: Accepted
+Date: 2026-09-23
+Discovered during stage: Historical-study matching policy
+Requested by: Human maintainer
+Original requirement: Treat a study's reported eccentricity as a replication
+anchor and resolve the Cudeiro Figure 2 eccentricity/SF-support mismatch before
+validation.
+Proposed change: Retain reported eccentricity as descriptive reference
+metadata only. Match model neurons by preferred spatial frequency, and by
+preferred temporal frequency where applicable; do not filter, derive domains,
+or decide pass/fail from the study's reported eccentricity.
+Reason: The model intentionally simplifies biological eccentricity--RF
+variation. Studies commonly report a mean eccentricity for all recorded cells,
+which can be shifted by outliers, while an individual plotted figure can use
+only a subset of those cells. The reported mean therefore does not identify the
+eccentricity of the neurons contributing to a matched curve.
+Alternatives considered: Require agreement with the reported mean
+eccentricity, rejected because it can exclude an otherwise appropriate
+spatial-frequency-matched subset; remove eccentricity from reference data,
+rejected because it remains useful descriptive provenance.
+Affected normative sections: Historical-study matching, remaining decisions,
+and the operational handover.
+Affected production APIs or configuration: None. The study-specific domain
+launcher already derives model domains exclusively from opt_sf.
+Affected stages: Historical spatial-frequency, contrast, and temporal-
+frequency comparisons.
+Affected tests and regression anchors: Matching tests must establish that
+reported eccentricity does not affect selection. Existing spatial-frequency-
+derived domain tests remain valid.
+Phase 1 / Phase 2 compatibility impact: None.
+Randomness or MPI impact: None.
+Scientific or numerical impact: Cudeiro Figure 2 is no longer blocked by the
+reported 6.7-degree mean. Its model domain is still restricted by the
+configured RF distribution's support for opt_sf=1.0 cycles/degree, but that is
+a model sampling decision rather than an eccentricity replication target.
+Required acceptance-gate reruns: Historical-study matching and comparison
+tests when that selection layer is implemented.
+Normative sections reconciled: Yes
+Implementation may continue: Yes
+Resolution: Accepted by explicit maintainer instruction. This supersedes the
+reported-eccentricity blocker recorded in ECC-P1-VAL-001.
+```
+
+```text
+Change ID: ECC-P1-VAL-005
+Status: Accepted
+Date: 2026-09-23
+Discovered during stage: Final full-domain profile planning
+Requested by: Human maintainer
+Original requirement: Leave the scientific population/recorder count open
+until joint multi-study coverage is computed.
+Proposed change: Add a separate derived full-domain final-check profile with
+E_min=0, E_max=25 degrees, 0.016 degree pixels, a 70.288-degree square visual
+field, and 3,245 cells per polarity. Record all cells. Keep the profile derived
+during annular tuning and copy only the accepted full model into a standalone
+implementation at the end of the work.
+Reason: Tuning and detailed study validation will occur in smaller annular
+runs. For the final full-domain check, 3,245 cells give each polarity
+independently approximately 95 percent probability of at least one cell within
+the provisional +/-10 percent window around 1 cycle/degree. Recording all
+cells preserves every post hoc matching candidate.
+Alternatives considered: Size immediately for joint multi-cell coverage,
+deferred because that is not required of the final check; retain the two-cell
+smoke profile, rejected as scientifically unrepresentative; record a random
+subset, rejected because the rare matching cell could be omitted.
+Affected normative sections: Scientific validation configuration and
+operational handover.
+Affected production APIs or configuration: New derived profiles
+param/lgn_eccentricity_scientific_full and
+param/defaults_eccentricity_scientific_full. Existing frozen and smoke profiles
+are unchanged.
+Affected stages: Final full-domain validation after annular tuning.
+Affected tests and regression anchors: Add a 3,000-cell distribution-level
+test comparing one full population with the density-weighted union of five
+annular populations. Do not add a broad profile-specific acceptance matrix.
+Phase 1 / Phase 2 compatibility impact: None.
+Randomness or MPI impact: The existing fixed streams are retained. The 95
+percent value is a probability over realizations, not a guarantee for the
+configured seed.
+Scientific or numerical impact: Each polarity has approximately 95 percent
+single-cell coverage at 1 cycle/degree; joint ON/OFF or multi-cell coverage is
+not claimed.
+Required acceptance-gate reruns: Before the expensive final simulation,
+manually inspect the realized metadata and require at least one matching cell
+in each polarity. This requirement is documentation only; do not implement or
+run automatic preflight code now. If it fails, increase the count or define a
+seed policy prospectively rather than selecting a seed after inspection.
+Acceptance-gate result: Completed locally on 2026-09-23 without running an
+experiment. The fixed realization contains three matching ON cells and two
+matching OFF cells in the 0.9--1.1 cycles/degree window. Construction took
+4.47 seconds, peaked at approximately 669 MiB RSS, and used no swap. Repeat the
+gate if the profile or seed changes.
+Normative sections reconciled: Yes
+Implementation may continue: Yes
+Resolution: Accepted by explicit maintainer instruction.
+```
+
 ## Version-control ownership
 
 The human maintainer owns all version-control operations.
@@ -466,10 +723,9 @@ transforms yet. Those methods are added to the same provider in Phase 2; do
 not introduce a temporary provider class or duplicate cap implementation.
 
 Phase 1 is complete when all LGN-scoped ordinary tests pass in legacy and
-eccentric modes, including one- and two-rank reproducibility. Its
-analytical-versus-spiking SF characterization then writes its plot and fails
-with the separately documented `TODO Finish` assertion. No cortical test is
-part of the Phase 1 gate.
+eccentric modes, including one- and two-rank reproducibility, and its
+analytical-versus-spiking SF characterization writes its plot and passes the
+approved `0.06`-octave tolerance. No cortical test is part of the Phase 1 gate.
 
 ### Phase 2: cortical correspondence
 
@@ -565,7 +821,9 @@ The shared provider is a runtime object, not serialized inside a
 `ParameterSet`. Its constructor contract is:
 
 ```text
-RadiallySymmetricLGNTopography(visual_field, parameters)
+RadiallySymmetricLGNTopography(
+    visual_field, parameters, maximum_eccentricity_deg=None
+)
 ```
 
 where `parameters` is the input component's `topography` subsection. The
@@ -623,7 +881,16 @@ The following decisions are requirements, not open implementation choices:
 
 - The visual field remains centred at the global origin `(0, 0)`.
 - Off-centre visual-field subsections are not supported in this phase.
-- The maximum modelled eccentricity is half the smaller visual-field edge.
+- The maximum RF-centre eccentricity defaults to half the smaller visual-field
+  edge. An explicit smaller value is permitted so the remaining visual
+  rectangle can contain RF support without receiving additional centres.
+- The minimum modelled eccentricity is configurable. Zero gives the original
+  disk; a positive value gives an annulus and must be smaller than `E_max`.
+- The scientific LGN validation centre domain uses `E_max = 25 degrees`, hence
+  requires a centred visual field at least 50-by-50 degrees. A larger rectangle
+  may provide RF-support margin. Existing 9-by-9-degree profiles remain
+  smoke/control or frozen-baseline configurations, not scientific population
+  profiles.
 - Neuron RF centres outside that eccentricity are not modelled.
 - Rectangular stimulus pixels outside the maximum eccentricity remain
   available; no circular stimulus mask is applied.
@@ -648,8 +915,9 @@ The following decisions are requirements, not open implementation choices:
 - Jitter sampling fails with a clear error after 10,000 unsuccessful attempts.
 - Orientation and phase map values are defined in cortical coordinates.
 - The known luminance scaling bug is corrected only in eccentricity mode.
-- The first full-neuron spatial-frequency validation intentionally ends in a
-  failing test after writing a plot and a `TODO Finish` marker.
+- The full-neuron spatial-frequency validation writes a diagnostic plot and
+  requires every fitted spike-output optimum to lie within `0.06` octaves of
+  its per-cell analytical DoG optimum.
 
 ## Legacy Mozaik implementation baseline
 
@@ -1389,9 +1657,9 @@ Validate `0 < beta < 2`, positive finite calibration constants, and positive
 finite `full_max_eccentricity`. This implementation fixes the calibration
 constants shown above and exposes only `full_max_eccentricity` and `beta` in
 configuration. A configured explicit cap must be finite, must be at least the
-derived empirical cap, and must not exceed `E_max`. `E_max >= 90 degrees` is
-the only visual-rectangle size rejection based on the intended mathematical
-range.
+derived empirical cap, and must not exceed `E_max`. The resolved RF-centre
+`E_max` must remain below 90 degrees. A larger visual rectangle is permitted
+when an explicit smaller `E_max` leaves a rendering margin.
 
 ## Required production API
 
@@ -1497,9 +1765,11 @@ reference for tests and for analytical comparisons.
 component assigns to cells. Both apply the configured cap. Neither stores
 state on the provider, which remains immutable: the caller owns the stream.
 
-`center_sigma_bounds_deg` returns the smallest and largest centre sigma the
-configuration can produce, as a pair, without drawing anything. It is the
-required source of the derived stimulus resolution and of the memory estimate.
+`center_sigma_bounds_deg(log10_residual_sd, truncation_sd,
+minimum_eccentricity_deg=0.0)` returns the smallest and largest centre sigma
+the configured disk or annulus can produce, as a pair, without drawing
+anything. It is the required source of the derived stimulus resolution and of
+the memory estimate.
 `rf_center_sigma_scatter_factors` returns the corresponding pair of
 multiplicative scatter factors `10**(-k*s)` and `10**(k*s)`.
 
@@ -1641,7 +1911,10 @@ as specified under [Authoritative configuration sources](#authoritative-configur
 The eccentricity LGN component replaces legacy `density` with:
 
 - `number_per_polarity`: positive integer;
+- `minimum_eccentricity_deg`: nonnegative finite float, smaller than `E_max`;
+- `maximum_eccentricity_deg`: `None` or a positive finite RF-centre boundary;
 - `minimum_samples_per_center_sigma`: positive finite float;
+- `visual_space_pixel_size_deg`: `None` or a positive finite float;
 - `topography.cap_eccentricity`: `None` or positive finite degrees;
 - `topography.full_max_eccentricity`: default `90.0`;
 - `topography.beta`: default `1.59`;
@@ -1662,10 +1935,10 @@ It retains:
 - recording configuration.
 
 It does not accept legacy `size`; the domain comes from `model.visual_field`.
-It does not accept `receptive_field.spatial_resolution`; resolution comes from
-the minimum sampling requirement. Mozaik parameter validation requires exact
-key equality, so supplying either legacy-only key to the new component raises
-`KeyError`.
+It does not accept `receptive_field.spatial_resolution`. Its grid is selected
+by `visual_space_pixel_size_deg`, with `None` deriving it from the minimum
+sampling requirement. Mozaik parameter validation requires exact key equality,
+so supplying either legacy-only key to the new component raises `KeyError`.
 
 Use these exact `required_parameters` types for optional values:
 
@@ -1687,7 +1960,10 @@ remove:
 
 add:
     number_per_polarity: int
+    minimum_eccentricity_deg: float
+    maximum_eccentricity_deg: (float, type(None))
     minimum_samples_per_center_sigma: float
+    visual_space_pixel_size_deg: (float, type(None))
     topography:
         cap_eccentricity: (float, type(None))
         full_max_eccentricity: float
@@ -1755,7 +2031,11 @@ requirements from this schema entry alone.
 
 `number_per_polarity` must be an integer greater than zero; do not accept a
 float that happens to be integral despite the parameter framework's historic
-`int`/`float` leniency. The sampling requirement, temporal dimensions, RF
+`int`/`float` leniency. `minimum_eccentricity_deg` must satisfy
+`0 <= E_min < E_max`. `maximum_eccentricity_deg` must be `None` or positive
+and finite and must not exceed half the smaller visual-field edge.
+`visual_space_pixel_size_deg` must be `None` or positive and finite. The
+sampling requirement, temporal dimensions, RF
 dimensions, and `full_max_eccentricity` must be positive and finite. The
 component explicitly rejects `original_2024_lgn_mode=True` before allocating
 populations or kernels.
@@ -1828,7 +2108,10 @@ not inject defaults. A minimal mode-specific configuration shape is:
 ```text
 Phase 1 input component:
     number_per_polarity = N
+    minimum_eccentricity_deg = 0.0
+    maximum_eccentricity_deg = None
     minimum_samples_per_center_sigma = S
+    visual_space_pixel_size_deg = None
     topography:
         cap_eccentricity = None
         full_max_eccentricity = 90.0
@@ -1945,29 +2228,54 @@ does not introduce an x/y transpose or sign reversal.
 
 Require the configured visual-field centre to equal `(0, 0)`.
 
-For visual width `W` and height `H`, define:
+For visual width `W` and height `H`, define the available centred radius:
 
 $$
-E_{\max}=\frac{\min(W,H)}{2}.
+E_{\mathrm{available}}=\frac{\min(W,H)}{2}.
+$$
+
+Resolve the RF-centre boundary as:
+
+$$
+E_{\max}=
+\begin{cases}
+E_{\mathrm{available}}, &
+\text{if maximum_eccentricity_deg is None},\\
+\text{maximum_eccentricity_deg}, & \text{otherwise.}
+\end{cases}
 $$
 
 Require:
 
 $$
-0<E_{\max}<90\ \text{degrees}.
+0<E_{\max}\leq E_{\mathrm{available}},\qquad
+E_{\max}<90\ \text{degrees}.
 $$
+
+The generic component retains this configurable domain. The canonical
+scientific LGN validation profile fixes the centre boundary at `E_max = 25
+degrees`, so it must set `W` and `H` to at least `50 degrees`. Larger values
+provide finite-RF support margin without changing the centre population. The
+existing `W = H = 9 degrees` profiles, with
+`E_max = 4.5 degrees`, remain smoke/control or frozen validation baselines and
+must not be interpreted as the scientific population. The 25-degree choice is
+the upper reported domain of the RF-size fit; no scientific-validation profile
+may silently substitute the `E_max -> 90 degrees` mathematical diagnostic.
 
 LGN RF centres occupy:
 
 $$
 D_{\mathrm{LGN}}
 =
-\{(x,y):x^2+y^2<E_{\max}^2\}.
+\{(x,y):E_{\min}^2\leq x^2+y^2<E_{\max}^2\}.
 $$
 
-The visual rectangle remains the stimulus rendering domain. Its corners and
-any excess band along the longer dimension contain no RF centres, but pixels
-are not masked.
+`E_min = 0` is the full-disk default. Scientific study profiles may choose a
+positive `E_min`; the final full-model validation restores `E_min = 0`.
+
+The visual rectangle remains the stimulus rendering domain. Its corners, any
+explicit RF-support margin, and any excess band along the longer dimension
+contain no RF centres, but pixels are not masked.
 
 ### Full cortical-map extent
 
@@ -2133,19 +2441,19 @@ raise a clear unsupported-operation error.
 
 ### Required distribution
 
-The density is radially symmetric and the approved RF-centre domain is a full
-disk. Sampling can therefore use a uniform-area disk proposal without
-rectangle angular corrections.
+The density is radially symmetric and the approved RF-centre domain is a disk
+or concentric annulus. Sampling can therefore use a uniform-area proposal
+without rectangle angular corrections.
 
 The target Cartesian probability density is:
 
 $$
 p(x,y)=
 \frac{\rho_{\mathrm{effective}}(\operatorname{hypot}(x,y))}
-{2\pi\int_0^{E_{\max}}r\rho_{\mathrm{effective}}(r)\,dr}
+{2\pi\int_{E_{\min}}^{E_{\max}}r\rho_{\mathrm{effective}}(r)\,dr}
 $$
 
-inside the disk and zero outside it. The production sampler need not evaluate
+inside the configured domain and zero outside it. The production sampler need not evaluate
 the denominator, because rejection from a uniform-area proposal produces this
 normalized distribution exactly. Tests must evaluate the denominator
 independently.
@@ -2153,7 +2461,7 @@ independently.
 For independent uniform variates `U` and `V`:
 
 $$
-r=E_{\max}\sqrt{U},\qquad
+r=\sqrt{E_{\min}^2+(E_{\max}^2-E_{\min}^2)U},\qquad
 \theta=2\pi V-\pi.
 $$
 
@@ -2163,23 +2471,21 @@ $$
 x=r\cos(\theta),\qquad y=r\sin(\theta).
 $$
 
-For no user cap, accept with:
+Let `E_density_floor = max(E_min, E_cap)` when a user cap is configured and
+`E_density_floor = E_min` otherwise. Accept with:
 
 $$
-P_{\mathrm{accept}}(r)=\frac{\rho(r)}{\rho(0)}.
-$$
-
-For an explicit cap, accept with:
-
-$$
-P_{\mathrm{accept}}(r)
-=
-\frac{\rho(\max(r,E_{\mathrm{cap}}))}
-{\rho(E_{\mathrm{cap}})}.
+P_{\mathrm{accept}}(r)=
+\frac{\rho_{\mathrm{effective}}(r)}
+{\rho(E_{\mathrm{density\ floor}})}.
 $$
 
 The uniform-area proposal already contains the radial area factor. Do not
 multiply density by `r` again.
+
+When `E_min = 0`, retain the original disk expression
+`r = E_max * sqrt(U)` and the original random draw order exactly, preserving
+seeded disk positions.
 
 Continue drawing until exactly `number_per_polarity` positions have been
 accepted.
@@ -2409,21 +2715,20 @@ Use minimum samples per centre sigma as the numerical sampling criterion. It
 corresponds directly to each cell's assigned centre sigma and does not depend
 on an arbitrary support multiplier.
 
-After both global LGN populations have been generated:
+Before drawing cells, calculate the smallest centre sigma supported by the
+configured disk or annulus and define:
 
-1. Calculate every cell's assigned centre sigma, including its drawn residual.
-2. Find the smallest sigma actually present.
-3. Calculate:
+$$
+dx_{\max}
+=
+\frac{\sigma_{c,\min}}
+{\text{minimum_samples_per_center_sigma}}.
+$$
 
-   $$
-   dx_{\mathrm{raw}}
-   =
-   \frac{\min_i\sigma_{c,i}}
-   {\text{minimum_samples_per_center_sigma}}.
-   $$
-
-4. Round downward to two significant digits.
-5. Use that `dx` for all RFs and all stimulus rendering.
+If `visual_space_pixel_size_deg is None`, round `dx_max` downward to two
+significant digits and use that value. If an explicit pixel size is configured,
+use it exactly when `dx <= dx_max`; reject a coarser value with `ValueError`.
+An explicit finer value is valid.
 
 For a positive value `x`, two-significant-digit downward rounding can be
 defined deterministically by:
@@ -2469,8 +2774,8 @@ $$
 E_{\mathrm{floor}}
 =
 \begin{cases}
-E_{\mathrm{cap}} & \text{with an explicit cap}\\
-0 & \text{otherwise,}
+\max(E_{\min},E_{\mathrm{cap}}) & \text{with an explicit cap}\\
+E_{\min} & \text{otherwise,}
 \end{cases}
 $$
 
@@ -2487,10 +2792,11 @@ seeded.
 
 Consequences that are normative:
 
-- `dx` depends only on `E_floor`, `E_max`, `s`, `k`, and
-  `minimum_samples_per_center_sigma`. It must be identical across seeds and
-  across population sizes for one parametrization, and it may be computed
-  before any cell is drawn;
+- the maximum admissible `dx` depends only on `E_floor`, `E_max`, `s`, `k`, and
+  `minimum_samples_per_center_sigma`. An automatically derived value is
+  identical across seeds and population sizes for one parametrization. An
+  explicit value can additionally be identical across different annuli when
+  it clears each annulus's bound;
 - the bound rule never yields a coarser `dx` than the realized-minimum rule,
   because the bound is by construction no larger than any drawn sigma and the
   two-significant-digit downward rounding is monotonic. No configuration is
@@ -2839,12 +3145,20 @@ evaluation of the continuous DoG.
 Use drifting sinusoidal gratings and define measured preferred spatial
 frequency as the frequency maximizing spike-output F1.
 
-Approved initial settings:
+The accepted repository criterion uses:
 
-- contrast: 100 percent;
-- duration: 2 seconds;
-- temporal frequency: 1 Hz;
-- spatial coordinate window: large enough to contain the entire RF support.
+- representative deterministic cells at `0` and `4 degrees`, with RF-size
+  scatter disabled so the eccentricity/SF relation is tested directly;
+- `100` percent contrast and `45 cd/m2` background luminance;
+- a `7 ms` frame interval and a frame-aligned temporal frequency of
+  `1000 / (72 * 7) = 1.984126984... Hz`;
+- a `252 ms` transient discard followed by two complete temporal cycles, for
+  `1260 ms` total stimulus duration;
+- a 12-by-12-degree stimulus window, large enough for the tested RF supports;
+- spatial-frequency samples at factors `0.50`, `0.78`, `0.92`, `1.00`, `1.08`,
+  `1.22`, and `1.50` around each theoretical optimum;
+- a robust log-quadratic fit to each spike-F1 curve;
+- a maximum absolute fitted-versus-theoretical error of `0.06` octaves.
 
 Record optima or response curves at:
 
@@ -2852,27 +3166,17 @@ Record optima or response curves at:
 - injected-current response;
 - spike-output F1.
 
-The first implementation deliberately leaves the following for manual
-selection:
-
-- mean luminance;
-- trial count;
-- transient-discard interval;
-- spatial-frequency grid;
-- refinement grid;
-- peak-fitting estimator;
-- final agreement tolerance.
-
 The test must:
 
 1. generate a plot containing theoretical and measured curves;
 2. make the output path visible;
-3. contain a `TODO Finish` comment at the unfinished validation point;
-4. fail unconditionally after writing the plot.
+3. numerically verify the analytical DoG optimum against a dense continuous
+   Fourier-domain evaluation;
+4. assert that every fitted spike-output optimum is within `0.06` octaves of
+   its theoretical value.
 
-This failing test is an expected deliverable, not a passing acceptance test.
-It prevents incomplete scientific criteria from being mistaken for completed
-validation.
+This criterion validates the deterministic per-cell RF relation. It does not
+replace historical-study matching or validate the sampled RF-size population.
 
 Do not recalibrate the model if analytical and spike-output optima differ.
 Report which processing stage introduces the difference.
@@ -2910,9 +3214,7 @@ Phase ownership within this section is:
 
 Tests must be named or marked by directory/class organization so these groups
 can be invoked independently without skipping assertions. Phase 2 reruns all
-Phase 1 ordinary tests as regressions. The intentional failure in M is run
-after the passing Phase 1 suite and is not part of Phase 2's ordinary
-pass/fail gate.
+Phase 1 ordinary tests as regressions, including the passing criterion in M.
 
 ### A. Legacy regression
 
@@ -2956,7 +3258,12 @@ pass/fail gate.
 
 ### D. Domain and position sampling
 
-- `E_max` equals half the smaller visual-field edge.
+- With `maximum_eccentricity_deg=None`, `E_max` equals half the smaller
+  visual-field edge and seeded positions are unchanged.
+- An explicit `maximum_eccentricity_deg` becomes `E_max` and must not exceed
+  half the smaller visual-field edge.
+- The band between explicit `E_max` and the visual-field edge remains
+  renderable and contains no LGN centres.
 - Off-centre fields are rejected.
 - `E_max >= 90 degrees` is rejected.
 - Rectangle corners beyond 90 degrees are accepted when `E_max < 90`.
@@ -3103,10 +3410,10 @@ pass/fail gate.
 - Full LGN neurons receive drifting gratings.
 - Linear, current, and spike F1 curves are plotted.
 - Representative eccentricities and RF scales are covered.
-- Approved initial contrast, duration, temporal frequency, and RF-fitting
-  window are used.
-- The test writes the requested plot and then fails intentionally with its
-  unfinished-validation TODO.
+- The approved contrast, duration, temporal frequency, spatial-frequency grid,
+  transient discard, and robust log-quadratic estimator are used.
+- The test writes the requested plot and asserts a maximum `0.06`-octave
+  fitted-versus-theoretical error for every representative cell.
 
 ## Acceptance criteria and tolerances
 
@@ -3155,6 +3462,9 @@ the design conversation.
   must be equal with `rtol=1e-12`, `atol=1e-12`.
 - Compare the realized residual standard deviation against the truncated
   value, approximately `0.9686 s` at `k = 3.0`, not against the parent `s`.
+- Exercise both full-disk and positive-`E_min` annular sampling for uncapped
+  and explicitly capped density, integrating each expected radial CDF over its
+  configured radial interval.
 - The derived resolution must be exactly equal across at least five seeds and
   at least three population sizes, while the realized minimum sigma is shown to
   differ across those same seeds.
@@ -3179,6 +3489,8 @@ the design conversation.
 - The rounded pixel size must equal the expected `Decimal` result exactly as a
   float, and every cell must satisfy the sampling lower bound with
   `atol=1e-12`.
+- An explicit pixel size no larger than the raw support bound must be retained
+  exactly across annuli; a larger value must fail before RF construction.
 - RF rescaling uses scale factors `0.5, 1, 2, 4`, both polarities, at least
   eight samples per centre sigma, identical temporal sampling, and stimulus
   windows with one pixel of background beyond the largest support. Test a
@@ -3225,28 +3537,20 @@ the design conversation.
   obtain explicit user instruction identifying which recorded legacy result
   is valid. Until then, do not relax, replace, normalize, or delete either
   anchor.
-- All existing tests must pass unchanged. The new passing eccentricity suite
-  must pass in full before running the deliberately unfinished SF
-  characterization.
+- All existing tests must pass unchanged. The eccentricity suite, including
+  the completed SF characterization, must pass in full.
 
-### Validation artifacts and the intentional failure
+### Validation artifacts and the spatial-frequency criterion
 
 Gabor-profile tests write plots under pytest's `tmp_path` and assert that each
 file exists and is nonempty; a command-line validation runner may instead use
 `MOZAIK_TEST_ARTIFACT_DIR`. It must log the absolute output path.
 
-The full-neuron SF characterization must be isolated in a plainly named test
-module or test class and run only after the passing suite has been reported.
-After successfully writing its plot it ends with:
-
-```text
-assert False, "TODO Finish: define and approve LGN spike-output SF acceptance criteria"
-```
-
-Do not mark it skipped or expected-failure. The documented result of the
-initial implementation is all ordinary tests passing plus this one explicit
-failure. A missing plot, simulation exception, or any different failing test
-is not an accepted result.
+The full-neuron SF characterization is isolated in
+`tests/models/vision/test_eccentricity_lgn_spatial_frequency.py`. It must write
+its plot, report each theoretical and fitted optimum, and pass only when every
+absolute error is at most `0.06` octaves. A missing plot, simulation exception,
+or tolerance failure is not an accepted result.
 
 ## Performance and memory
 
@@ -3516,25 +3820,26 @@ resolution.
 
 ### Stage 4: new-mode luminance correction
 
-Status: implementation present; acceptance incomplete.
+Status: repository-level implementation and acceptance complete; historical
+population validation remains tracked in the handover.
 
 The summed-luminance behavior, state carry-over, blank and explicit input,
 RF-rescaling characterization, theoretical DoG checks, and regression tests
-are present. The full-neuron characterization test is present in its required
-deliberately failing form. Final scientific protocol/tolerance approval and
-the Phase 1 performance benchmark matrix remain outstanding.
+are present. The full-neuron characterization writes its diagnostic plot and
+passes the approved `0.06`-octave criterion. The Phase 1 full-model/MPI
+performance benchmark matrix remains outstanding.
 
 - Add the eccentricity-specific summed-luminance path.
 - Cover starting, blank, explicit, and carried state.
 - Add RF-rescaling characterization.
 - Add theoretical DoG versus complete LGN preferred-SF characterization,
-  including the required plot and intentional `TODO Finish` failure.
+  including the required plot and `0.06`-octave acceptance criterion.
 - Confirm legacy behavior is unchanged.
 
 Exit criterion: the new luminance response no longer has the unintended
 `1/s^2` dependence, current changes are reported, all ordinary Phase 1 tests
-pass, and the separately run SF characterization produces its plot before its
-expected failure.
+pass, and the SF characterization produces its plot and passes its approved
+tolerance.
 
 ### Stage 4a: factorized RF evaluation
 
@@ -3590,12 +3895,13 @@ Status: not started.
 - Generate representative Gabor plots.
 - Run the centred disk-to-cortex end-to-end model.
 - Add Phase 2 cortical and connector performance reporting.
-- Rerun the complete passing Phase 1 suite and separately confirm that its
-  intentionally failing SF characterization still writes the expected plot.
+- Rerun the complete passing Phase 1 suite, including the SF characterization,
+  and confirm that it still writes the expected plot and passes the approved
+  tolerance.
 
 Exit criterion: the model runs end to end, limitations are quantified, and
-Phase 2 has not changed any Phase 1 contract. The unfinished LGN scientific
-acceptance criterion remains visibly separate from the passing Phase 2 suite.
+Phase 2 has not changed any Phase 1 contract. Historical-study population
+validation remains visibly separate from the repository-level SF criterion.
 
 ## Known limitations and future work
 
@@ -3641,17 +3947,22 @@ implementation blockers:
 - Corrected luminance responses may make historical gain values unsuitable.
 - Orientation-map correctness for a selected cortical size is the user's
   responsibility.
-- The full-neuron spatial-frequency agreement criterion is intentionally
-  unfinished.
+- The completed full-neuron spatial-frequency criterion uses deterministic
+  representative cells with centre-size scatter disabled; historical-study
+  matching and sampled-population validation remain separate work.
 
 ## Remaining decisions
 
 There are no unresolved decisions blocking the already implemented ordinary
-Phase 1 LGN behavior or independent Phase 2 work. Closing Stage 4 scientific
-acceptance still requires an explicit preferred-spatial-frequency protocol and
-tolerance. Exact centre/surround factorization has been selected, implemented,
-and measured. The broader end-to-end performance benchmark matrix remains
-outstanding but no longer blocks that optimization choice.
+Phase 1 LGN behavior. The repository-level preferred-spatial-frequency
+protocol and `0.06`-octave tolerance are accepted and passing. Exact
+centre/surround factorization has been selected, implemented, and measured.
+The broader end-to-end performance benchmark matrix remains outstanding but no
+longer blocks that optimization choice. Historical-study replication still
+requires the matched-population work recorded in
+`lgn_eccentricity_handover_condensed.md`. Reported experimental eccentricity
+is descriptive metadata and is not a matching constraint; the former Cudeiro
+Figure 2 blocker is superseded by ECC-P1-VAL-004.
 
 The following previously implicit compatibility limits are now explicit and
 do not require an implementation guess:
@@ -3688,8 +3999,6 @@ The following later scientific decisions are deliberately deferred:
   be normalized;
 - whether a later stimulus-rendering or cross-cell evaluation optimization is
   needed after the full benchmark matrix;
-- final protocol and tolerance for theoretical-versus-spiking preferred
-  spatial frequency;
 - whether the corrected luminance normalization should eventually become a
   separate general mode or replace legacy behavior in a future migration.
 
