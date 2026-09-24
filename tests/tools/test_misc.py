@@ -5,6 +5,7 @@ import numpy as np
 from mozaik.tools.misc import (
     find_neuron,
     normal_function,
+    result_directory_name,
     sample_from_bin_distribution,
 )
 
@@ -53,3 +54,38 @@ def test_find_neuron_returns_expected_named_positions():
     assert find_neuron("bottom_left", positions) == 2
     assert find_neuron("bottom_right", positions) == 3
     assert find_neuron("center", positions) == 4
+
+
+def test_result_directory_name_preserves_short_legacy_name():
+    assert result_directory_name("run", "Model", {"parameter": 1}) == (
+        "Model_run_____parameter:1"
+    )
+
+
+def test_result_directory_name_caps_combined_matched_replay_overrides():
+    overrides = {
+        f"sheets.retina_lgn.params.matched_population.long_parameter_{index}": (
+            f"long_value_{index}_with_additional_metadata"
+        )
+        for index in range(20)
+    }
+
+    name = result_directory_name(
+        "ParameterSearch_cheng_et_al_1995_figure_6_ii",
+        "LGNEccentricityValidation",
+        overrides,
+    )
+    changed = result_directory_name(
+        "ParameterSearch_cheng_et_al_1995_figure_6_ii",
+        "LGNEccentricityValidation",
+        {**overrides, "candidate_number_per_polarity": 164},
+    )
+
+    assert len(name.encode("ascii")) <= 240
+    assert name.startswith("LGNEccentricityValidation_ParameterSearch_cheng")
+    assert name == result_directory_name(
+        "ParameterSearch_cheng_et_al_1995_figure_6_ii",
+        "LGNEccentricityValidation",
+        overrides,
+    )
+    assert changed != name

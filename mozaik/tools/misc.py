@@ -143,4 +143,19 @@ def result_directory_name(simulation_run_name, simulation_name, modified_paramet
             ]
         )
 
-    return simulation_name + "_" + simulation_run_name + "_____" + modified_params_str
+    result = simulation_name + "_" + simulation_run_name + "_____" + modified_params_str
+    max_component_length = 240
+    if len(result) <= max_component_length:
+        return result
+
+    prefix = (
+        _shorten_result_directory_component(simulation_name, max_length=48)
+        + "_"
+        + _shorten_result_directory_component(simulation_run_name, max_length=64)
+        + "_____"
+    )
+    modified_params_str = _shorten_result_directory_component(
+        modified_params_str,
+        max_length=max_component_length - len(prefix),
+    )
+    return prefix + modified_params_str
