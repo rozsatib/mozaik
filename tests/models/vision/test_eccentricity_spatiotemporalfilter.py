@@ -19,6 +19,10 @@ from devtools.lgn_eccentricity_validation.temporal_scale_validation import (
     distribution_validation,
     plot_distribution_validation,
 )
+from devtools.lgn_eccentricity_validation.matched_population import (
+    MatchedEccentricityDependentSpatioTemporalFilterRetinaLGN,
+    estimate_density_median_spatial_frequency,
+)
 from mozaik.models.vision import cai97
 from mozaik.models.vision.spatiotemporalfilter import (
     CellWithReceptiveField,
@@ -28,10 +32,13 @@ from mozaik.models.vision.spatiotemporalfilter import (
     SpatioTemporalReceptiveField,
     SpatioTemporalFilterRetinaLGN,
     _round_down_to_two_significant_digits,
+    _sample_eccentricity_lgn_center_sigmas_by_type,
+    _sample_eccentricity_lgn_temporal_scales_by_type,
     _sample_lgn_positions,
     _sample_truncated_lognormal_scales,
     _temporal_scale_rngs,
     _center_sigma_rngs,
+    sample_eccentricity_lgn_population_plan,
 )
 from mozaik.models.vision.topography import RadiallySymmetricLGNTopography
 from mozaik.space import VisualSpace
@@ -653,7 +660,11 @@ class TestEccentricityComponentConfiguration:
             "_initialize_receptive_fields",
             lambda self: None,
         )
-        model = SimpleNamespace(sim=FakeSim(), visual_field=visual_field())
+        model = SimpleNamespace(
+            sim=FakeSim(),
+            visual_field=visual_field(),
+            parameters=ParameterSet({"pynn_seed": 936395}),
+        )
         retina = EccentricityDependentSpatioTemporalFilterRetinaLGN(
             model,
             eccentricity_parameters(
@@ -683,6 +694,9 @@ def _rf_only_component(
     height=4.0,
     temporal_resolution=7.0,
     temporal_scales_by_type=None,
+    center_sigmas_by_type=None,
+    center_size_log10_residual_sd=0.0,
+    center_size_truncation_sd=3.0,
     receptive_field_function_parameters=None,
     pynn_seed=936395,
     visual_field_size_x=16.0,
@@ -700,6 +714,8 @@ def _rf_only_component(
     parameters.receptive_field.width = width
     parameters.receptive_field.height = height
     parameters.receptive_field.temporal_resolution = temporal_resolution
+    parameters.center_size_log10_residual_sd = center_size_log10_residual_sd
+    parameters.center_size_truncation_sd = center_size_truncation_sd
     if receptive_field_function_parameters is not None:
         parameters.receptive_field.func_params = ParameterSet(
             receptive_field_function_parameters
@@ -732,13 +748,193 @@ def _rf_only_component(
             )
         ),
     )
-    if temporal_scales_by_type is not None:
-        component._sample_temporal_scales = lambda: temporal_scales_by_type
+    eccentricities_by_type = {
+        rf_type: np.hypot(
+            positions_by_type[rf_type][0], positions_by_type[rf_type][1]
+        )
+        for rf_type in RF_TYPES
+    }
+    if temporal_scales_by_type is None:
+        temporal_scales_by_type = _sample_eccentricity_lgn_temporal_scales_by_type(
+            positions_by_type["X_ON"].shape[1],
+            pynn_seed,
+            component.parameters.temporal_scale_distribution,
+        )
+    if center_sigmas_by_type is None:
+        center_sigmas_by_type = _sample_eccentricity_lgn_center_sigmas_by_type(
+            component.topography,
+            eccentricities_by_type,
+            pynn_seed,
+            center_size_log10_residual_sd,
+            center_size_truncation_sd,
+        )
+    component.population_plan = {
+        rf_type: {
+            "positions_deg": np.asarray(positions_by_type[rf_type], dtype=float),
+            "eccentricities_deg": np.asarray(
+                eccentricities_by_type[rf_type], dtype=float
+            ),
+            "center_sigmas_deg": np.asarray(
+                center_sigmas_by_type[rf_type], dtype=float
+            ),
+            "temporal_scales": np.asarray(
+                temporal_scales_by_type[rf_type], dtype=float
+            ),
+            "source_indices": np.arange(
+                positions_by_type[rf_type].shape[1], dtype=np.int64
+            ),
+        }
+        for rf_type in RF_TYPES
+    }
     component._validate_stage_2_parameters()
     component._validate_eccentricity_domain()
     component._validate_receptive_field_parameters()
     component._initialize_receptive_fields()
     return component
+
+
+def test_matched_population_replays_exact_rf_and_zero_noise_response():
+    import mozaik
+
+    residual_sd = 0.093765
+    candidate_count = 256
+    pynn_seed = 936395
+    mozaik_seed = 513
+    parameters = eccentricity_parameters(
+        number_per_polarity=5,
+        center_size_log10_residual_sd=residual_sd,
+    )
+    for polarity in RF_TYPES:
+        parameters.noise[polarity].stdev = 0.0
+    topography = provider()
+    estimate = estimate_density_median_spatial_frequency(topography, parameters)
+    parameters["matched_population"] = ParameterSet(
+        {
+            "candidate_number_per_polarity": candidate_count,
+            "target_spatial_frequency_cpd": estimate[
+                "preferred_spatial_frequency_cpd"
+            ],
+            "target_temporal_frequency_hz": None,
+            "matched_cells_per_polarity": 5,
+        }
+    )
+    replay_component = object.__new__(
+        MatchedEccentricityDependentSpatioTemporalFilterRetinaLGN
+    )
+    replay_component.parameters = parameters
+    replay_component.model = SimpleNamespace(
+        parameters=ParameterSet({"pynn_seed": pynn_seed})
+    )
+    replay_component.topography = topography
+    replay_component.rf_types = RF_TYPES
+    replay_component._validate_stage_2_parameters()
+
+    seed_rng = np.random.RandomState(mozaik_seed)
+    position_seeds = seed_rng.randint(2**32 - 1, size=2)
+    candidate = sample_eccentricity_lgn_population_plan(
+        topography,
+        candidate_count,
+        parameters.minimum_eccentricity_deg,
+        position_seeds,
+        pynn_seed,
+        parameters.temporal_scale_distribution,
+        residual_sd,
+        parameters.center_size_truncation_sd,
+    )
+    mozaik.setup_mpi(mozaik_seed, pynn_seed)
+    sampled_plan = sample_eccentricity_lgn_population_plan(
+        topography,
+        candidate_count,
+        parameters.minimum_eccentricity_deg,
+        mozaik.get_seeds(2),
+        pynn_seed,
+        parameters.temporal_scale_distribution,
+        residual_sd,
+        parameters.center_size_truncation_sd,
+    )
+    replay_component._population_plan_source_sizes = {
+        polarity: candidate_count for polarity in RF_TYPES
+    }
+    replay_component.population_plan = (
+        replay_component._select_population_plan_for_construction(sampled_plan)
+    )
+    replay_component._validate_population_plan()
+    replay_positions = {
+        polarity: replay_component.population_plan[polarity]["positions_deg"]
+        for polarity in RF_TYPES
+    }
+    replay_temporal_scales = {
+        polarity: replay_component.population_plan[polarity]["temporal_scales"]
+        for polarity in RF_TYPES
+    }
+    replay_center_sigmas = {
+        polarity: replay_component.population_plan[polarity]["center_sigmas_deg"]
+        for polarity in RF_TYPES
+    }
+    metadata = replay_component.matched_population_metadata
+    selected = replay_component.population_plan
+    candidate_noise_seeds = {
+        polarity: seed_rng.randint(2**32 - 1, size=candidate_count)
+        for polarity in RF_TYPES
+    }
+    for polarity in RF_TYPES:
+        indices = metadata["selected_candidate_indices_by_polarity"][polarity]
+        np.testing.assert_array_equal(
+            replay_component._noise_seeds(polarity, 5),
+            candidate_noise_seeds[polarity][indices],
+        )
+    candidate_positions = {
+        polarity: candidate[polarity]["positions_deg"] for polarity in RF_TYPES
+    }
+    candidate_temporal_scales = {
+        polarity: candidate[polarity]["temporal_scales"] for polarity in RF_TYPES
+    }
+    candidate_center_sigmas = {
+        polarity: candidate[polarity]["center_sigmas_deg"] for polarity in RF_TYPES
+    }
+    full = _rf_only_component(
+        candidate_positions,
+        temporal_scales_by_type=candidate_temporal_scales,
+        center_sigmas_by_type=candidate_center_sigmas,
+        center_size_log10_residual_sd=residual_sd,
+    )
+    replay = _rf_only_component(
+        replay_positions,
+        temporal_scales_by_type=replay_temporal_scales,
+        center_sigmas_by_type=replay_center_sigmas,
+        center_size_log10_residual_sd=residual_sd,
+    )
+
+    for polarity in RF_TYPES:
+        indices = metadata["selected_candidate_indices_by_polarity"][polarity]
+        for replay_index, candidate_index in enumerate(indices):
+            for field in full._rf_parameters[polarity]:
+                assert replay._rf_parameters[polarity][field][replay_index] == (
+                    full._rf_parameters[polarity][field][candidate_index]
+                )
+            full_cell = full.input_cells[polarity][candidate_index]
+            replay_cell = replay.input_cells[polarity][replay_index]
+            np.testing.assert_array_equal(
+                replay_cell.receptive_field.as_dense(),
+                full_cell.receptive_field.as_dense(),
+            )
+            full_cell.initialize(14.0)
+            replay_cell.initialize(14.0)
+            full_cell.view()
+            replay_cell.view()
+            np.testing.assert_array_equal(
+                replay_cell.kernel_response.contrast,
+                full_cell.kernel_response.contrast,
+            )
+            np.testing.assert_array_equal(
+                replay_cell.kernel_response.luminance,
+                full_cell.kernel_response.luminance,
+            )
+            full_current = full_cell.response_current(full_cell.kernel_response)
+            replay_current = replay_cell.response_current(replay_cell.kernel_response)
+            np.testing.assert_array_equal(
+                replay_current["amplitudes"], full_current["amplitudes"]
+            )
 
 
 class TestReceptiveFieldConfiguration:
@@ -805,13 +1001,14 @@ class TestCenterSizeSampling:
                 rf_type: np.vstack((np.linspace(0.0, 4.0, 48), np.zeros(48)))
                 for rf_type in RF_TYPES
             }
-        component = _rf_only_component(positions, pynn_seed=pynn_seed)
-        component.parameters.center_size_log10_residual_sd = residual_sd
-        component.parameters.center_size_truncation_sd = (
-            self.TRUNCATION_SD if truncation_sd is None else truncation_sd
+        return _rf_only_component(
+            positions,
+            pynn_seed=pynn_seed,
+            center_size_log10_residual_sd=residual_sd,
+            center_size_truncation_sd=(
+                self.TRUNCATION_SD if truncation_sd is None else truncation_sd
+            ),
         )
-        component._initialize_receptive_fields()
-        return component
 
     def test_resolution_follows_the_configuration_bound(self):
         component = self._component(self.RESIDUAL_SD)
@@ -903,13 +1100,13 @@ class TestTemporalScaleSampling:
         assert not np.array_equal(samples[0], different_seed)
 
     def test_component_requires_the_model_pynn_seed(self):
-        component = object.__new__(EccentricityDependentSpatioTemporalFilterRetinaLGN)
-        component.parameters = eccentricity_parameters(number_per_polarity=2)
-        component.rf_types = RF_TYPES
-        component.model = SimpleNamespace(parameters=ParameterSet({}))
-
         with pytest.raises(ValueError, match="model.parameters.pynn_seed"):
-            component._sample_temporal_scales()
+            EccentricityDependentSpatioTemporalFilterRetinaLGN(
+                SimpleNamespace(
+                    visual_field=visual_field(), parameters=ParameterSet({})
+                ),
+                eccentricity_parameters(number_per_polarity=2),
+            )
 
     def test_population_histograms_match_the_truncated_distribution(self, tmp_path):
         distribution = eccentricity_parameters().temporal_scale_distribution

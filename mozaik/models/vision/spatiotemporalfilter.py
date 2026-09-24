@@ -181,6 +181,141 @@ def _center_sigma_rngs(pynn_seed):
     )
 
 
+_ECCENTRICITY_LGN_RF_TYPES = ("X_ON", "X_OFF")
+
+
+def _sample_eccentricity_lgn_positions_by_type(
+    topography, number_per_polarity, minimum_eccentricity_deg, position_seeds
+):
+    return OrderedDict(
+        (
+            rf_type,
+            _sample_lgn_positions(
+                topography,
+                number_per_polarity,
+                numpy.random.RandomState(seed=position_seeds[index]),
+                minimum_eccentricity_deg,
+            ),
+        )
+        for index, rf_type in enumerate(_ECCENTRICITY_LGN_RF_TYPES)
+    )
+
+
+def _sample_eccentricity_lgn_center_sigmas_by_type(
+    topography,
+    eccentricities_by_type,
+    pynn_seed,
+    center_size_log10_residual_sd,
+    center_size_truncation_sd,
+):
+    rngs = _center_sigma_rngs(pynn_seed)
+    return OrderedDict(
+        (
+            rf_type,
+            numpy.asarray(
+                topography.sample_center_sigma_deg(
+                    eccentricities_by_type[rf_type],
+                    rng,
+                    center_size_log10_residual_sd,
+                    center_size_truncation_sd,
+                ),
+                dtype=float,
+            ),
+        )
+        for rf_type, rng in zip(_ECCENTRICITY_LGN_RF_TYPES, rngs)
+    )
+
+
+def _sample_eccentricity_lgn_temporal_scales_by_type(
+    number_per_polarity, pynn_seed, temporal_scale_distribution
+):
+    rngs = _temporal_scale_rngs(pynn_seed)
+    return OrderedDict(
+        (
+            rf_type,
+            _sample_truncated_lognormal_scales(
+                number_per_polarity,
+                temporal_scale_distribution.mu,
+                temporal_scale_distribution.sigma,
+                temporal_scale_distribution.lower_quantile,
+                temporal_scale_distribution.upper_quantile,
+                rng,
+            ),
+        )
+        for rf_type, rng in zip(_ECCENTRICITY_LGN_RF_TYPES, rngs)
+    )
+
+
+def sample_eccentricity_lgn_population_plan(
+    topography,
+    number_per_polarity,
+    minimum_eccentricity_deg,
+    position_seeds,
+    pynn_seed,
+    temporal_scale_distribution,
+    center_size_log10_residual_sd,
+    center_size_truncation_sd,
+):
+    """Sample an eccentricity-dependent LGN plan without creating neurons."""
+
+    if len(position_seeds) != len(_ECCENTRICITY_LGN_RF_TYPES):
+        raise ValueError("position_seeds must contain one seed per LGN polarity")
+    if (
+        isinstance(number_per_polarity, bool)
+        or not isinstance(number_per_polarity, numbers.Integral)
+        or number_per_polarity <= 0
+    ):
+        raise ValueError("number_per_polarity must be an integer greater than zero")
+
+    positions_by_type = _sample_eccentricity_lgn_positions_by_type(
+        topography,
+        number_per_polarity,
+        minimum_eccentricity_deg,
+        position_seeds,
+    )
+    eccentricities_by_type = OrderedDict(
+        (
+            rf_type,
+            numpy.hypot(
+                positions_by_type[rf_type][0], positions_by_type[rf_type][1]
+            ),
+        )
+        for rf_type in _ECCENTRICITY_LGN_RF_TYPES
+    )
+    center_sigmas_by_type = _sample_eccentricity_lgn_center_sigmas_by_type(
+        topography,
+        eccentricities_by_type,
+        pynn_seed,
+        center_size_log10_residual_sd,
+        center_size_truncation_sd,
+    )
+    temporal_scales_by_type = _sample_eccentricity_lgn_temporal_scales_by_type(
+        number_per_polarity, pynn_seed, temporal_scale_distribution
+    )
+
+    plan = OrderedDict()
+    for rf_type in _ECCENTRICITY_LGN_RF_TYPES:
+        values = {
+            "positions_deg": numpy.asarray(positions_by_type[rf_type], dtype=float),
+            "eccentricities_deg": numpy.asarray(
+                eccentricities_by_type[rf_type], dtype=float
+            ),
+            "center_sigmas_deg": numpy.asarray(
+                center_sigmas_by_type[rf_type], dtype=float
+            ),
+            "temporal_scales": numpy.asarray(
+                temporal_scales_by_type[rf_type], dtype=float
+            ),
+            "source_indices": numpy.arange(
+                number_per_polarity, dtype=numpy.int64
+            ),
+        }
+        for array in values.values():
+            array.setflags(write=False)
+        plan[rf_type] = values
+    return plan
+
+
 def meshgrid3D(x, y, z):
     r"""A slimmed-down version of http://www.scipy.org/scipy/numpy/attachment/ticket/966/meshgrid.py"""
     x = numpy.asarray(x)
@@ -1615,15 +1750,33 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
             self.scs = OrderedDict()
             self.ncs = OrderedDict()
 
-        position_seeds = mozaik.get_seeds(2)
-        positions_by_type = OrderedDict()
-        for index, rf_type in enumerate(self.rf_types):
-            positions_by_type[rf_type] = _sample_lgn_positions(
-                self.topography,
-                self.parameters.number_per_polarity,
-                numpy.random.RandomState(seed=position_seeds[index]),
-                self.parameters.minimum_eccentricity_deg,
+        try:
+            pynn_seed = self.model.parameters.pynn_seed
+        except AttributeError as exc:
+            raise ValueError(
+                "model.parameters.pynn_seed is required for population-plan sampling"
+            ) from exc
+        sampled_population_plan = sample_eccentricity_lgn_population_plan(
+            self.topography,
+            self._population_plan_sample_count(),
+            self.parameters.minimum_eccentricity_deg,
+            mozaik.get_seeds(2),
+            pynn_seed,
+            self.parameters.temporal_scale_distribution,
+            self.parameters.center_size_log10_residual_sd,
+            self.parameters.center_size_truncation_sd,
+        )
+        self._population_plan_source_sizes = OrderedDict(
+            (
+                rf_type,
+                int(sampled_population_plan[rf_type]["positions_deg"].shape[1]),
             )
+            for rf_type in self.rf_types
+        )
+        self.population_plan = self._select_population_plan_for_construction(
+            sampled_population_plan
+        )
+        self._validate_population_plan()
 
         for rf_type in self.rf_types:
             cell = copy.deepcopy(self.parameters.cell)
@@ -1648,12 +1801,60 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                         "mpi_safe": False,
                     }
                 ),
-                positions_by_type[rf_type],
+                self.population_plan[rf_type]["positions_deg"],
                 self.topography,
             )
 
         self._initialize_noise_sources()
         self._initialize_receptive_fields()
+
+    def _population_plan_sample_count(self):
+        """Return production count; validation overrides to sample extra candidates."""
+
+        return self.parameters.number_per_polarity
+
+    def _select_population_plan_for_construction(self, sampled_population_plan):
+        """Return all rows; validation overrides to select a construction subset."""
+
+        return sampled_population_plan
+
+    def _validate_population_plan(self):
+        expected_number = self.parameters.number_per_polarity
+        for rf_type in self.rf_types:
+            values = self.population_plan[rf_type]
+            positions = values["positions_deg"]
+            expected_shapes = {
+                "positions_deg": (2, expected_number),
+                "eccentricities_deg": (expected_number,),
+                "center_sigmas_deg": (expected_number,),
+                "temporal_scales": (expected_number,),
+                "source_indices": (expected_number,),
+            }
+            for name, shape in expected_shapes.items():
+                if values[name].shape != shape:
+                    raise ValueError(
+                        f"population plan {rf_type}.{name} has shape "
+                        f"{values[name].shape}, expected {shape}"
+                    )
+            if not all(numpy.all(numpy.isfinite(values[name])) for name in values):
+                raise ValueError(f"population plan {rf_type} contains non-finite values")
+            source_indices = values["source_indices"]
+            source_size = self._population_plan_source_sizes[rf_type]
+            if numpy.any(source_indices < 0) or numpy.any(source_indices >= source_size):
+                raise ValueError(
+                    f"population plan {rf_type}.source_indices are outside the "
+                    "sampled population"
+                )
+            expected_eccentricities = numpy.hypot(positions[0], positions[1])
+            if not numpy.allclose(
+                values["eccentricities_deg"],
+                expected_eccentricities,
+                rtol=0.0,
+                atol=1e-12,
+            ):
+                raise ValueError(
+                    f"population plan {rf_type} eccentricities do not match positions"
+                )
 
     def _validate_stage_2_parameters(self):
         number = self.parameters.number_per_polarity
@@ -1774,56 +1975,6 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
         ):
             raise ValueError("center_size_truncation_sd must be positive and finite")
 
-    def _sample_center_sigmas(self, eccentricities_by_type):
-        try:
-            pynn_seed = self.model.parameters.pynn_seed
-        except AttributeError as exc:
-            raise ValueError(
-                "model.parameters.pynn_seed is required for centre-size sampling"
-            ) from exc
-        residual_sd = self.parameters.center_size_log10_residual_sd
-        truncation_sd = self.parameters.center_size_truncation_sd
-        rngs = _center_sigma_rngs(pynn_seed)
-        return OrderedDict(
-            (
-                rf_type,
-                numpy.asarray(
-                    self.topography.sample_center_sigma_deg(
-                        eccentricities_by_type[rf_type],
-                        rng,
-                        residual_sd,
-                        truncation_sd,
-                    ),
-                    dtype=float,
-                ),
-            )
-            for rf_type, rng in zip(self.rf_types, rngs)
-        )
-
-    def _sample_temporal_scales(self):
-        try:
-            pynn_seed = self.model.parameters.pynn_seed
-        except AttributeError as exc:
-            raise ValueError(
-                "model.parameters.pynn_seed is required for temporal-scale sampling"
-            ) from exc
-        distribution = self.parameters.temporal_scale_distribution
-        rngs = _temporal_scale_rngs(pynn_seed)
-        return OrderedDict(
-            (
-                rf_type,
-                _sample_truncated_lognormal_scales(
-                    self.parameters.number_per_polarity,
-                    distribution.mu,
-                    distribution.sigma,
-                    distribution.lower_quantile,
-                    distribution.upper_quantile,
-                    rng,
-                ),
-            )
-            for rf_type, rng in zip(self.rf_types, rngs)
-        )
-
     def _validate_noise_parameters(self):
         for rf_type in ("X_ON", "X_OFF"):
             pair = self.parameters.noise[rf_type]
@@ -1915,7 +2066,7 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
         for rf_type in self.rf_types:
             sheet = self.sheets[rf_type]
             self.ncs_rng[rf_type] = []
-            seeds = mozaik.get_seeds((sheet.pop.size,))
+            seeds = self._noise_seeds(rf_type, sheet.pop.size)
 
             if self.integrated_cs:
                 for index, _ in enumerate(sheet.pop.all_cells):
@@ -1945,32 +2096,38 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                 lgn_cell.inject(step_source)
                 lgn_cell.inject(noise_source)
 
+    def _noise_seeds(self, rf_type, population_size):
+        """Return per-cell current-source seeds for one polarity."""
+
+        source_indices = self.population_plan[rf_type]["source_indices"]
+        if source_indices.shape != (population_size,):
+            raise AssertionError(
+                "population plan source indices do not match constructed population"
+            )
+        source_size = self._population_plan_source_sizes[rf_type]
+        return mozaik.get_seeds((source_size,))[source_indices]
+
     def _initialize_receptive_fields(self):
         receptive_field = self.parameters.receptive_field
         function_parameters = receptive_field.func_params
         reference_center_sigma = float(function_parameters.sigma_c)
         reference_surround_sigma = float(function_parameters.sigma_s)
-        temporal_scales_by_type = self._sample_temporal_scales()
-        eccentricities_by_type = OrderedDict(
-            (
-                rf_type,
-                numpy.hypot(
-                    self.sheets[rf_type].canonical_positions_deg[0],
-                    self.sheets[rf_type].canonical_positions_deg[1],
-                ),
-            )
-            for rf_type in self.rf_types
-        )
-        center_sigmas_by_type = self._sample_center_sigmas(eccentricities_by_type)
-
         rf_parameters = OrderedDict()
         all_center_sigmas = []
         all_eccentricities = []
         for rf_type in self.rf_types:
-            eccentricities = eccentricities_by_type[rf_type]
-            center_sigmas = center_sigmas_by_type[rf_type]
+            planned = self.population_plan[rf_type]
+            if not numpy.array_equal(
+                self.sheets[rf_type].canonical_positions_deg,
+                planned["positions_deg"],
+            ):
+                raise AssertionError(
+                    "retinal sheet positions differ from the population plan"
+                )
+            eccentricities = planned["eccentricities_deg"]
+            center_sigmas = planned["center_sigmas_deg"]
             scales = center_sigmas / reference_center_sigma
-            temporal_scales = temporal_scales_by_type[rf_type]
+            temporal_scales = planned["temporal_scales"]
             durations_ms = receptive_field.duration * temporal_scales
             temporal_samples = numpy.ceil(
                 durations_ms / receptive_field.temporal_resolution
