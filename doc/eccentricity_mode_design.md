@@ -10,9 +10,13 @@ level. Phase 1 Stages 0 through 4a are implemented. The repository-level
 full-neuron spatial-frequency criterion is complete and passes at the approved
 `0.06`-octave tolerance. The full end-to-end performance benchmark matrix has
 not been collected; an isolated RF/operator benchmark of the implemented
-factorization is recorded below. Historical-study population validation is
-tracked separately in `lgn_eccentricity_handover_condensed.md`. Phase 2 Stages
-5 through 7 have not started.
+factorization is recorded below. Historical-study validation infrastructure,
+including schema-5 preference metadata and deterministic matched replay, is
+implemented and tracked separately in
+`lgn_eccentricity_handover_condensed.md`. The full representative-population
+Papaioannou luminance run is complete and accepted; the matched frequency-study
+simulations and comparisons have not been completed. Phase 2 Stages 5 through
+7 have not started.
 The work is split by
 [Two-phase implementation boundary](#two-phase-implementation-boundary), with
 the smaller stages listed in [Implementation sequence](#implementation-sequence).
@@ -53,6 +57,14 @@ The repository currently contains both LGN input components:
   model currently selects it, and no retinotopic cortical sheet,
   eccentricity-dependent Gabor connector, or end-to-end LGN-to-cortex path has
   been implemented.
+- The validation runner has a separate full scientific profile with
+  `E_min = 0`, `E_max = 25 deg`, `0.016 deg/pixel`, a
+  `70.288-by-70.288 deg` visual field, and 3,245 cells per polarity. Its
+  canonical temporal-spread luminance parameters were initialized by a
+  single-kernel fit and accepted after the maintainer reviewed the completed
+  full Papaioannou population run on 2026-09-24. Frequency-matched replay
+  construction and launcher preflight are implemented, but no completed real
+  matched-replay study run is recorded yet.
 
 Ordinary legacy and eccentricity LGN tests, including the supported one- and
 two-rank regression probes, pass in the current development environment. The
@@ -61,6 +73,86 @@ and passes at the approved `0.06`-octave tolerance. Direct-script MPI probes
 require the repository root on `PYTHONPATH` so that repository-local test
 helpers can be imported; this is a test-harness requirement rather than an LGN
 runtime requirement.
+
+The full validation population is not restricted to one MPI rank. RF
+construction, filtering, current injection, and NEST ownership operate on
+local cells. A 32-rank cluster run is therefore an accepted operational choice
+for the 6,490-cell full profile, with one simulator thread per rank. This does
+not extend the reproducibility acceptance matrix: exact construction metadata
+has been compared only between one and two ranks, so a new high-rank cluster
+configuration must receive a short smoke check before an expensive run and
+must report complete, non-duplicated per-cell metadata and recordings.
+
+### Historical-study matched-selection contract
+
+Matched selection belongs to the validation runner and analysis/export path,
+not to the normative Mozaik model API. The full-population path selects cells
+post construction. The production component samples positions, eccentricities,
+centre sizes, and temporal scales into a population plan before creating any
+PyNN neurons; sheet and receptive-field construction read that plan rather
+than sampling again. The same simulator-independent population-plan function
+is used by launcher preflight. The validation-only replay path uses that
+planning step to realize candidate metadata, discards nonmatches, and passes
+only five matched rows per polarity to the common construction path. The model
+and stimulus are not moved or rescaled to make a cell match, and the production
+component must not acquire a study-specific selector.
+
+For every frequency-dependent reference study:
+
+1. Read `opt_sf` and `opt_tf` from
+   `devtools/lgn_eccentricity_validation/reference_data.json`.
+2. Never use paper-level or figure-level reported eccentricity to derive the
+   model domain, filter cells, rank candidates, or decide pass/fail. It remains
+   descriptive provenance only.
+3. Never substitute the stimulus `spatial_frequency` or
+   `temporal_frequency` for a missing neuronal optimum. A missing optimum uses
+   the median of the corresponding realized model preference distribution,
+   pooled across ON and OFF cells in that run before either frequency filter
+   is applied. Record the resolved target explicitly so the choice is
+   reproducible.
+4. Use the inclusive provisional linear-frequency interval
+   `[0.9 * target, 1.1 * target]` independently for SF and TF. When both
+   dimensions apply, a cell must satisfy their intersection. This biological
+   matching interval is distinct from the `0.5%` finite-kernel TF numerical
+   validation tolerance and the `0.06`-octave spike-level SF tolerance.
+5. Apply the same resolved targets to each polarity and report candidate
+   counts separately for ON and OFF. Full-population analysis retains every
+   match in deterministic metadata order. Matched replay retains the first
+   five matches per polarity, never uses reference `n_neurons` as a quota,
+   never chooses a nearest non-matching cell, and never changes the seed after
+   seeing the realization. If the fixed realization has fewer than five
+   matches, enlarge only its metadata-only candidate pool and repeat with the
+   same seed.
+6. Luminance is evaluated over the representative population and is not
+   frequency filtered. Trial-to-trial variability likewise remains outside
+   matched-frequency selection until an explicit policy is accepted for that
+   study.
+
+The metadata source is `lgn_validation_cells.json`. Schema 5 exports global
+identity, polarity, position/eccentricity, centre and surround sigmas, RF
+support, temporal scale, `preferred_temporal_frequency_hz`, and
+`preferred_spatial_frequency_cpd`, computed with
+`cai97.dog_optimal_spatial_frequency(Ac, As, center_sigma_deg,
+surround_sigma_deg)` from each cell's realized RF parameters. Do not infer the
+centre sigma from eccentricity after construction.
+
+Matched replay adds the virtual candidate index and its resolved preselection
+targets to this metadata. Its simulator population contains only the ten
+selected cells, while candidate positions and RF-scale parameters are
+generated by the same functions and random streams as a full production
+population. Both stochastic noise standard deviations must be zero; fitted
+tonic current means remain unchanged.
+
+The validation layer must write a machine-readable selection sidecar for each
+single-study datastore. It must include the study slug and reference identity,
+metadata schema version, source metadata filename, resolved SF/TF targets and
+whether each came from the reference or the model median, inclusive bounds,
+matching `(polarity, global_index, cell_id)` triples, per-polarity counts, and
+the explicit statement that reported eccentricity was not used. The common
+oracle exporter/plotting path must consume this sidecar when producing matched
+curves; plots alone are not authoritative. Full-population annular runs record
+all cells. Replay runs record all constructed cells plus the preselection
+provenance needed to map them back to the virtual population.
 
 ## How to use this document
 
@@ -450,6 +542,8 @@ cycles/degree and requires a separate validation decision.
 Required acceptance-gate reruns: Recompute joint match probabilities; rerun
 the canonical luminance gate in the new representative population before
 contrast and tuning validation.
+Acceptance-gate result: The full representative-population Papaioannou run was
+completed, reviewed by the maintainer, and accepted on 2026-09-24.
 Normative sections reconciled: Yes
 Implementation may continue: Yes, except Cudeiro Figure 2 cannot be called a
 replication until its eccentricity/support mismatch is resolved.
@@ -3948,8 +4042,9 @@ implementation blockers:
 - Orientation-map correctness for a selected cortical size is the user's
   responsibility.
 - The completed full-neuron spatial-frequency criterion uses deterministic
-  representative cells with centre-size scatter disabled; historical-study
-  matching and sampled-population validation remain separate work.
+  representative cells with centre-size scatter disabled. Historical-study
+  matched-replay infrastructure is complete; executing and assessing the
+  sampled-population studies remain separate work.
 
 ## Remaining decisions
 
@@ -3958,8 +4053,9 @@ Phase 1 LGN behavior. The repository-level preferred-spatial-frequency
 protocol and `0.06`-octave tolerance are accepted and passing. Exact
 centre/surround factorization has been selected, implemented, and measured.
 The broader end-to-end performance benchmark matrix remains outstanding but no
-longer blocks that optimization choice. Historical-study replication still
-requires the matched-population work recorded in
+longer blocks that optimization choice. The historical-study matched-population
+implementation is complete; historical-study replication still requires the
+real simulator runs and comparisons recorded in
 `lgn_eccentricity_handover_condensed.md`. Reported experimental eccentricity
 is descriptive metadata and is not a matching constraint; the former Cudeiro
 Figure 2 blocker is superseded by ECC-P1-VAL-004.
