@@ -14,9 +14,12 @@ factorization is recorded below. Historical-study validation infrastructure,
 including schema-5 preference metadata and deterministic matched replay, is
 implemented and tracked separately in
 `lgn_eccentricity_handover_condensed.md`. The full representative-population
-Papaioannou luminance run is complete and accepted; the matched frequency-study
-simulations and comparisons have not been completed. Phase 2 Stages 5 through
-7 have not started.
+Papaioannou luminance run is complete and accepted. The matched-replay smoke and
+initial full contrast simulation are complete; contrast comparison/tuning and
+the spatial/temporal matched studies remain. The tonic-only Kara variability
+calibration is provisionally complete; any fine-tuning is deferred until
+contrast tuning is completely finalized. Phase 2 Stages 5 through 7 have not
+started.
 The work is split by
 [Two-phase implementation boundary](#two-phase-implementation-boundary), with
 the smaller stages listed in [Implementation sequence](#implementation-sequence).
@@ -63,8 +66,17 @@ The repository currently contains both LGN input components:
   canonical temporal-spread luminance parameters were initialized by a
   single-kernel fit and accepted after the maintainer reviewed the completed
   full Papaioannou population run on 2026-09-24. Frequency-matched replay
-  construction and launcher preflight are implemented, but no completed real
-  matched-replay study run is recorded yet.
+  construction and launcher preflight are implemented; the real smoke and
+  initial full contrast workload have completed successfully.
+- The canonical temporal-spread configuration now carries the provisionally
+  accepted tonic-only Kara noise pairs: ON mean/stdev
+  `0.6397781529652166 / 3.3059476554890406 nA` and OFF mean/stdev
+  `0.6155267636642863 / 3.4392168944060377 nA`. The paired mean reductions
+  preserve the accepted zero-noise luminance firing-rate operating points while
+  introducing the required trial variability. This calibration may be
+  fine-tuned only after contrast tuning is final. Validation-only matched replay
+  continues to force zero noise standard deviation and retains its deterministic
+  contrast baseline.
 
 Ordinary legacy and eccentricity LGN tests, including the supported one- and
 two-rank regression probes, pass in the current development environment. The
@@ -752,6 +764,111 @@ Implementation may continue: Yes
 Resolution: Accepted by explicit maintainer instruction.
 ```
 
+```text
+Change ID: ECC-P1-VAL-006
+Status: Accepted provisionally
+Date: 2026-09-25
+Discovered during stage: Kara trial-to-trial variability calibration
+Requested by: Human maintainer
+Original requirement: Fit the model to the Kara et al. Figure 4C variability
+scatter while preserving the accepted mean firing-rate operating point.
+Proposed change: Use only the non-bursting, tonic-firing reference points and
+adopt the fitted polarity-specific working pairs: X_ON mean
+0.6397781529652166 nA and stdev 3.3059476554890406 nA; X_OFF mean
+0.6155267636642863 nA and stdev 3.4392168944060377 nA. Keep the earlier mixed
+burst/tonic points archived and skipped.
+Reason: The LGN model does not implement bursting, so burst observations are
+not valid calibration targets. Jointly lowering the tonic means as noise
+standard deviations increase preserves overall drive more closely than fitting
+variability at fixed means.
+Alternatives considered: Fit the mixed burst/tonic cloud, rejected as a model-
+scope mismatch; continue optimizing immediately, deferred because contrast
+tuning is not yet final and can alter the appropriate end-stage tradeoff.
+Affected normative sections: Current implementation snapshot; Luminance,
+contrast, current, and spikes; operational handover.
+Affected production APIs or configuration: No API change. The working values
+are applied in param/lgn_eccentricity_temporal_spread and inherited by
+param/lgn_eccentricity_scientific_full. Frozen Stage 5 and deterministic
+matched-replay profiles remain separate controls.
+Affected stages: Historical variability validation and the later noisy
+Papaioannou integration recheck.
+Affected tests and regression anchors: Parameter-loading coverage must assert
+the four working values. The variability fitter must retain the accepted
+zero-noise luminance means as its rate targets even after the working noisy
+configuration becomes active.
+Phase 1 / Phase 2 compatibility impact: None. This is validation-profile
+calibration, not a change to generic eccentricity-component behavior.
+Randomness or MPI impact: Nonzero stochastic current changes scientific-profile
+spike realizations but does not change stream derivation or MPI ownership.
+Matched replay explicitly remains deterministic.
+Scientific or numerical impact: The tonic variability match is sufficient for
+the current stage but not final. Its two polarities are each compared with the
+same pooled Kara cloud because the experiment did not label ON/OFF cells.
+Required acceptance-gate reruns: After contrast tuning is completely finalized,
+fine-tune these values only if needed and repeat a multi-trial Papaioannou run
+to measure any displacement of the accepted mean luminance curves.
+Acceptance-gate result: The tonic-only fit in
+fits/kara_variability_fit_20260925-154227.json was reviewed and accepted by the
+maintainer as the latest provisional working version on 2026-09-25.
+Normative sections reconciled: Yes
+Implementation may continue: Yes
+Resolution: Accepted provisionally by explicit maintainer instruction.
+```
+
+```text
+Change ID: ECC-P1-VAL-007
+Status: Accepted
+Date: 2026-09-28
+Discovered during stage: AdExp temporal-distortion analysis before contrast
+tuning (doc/adexp_temporal_compensation.md)
+Requested by: Human maintainer
+Original requirement: The RF-derived current is injected into the AdExp cell
+unchanged; historically, AdExp temporal distortion was absorbed by the temporal
+RF parameters.
+Proposed change: Add an optional, offline-identified, causal temporal
+compensation filter per polarity to the RF-derived current of the
+eccentricity component (parameter temporal_compensation), leaving the Gaussian
+background current, RF, and gain stages unchanged.
+Reason: Around the noisy tonic operating point the AdExp stage acts as an
+adaptation high-pass combined with a membrane low-pass: at the preferred TF the
+rate leads the current by about 8 deg, and the F1 gain is about twice the
+static slope. One filter identified from broadband current perturbations
+removes this for bars and gratings and generalizes across the supported
+temporal-scale range and 14-120 cd/m^2 backgrounds.
+Alternatives considered: Retuning temporal RF parameters (rejected: mixes RF
+and neuron properties); a noncausal filter (rejected: segments are injected
+one at a time); a one-sample-delay causal filter (validated but superseded by
+the zero-delay RF-spectrum-weighted design, which is at least as accurate);
+luminance-keyed filters (unnecessary: H does not change over 14-120 cd/m^2).
+Affected normative sections: AdExp temporal compensation of the RF-derived
+current.
+Affected production APIs or configuration: New required component parameter
+temporal_compensation (None disables it). Generated subtree
+param/temporal_compensation_temporal_spread is referenced by
+param/lgn_eccentricity_temporal_spread and inherited by the scientific-full
+profile; the Stage 4, frozen Stage 5, and matched-replay profiles set None.
+Affected stages: Contrast tuning (must be done with compensation on), Kara
+variability recheck, and later tuning studies.
+Affected tests and regression anchors: New TestTemporalCompensation unit tests,
+a real-NEST injection test, and a harness provenance test. With None the
+component output is unchanged, so existing anchors are unaffected.
+Phase 1 / Phase 2 compatibility impact: None; eccentricity component only.
+Randomness or MPI impact: None. The filter is deterministic, per local cell,
+and needs no communication.
+Scientific or numerical impact: sum(taps) = 1, so DC (and the accepted
+luminance calibration) is preserved exactly. Mid-band response gain drops to
+the static slope (about half), so contrast parameters must be retuned. The
+correction band ends at 21-26 Hz (probe coherence); the ~3 ms early bar-RF
+zero crossing remains; the filter is linear-regime only.
+Required acceptance-gate reruns: Contrast tuning; Kara variability recheck
+(fit_variability.py precomputes currents and must apply the same filter).
+Acceptance-gate result: Prototype Phase 4/5 validation and the zero-delay
+causal validation recorded in doc/adexp_temporal_compensation.md.
+Normative sections reconciled: Yes
+Implementation may continue: Yes
+Resolution: Implementation plan approved by the maintainer on 2026-09-28.
+```
+
 ## Version-control ownership
 
 The human maintainer owns all version-control operations.
@@ -1146,6 +1263,23 @@ The separated responses pass through the configured contrast and luminance
 gain functions and become injected currents. Currents are delivered through
 step/noise current sources or through the integrated current-source neuron
 path. LGN spiking is performed by the configured PyNN/NEST cell model.
+
+For the canonical temporal-spread scientific configuration, the latest
+provisional tonic-only Kara calibration is:
+
+| Parameter | Working value (nA) |
+| --- | ---: |
+| `noise.X_ON.mean` | `0.6397781529652166` |
+| `noise.X_ON.stdev` | `3.3059476554890406` |
+| `noise.X_OFF.mean` | `0.6155267636642863` |
+| `noise.X_OFF.stdev` | `3.4392168944060377` |
+
+These are configuration values, not changes to the generic component formula.
+They target Kara's tonic-only scatter while preserving the accepted zero-noise
+luminance firing-rate operating point. They remain provisional until contrast
+tuning is finalized and the noisy multi-trial Papaioannou recheck is complete.
+The matched-replay profile explicitly overrides both standard deviations to
+zero for deterministic frequency-study comparison.
 
 The eccentricity work must not alter temporal parameters, delay, gain
 parameters, noise, or neuron parameters.
@@ -3038,6 +3172,83 @@ Supplementary problem description:
 
 The implementation must not depend on that external file; the necessary
 design is included here.
+
+## AdExp temporal compensation of the RF-derived current
+
+The eccentricity component can filter each polarity's RF-derived current
+through a causal, per-polarity compensation filter before injection. This
+undoes the temporal distortion of the stochastic AdExp current-to-rate
+transformation around the noisy tonic operating point, so that the expected
+rate modulation follows the RF-derived current.
+
+### Configuration
+
+The component parameter is `temporal_compensation`. `None` disables the filter
+and leaves the injected currents bit-identical to the uncompensated
+implementation. Otherwise it is a subtree with these entries:
+
+- `sample_interval_ms`: must equal `receptive_field.temporal_resolution`.
+- `X_ON.b`, `X_ON.a`, `X_OFF.b`, `X_OFF.a`: `lfilter` coefficients, with
+  `a[0] = 1`, stable, and `sum(b) / sum(a) = 1` so DC is preserved exactly.
+- `provenance`, containing:
+  - the cell model and parameters;
+  - both noise pairs;
+  - the simulator time step;
+  - the RF temporal resolution and duration;
+  - the Cai97 temporal parameters `Ac As K1 K2 c1 c2 t1 t2 n1 n2 td`;
+  - the temporal-scale distribution;
+  - an informational `identification` record.
+
+The subtree is generated, never hand-edited, by
+`devtools/lgn_eccentricity_validation/fit_temporal_compensation.py`:
+
+1. It identifies H(f) from the native AdExp cell alone. A 0.1 nA
+   band-limited Gaussian probe on the RF temporal grid is added to the blank
+   RF-derived current and to the unchanged internal Gaussian background.
+2. It designs the zero-delay causal least-squares FIR:
+   - 428 taps;
+   - sum(taps) = 1;
+   - weighted by the envelope of the Cai97 temporal-kernel spectra over the
+     supported temporal-scale range;
+   - applied inside the coherence-limited band, with frequencies above the
+     band left uncorrected.
+
+The identification must be rerun whenever any provenance entry changes.
+
+### Runtime behavior
+
+- Construction validates the coefficients and compares the recorded
+  provenance with the active cell parameters, noise pairs, simulator time
+  step, temporal RF parameters, and temporal-scale distribution. A stale
+  filter raises `ValueError`.
+- The filter state is initialized per cell at the steady state of that cell's
+  background current. This is the null-response luminance current, matching
+  the LGN's assumption that the background has been viewed since time minus
+  infinity. The first presented segment, stimulus or blank, is therefore
+  filtered as if an arbitrarily long blank preceded it.
+- The eccentricity component's `inject_currents` applies the filter to every
+  stimulus and blank segment, once and in simulation order, before delegating
+  to the shared injection code:
+  - one `scipy.signal.lfilter` call per polarity processes the `(local cells,
+    samples)` array;
+  - the final state carries into the next segment, so segment-wise filtering
+    equals filtering one continuous recording;
+  - both the native-NEST and the PyNN current routes are covered.
+- The Gaussian background current is generated separately (inside the native
+  cell or as a separate PyNN source) and is never filtered.
+- State is kept per local cell, so MPI ranks need no communication. It is
+  never reset, following the RF `filter_state` lifecycle.
+- Exact continuity requires segments that tile the RF temporal grid; see the
+  TODO on non-divisible null durations in `calculate_null_input`.
+
+### Consequences for calibration
+
+DC preservation keeps the accepted luminance calibration valid. At mid
+frequencies the compensated response gain falls to the static slope, roughly
+half the uncompensated gain, so contrast tuning must be done with compensation
+enabled. Afterwards, `fit_variability.py` must apply the same filter to its
+precomputed currents before the Kara recheck. The filter is a linear-regime
+correction: it cannot undo rectification at the zero-rate floor.
 
 ## Retinocortical mapping
 

@@ -60,6 +60,7 @@ def _eccentricity_parameters():
     # relation, so the measured centre-size scatter is switched off here.
     parameters["center_size_log10_residual_sd"] = 0.0
     parameters["center_size_truncation_sd"] = 3.0
+    parameters["temporal_compensation"] = None
     del parameters["density"]
     del parameters["size"]
     del parameters["receptive_field"]["spatial_resolution"]

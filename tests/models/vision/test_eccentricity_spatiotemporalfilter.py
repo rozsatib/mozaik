@@ -1,5 +1,6 @@
 """Phase 1 Stage 2/3/4 tests for eccentricity-dependent LGN input."""
 
+from collections import OrderedDict
 import copy
 import hashlib
 import json
@@ -95,6 +96,7 @@ def eccentricity_parameters(**overrides):
     # exercised explicitly by the tests that override this.
     parameters["center_size_log10_residual_sd"] = 0.0
     parameters["center_size_truncation_sd"] = 3.0
+    parameters["temporal_compensation"] = None
     del parameters["density"]
     del parameters["size"]
     del parameters["receptive_field"]["spatial_resolution"]
@@ -2305,6 +2307,214 @@ def test_eccentricity_lgn_single_process_construction():
 @pytest.mark.mpi
 def test_eccentricity_lgn_positions_match_between_one_and_two_ranks():
     assert _run_probe(process_count=2) == _run_probe(process_count=1)
+
+
+COMPENSATION_FIR = [0.6, 0.35, -0.15, 0.25, -0.05]
+
+
+def _compensated_component(b=COMPENSATION_FIR, a=(1.0,), time_step=0.1):
+    """RF-only component with a valid temporal-compensation subtree."""
+
+    positions = np.array([[0.5, -1.0, 2.0], [0.0, 1.5, -0.5]])
+    component = _rf_only_component({"X_ON": positions, "X_OFF": positions.copy()})
+    component.model.sim = SimpleNamespace(get_time_step=lambda: time_step)
+    component.parameters.temporal_compensation = ParameterSet(
+        {
+            "sample_interval_ms": component.parameters.receptive_field.temporal_resolution,
+            "X_ON": {"b": list(b), "a": list(a)},
+            "X_OFF": {"b": list(b), "a": list(a)},
+            "provenance": component._temporal_compensation_provenance(),
+        }
+    )
+    component._validate_temporal_compensation_coefficients()
+    component._initialize_temporal_compensation()
+    return component
+
+
+def _background_currents(component):
+    """Steady blank current per local cell, via the ordinary null path."""
+
+    null = component.calculate_null_input(10 * 7.0)
+    return {
+        rf_type: np.array([current["amplitudes"][-1] for current in null[rf_type]])
+        for rf_type in RF_TYPES
+    }
+
+
+def _segment(component, samples, seed):
+    rng = np.random.default_rng(seed)
+    background = _background_currents(component)
+    return OrderedDict(
+        (
+            rf_type,
+            [
+                {
+                    "times": 7.0 * np.arange(samples),
+                    "amplitudes": level + rng.normal(0.0, 0.02, samples),
+                }
+                for level in background[rf_type]
+            ],
+        )
+        for rf_type in RF_TYPES
+    )
+
+
+class TestTemporalCompensation:
+    def test_none_leaves_currents_untouched(self):
+        component = _rf_only_component(
+            {"X_ON": np.zeros((2, 1)), "X_OFF": np.zeros((2, 1))}
+        )
+        component._initialize_temporal_compensation()
+        currents = _segment(component, 12, 1)
+        assert component._apply_temporal_compensation(currents) is currents
+
+    def test_background_is_preserved_from_the_first_sample(self):
+        component = _compensated_component()
+        for duration in (10 * 7.0, 6 * 7.0):
+            null = component.calculate_null_input(duration)
+            compensated = component._apply_temporal_compensation(null)
+            for rf_type in RF_TYPES:
+                for raw, filtered in zip(null[rf_type], compensated[rf_type]):
+                    np.testing.assert_allclose(
+                        filtered["amplitudes"], raw["amplitudes"], rtol=0, atol=1e-15
+                    )
+                    np.testing.assert_array_equal(filtered["times"], raw["times"])
+
+    def test_segments_equal_one_recording_after_infinite_background(self):
+        component = _compensated_component()
+        background = _background_currents(component)
+        first, second = _segment(component, 9, 2), _segment(component, 5, 3)
+        outputs = [
+            component._apply_temporal_compensation(first),
+            component._apply_temporal_compensation(second),
+        ]
+        prefix = 3 * len(COMPENSATION_FIR)
+        for rf_type in RF_TYPES:
+            for index, level in enumerate(background[rf_type]):
+                # A stimulus-first run must behave as if an arbitrarily long
+                # blank preceded it, and the two segments as one recording.
+                recording = np.concatenate(
+                    [
+                        np.full(prefix, level),
+                        first[rf_type][index]["amplitudes"],
+                        second[rf_type][index]["amplitudes"],
+                    ]
+                )
+                expected = np.convolve(recording, COMPENSATION_FIR)[
+                    prefix : len(recording)
+                ]
+                observed = np.concatenate(
+                    [output[rf_type][index]["amplitudes"] for output in outputs]
+                )
+                np.testing.assert_allclose(observed, expected, rtol=0, atol=1e-12)
+
+    def test_iir_coefficients_use_the_same_carried_state(self):
+        component = _compensated_component(b=[0.5], a=[1.0, -0.5])
+        background = _background_currents(component)
+        segments = [_segment(component, 7, seed) for seed in (4, 5, 6)]
+        outputs = [component._apply_temporal_compensation(s) for s in segments]
+        for rf_type in RF_TYPES:
+            for index, level in enumerate(background[rf_type]):
+                recording = np.concatenate(
+                    [s[rf_type][index]["amplitudes"] for s in segments]
+                )
+                expected, previous = [], level
+                for value in recording:
+                    previous = 0.5 * value + 0.5 * previous
+                    expected.append(previous)
+                observed = np.concatenate(
+                    [o[rf_type][index]["amplitudes"] for o in outputs]
+                )
+                np.testing.assert_allclose(observed, expected, rtol=0, atol=1e-12)
+
+    def test_cells_are_filtered_independently(self):
+        # Each MPI rank filters only its local cells; rows must not couple.
+        whole = _compensated_component()
+        currents = _segment(whole, 11, 7)
+        filtered = whole._apply_temporal_compensation(currents)
+        for rf_type in RF_TYPES:
+            for index, current in enumerate(currents[rf_type]):
+                single = _compensated_component()
+                state = single._temporal_compensation_state[rf_type][index : index + 1]
+                single._temporal_compensation_state[rf_type] = state
+                alone = single._apply_temporal_compensation(
+                    OrderedDict([(rf_type, [current])])
+                )
+                np.testing.assert_allclose(
+                    alone[rf_type][0]["amplitudes"],
+                    filtered[rf_type][index]["amplitudes"],
+                    rtol=0,
+                    atol=1e-15,
+                )
+
+    def test_inject_currents_filters_each_segment_once(self, monkeypatch):
+        component = _compensated_component()
+        injected = []
+        monkeypatch.setattr(
+            SpatioTemporalFilterRetinaLGN,
+            "inject_currents",
+            lambda self, currents, duration=None, offset=0: injected.append(currents),
+        )
+        reference = _compensated_component()
+        segments = [_segment(component, 6, seed) for seed in (8, 9)]
+        for segment in segments:
+            component.inject_currents(segment, 42.0, 0.0)
+        for segment, observed in zip(segments, injected):
+            expected = reference._apply_temporal_compensation(segment)
+            for rf_type in RF_TYPES:
+                for got, want in zip(observed[rf_type], expected[rf_type]):
+                    np.testing.assert_array_equal(got["amplitudes"], want["amplitudes"])
+
+    @pytest.mark.parametrize(
+        "b,a,error",
+        [
+            ([0.5, 0.4], [1.0], "unit DC gain"),
+            ([0.5], [2.0, -1.0], r"a\[0\] must be 1"),
+            ([2.0], [1.0, -1.5, 0.5], "unit DC gain|unstable"),
+            ([0.5], [1.0, -1.5], "unstable"),
+            ([np.nan, 1.0], [1.0], "must be finite"),
+            ([], [1.0], "non-empty"),
+        ],
+    )
+    def test_invalid_coefficients_are_rejected(self, b, a, error):
+        component = _compensated_component()
+        component.parameters.temporal_compensation.X_OFF.b = b
+        component.parameters.temporal_compensation.X_OFF.a = a
+        with pytest.raises(ValueError, match=error):
+            component._validate_stage_2_parameters()
+
+    def test_sample_interval_must_match_the_rf_grid(self):
+        component = _compensated_component()
+        component.parameters.temporal_compensation.sample_interval_ms = 3.5
+        with pytest.raises(ValueError, match="sample_interval_ms"):
+            component._validate_stage_2_parameters()
+
+    @pytest.mark.parametrize(
+        "mutate,name",
+        [
+            (lambda p: p.noise.X_ON.__setitem__("stdev", 1.0), "noise"),
+            (lambda p: p.cell.params.__setitem__("tau_w", 100.0), "cell_params"),
+            (
+                lambda p: p.receptive_field.func_params.__setitem__("td", 7.0),
+                "temporal_rf_params",
+            ),
+            (
+                lambda p: p.temporal_scale_distribution.__setitem__("sigma", 0.2),
+                "temporal_scale_distribution",
+            ),
+        ],
+    )
+    def test_stale_filter_is_rejected(self, mutate, name):
+        component = _compensated_component()
+        mutate(component.parameters)
+        with pytest.raises(ValueError, match=f"different {name}"):
+            component._initialize_temporal_compensation()
+
+    def test_time_step_change_is_rejected(self):
+        component = _compensated_component()
+        component.model.sim = SimpleNamespace(get_time_step=lambda: 0.05)
+        with pytest.raises(ValueError, match="different time_step_ms"):
+            component._initialize_temporal_compensation()
 
 
 if __name__ == "__main__" and PROBE_ARGUMENT in sys.argv:

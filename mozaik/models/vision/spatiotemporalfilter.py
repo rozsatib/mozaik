@@ -24,6 +24,7 @@ from builtins import zip
 from collections import OrderedDict
 from dataclasses import dataclass
 import copy
+from scipy.signal import lfilter, lfilter_zi
 from scipy.special import ndtri
 
 logger = mozaik.getMozaikLogger()
@@ -1459,6 +1460,12 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
         for rf_type in self.rf_types:
             input_currents[rf_type] = []
             for cell in self.input_cells[rf_type]:
+                # TODO: reject null durations that are not an integer multiple
+                # of the visual-space update interval. ceil() lengthens such a
+                # segment (e.g. 150 ms -> 43 x 3.5 ms = 150.5 ms), so
+                # consecutive segments overlap by a fraction of a sample and
+                # the carried kernel tail (and any stateful current filter)
+                # is no longer exactly continuous.
                 num_frames = (
                     int(numpy.ceil(duration / cell.visual_space.update_interval))
                     * cell.update_factor
@@ -1717,6 +1724,18 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                     ),
                 }
             ),
+            # Optional causal AdExp temporal-compensation filter applied to the
+            # RF-derived current of each polarity before injection (None
+            # disables it). Coefficients are identified offline by
+            # devtools/lgn_eccentricity_validation/fit_temporal_compensation.py.
+            "temporal_compensation": ParameterSet(
+                {
+                    "sample_interval_ms": float,
+                    "X_ON": ParameterSet({"b": list, "a": list}),
+                    "X_OFF": ParameterSet({"b": list, "a": list}),
+                    "provenance": ParameterSet,
+                }
+            ),
         }
     )
 
@@ -1807,6 +1826,7 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
 
         self._initialize_noise_sources()
         self._initialize_receptive_fields()
+        self._initialize_temporal_compensation()
 
     def _population_plan_sample_count(self):
         """Return production count; validation overrides to sample extra candidates."""
@@ -1873,6 +1893,7 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
         self._validate_gain_control_parameters()
         self._validate_temporal_scale_distribution()
         self._validate_center_size_distribution()
+        self._validate_temporal_compensation_coefficients()
 
         minimum_eccentricity = self.parameters.minimum_eccentricity_deg
         if (
@@ -2016,6 +2037,155 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
 
     def _noise_parameters(self, rf_type):
         return self.parameters.noise[rf_type]
+
+    # Names of the Cai97 parameters that shape the temporal kernel at the
+    # spatial peak, on which the offline compensation design depends.
+    _TEMPORAL_COMPENSATION_RF_PARAMETERS = (
+        "Ac",
+        "As",
+        "K1",
+        "K2",
+        "c1",
+        "c2",
+        "t1",
+        "t2",
+        "n1",
+        "n2",
+        "td",
+    )
+
+    def _temporal_compensation_coefficients(self, rf_type):
+        filter_parameters = self.parameters.temporal_compensation[rf_type]
+        return (
+            numpy.asarray(filter_parameters.b, dtype=float),
+            numpy.asarray(filter_parameters.a, dtype=float),
+        )
+
+    def _validate_temporal_compensation_coefficients(self):
+        """Check the optional compensation filter without needing a model."""
+
+        settings = self.parameters.temporal_compensation
+        if settings is None:
+            return
+        if (
+            settings.sample_interval_ms
+            != self.parameters.receptive_field.temporal_resolution
+        ):
+            raise ValueError(
+                "temporal_compensation.sample_interval_ms must equal "
+                "receptive_field.temporal_resolution"
+            )
+        for rf_type in ("X_ON", "X_OFF"):
+            b, a = self._temporal_compensation_coefficients(rf_type)
+            if b.ndim != 1 or a.ndim != 1 or not len(b) or not len(a):
+                raise ValueError(
+                    f"temporal_compensation.{rf_type} b and a must be non-empty lists"
+                )
+            if not (numpy.all(numpy.isfinite(b)) and numpy.all(numpy.isfinite(a))):
+                raise ValueError(f"temporal_compensation.{rf_type} must be finite")
+            if a[0] != 1.0:
+                raise ValueError(f"temporal_compensation.{rf_type}.a[0] must be 1")
+            if len(a) > 1 and numpy.any(numpy.abs(numpy.roots(a)) >= 1.0):
+                raise ValueError(f"temporal_compensation.{rf_type} is unstable")
+            # A constant RF-derived current must pass unchanged.
+            if abs(b.sum() / a.sum() - 1.0) > 1e-9:
+                raise ValueError(
+                    f"temporal_compensation.{rf_type} must have unit DC gain "
+                    "(sum(b) / sum(a) == 1)"
+                )
+
+    def _temporal_compensation_provenance(self):
+        """Configuration the offline identification must have used."""
+
+        receptive_field = self.parameters.receptive_field
+        distribution = self.parameters.temporal_scale_distribution
+        return {
+            "cell_model": self.parameters.cell.model,
+            "cell_params": self.parameters.cell.params.as_dict(),
+            "noise": {
+                rf_type: {
+                    "mean": float(self.parameters.noise[rf_type].mean),
+                    "stdev": float(self.parameters.noise[rf_type].stdev),
+                }
+                for rf_type in ("X_ON", "X_OFF")
+            },
+            "time_step_ms": float(self.model.sim.get_time_step()),
+            "temporal_resolution_ms": float(receptive_field.temporal_resolution),
+            "receptive_field_duration_ms": float(receptive_field.duration),
+            "temporal_rf_params": {
+                name: float(receptive_field.func_params[name])
+                for name in self._TEMPORAL_COMPENSATION_RF_PARAMETERS
+            },
+            "temporal_scale_distribution": distribution.as_dict(),
+        }
+
+    def _initialize_temporal_compensation(self):
+        """Validate provenance and start each cell's filter at steady state.
+
+        The LGN assumes the retina has viewed the background luminance since
+        time minus infinity, so the filter history is initialized with each
+        cell's steady background current rather than with the first injected
+        sample. The first presented segment is therefore filtered exactly as
+        if an infinitely long blank preceded it.
+        """
+
+        self._temporal_compensation_state = None
+        settings = self.parameters.temporal_compensation
+        if settings is None:
+            return
+        expected = self._temporal_compensation_provenance()
+        recorded = settings.provenance.as_dict()
+        for key, value in expected.items():
+            if recorded.get(key) != value:
+                raise ValueError(
+                    f"temporal_compensation was identified for a different "
+                    f"{key}; rerun fit_temporal_compensation.py for this "
+                    "configuration"
+                )
+        self._temporal_compensation_state = OrderedDict()
+        for rf_type in self.rf_types:
+            b, a = self._temporal_compensation_coefficients(rf_type)
+            background = numpy.array(
+                [
+                    cell.gain_function(
+                        cell.null_response.luminance,
+                        cell.gain_control.non_linear_gain.luminance_gain,
+                        cell.gain_control.non_linear_gain.luminance_scaler,
+                    )
+                    for cell in self.input_cells[rf_type]
+                ],
+                dtype=float,
+            )
+            self._temporal_compensation_state[rf_type] = numpy.outer(
+                background, lfilter_zi(b, a)
+            )
+
+    def _apply_temporal_compensation(self, input_currents):
+        """Filter each polarity's RF-derived currents, carrying the history.
+
+        Every injected segment passes through here once, in simulation order,
+        so the carried filter state makes segment-wise filtering identical to
+        filtering one continuous recording. The Gaussian background current is
+        generated separately and is never filtered.
+        """
+
+        if getattr(self, "_temporal_compensation_state", None) is None:
+            return input_currents
+        compensated = OrderedDict()
+        for rf_type, currents in input_currents.items():
+            if not currents:
+                compensated[rf_type] = currents
+                continue
+            b, a = self._temporal_compensation_coefficients(rf_type)
+            amplitudes = numpy.vstack([current["amplitudes"] for current in currents])
+            filtered, self._temporal_compensation_state[rf_type] = lfilter(
+                b, a, amplitudes, axis=1, zi=self._temporal_compensation_state[rf_type]
+            )
+            compensated[rf_type] = [
+                dict(current, amplitudes=values)
+                for current, values in zip(currents, filtered)
+            ]
+        return compensated
 
     def _validate_receptive_field_parameters(self):
         receptive_field = self.parameters.receptive_field
@@ -2336,6 +2506,8 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
         )
 
     def inject_currents(self, input_currents, duration=None, offset=0):
+        # Stimulus and blank segments both arrive here once, in order.
+        input_currents = self._apply_temporal_compensation(input_currents)
         return SpatioTemporalFilterRetinaLGN.inject_currents(
             self, input_currents, duration, offset
         )
