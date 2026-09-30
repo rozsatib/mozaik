@@ -818,6 +818,7 @@ def test_matched_population_replays_exact_rf_and_zero_noise_response():
             ],
             "target_temporal_frequency_hz": None,
             "matched_cells_per_polarity": 5,
+            "stochastic_noise": False,
         }
     )
     replay_component = object.__new__(
@@ -2515,6 +2516,60 @@ class TestTemporalCompensation:
         component.model.sim = SimpleNamespace(get_time_step=lambda: 0.05)
         with pytest.raises(ValueError, match="different time_step_ms"):
             component._initialize_temporal_compensation()
+
+
+def test_window_rendering_reproduces_whole_frame_kernel_responses():
+    from mozaik.stimuli.vision.topographica_based import (
+        FullfieldDriftingSinusoidalGrating,
+    )
+
+    positions = {
+        "X_ON": np.array([[1.5, -3.0, 0.4], [0.5, 2.0, -5.1]]),
+        "X_OFF": np.array([[-2.0, 3.5, 4.2], [-1.0, -4.5, 3.9]]),
+    }
+    component = _rf_only_component(positions)
+    component.model.parameters["store_stimuli"] = False
+    visual_space = component.model.input_space
+    duration = 70.0
+
+    def kernel_responses(render_whole_frames):
+        stimulus = FullfieldDriftingSinusoidalGrating(
+            frame_duration=7.0,
+            duration=duration,
+            trial=0,
+            size_x=16.0,
+            size_y=16.0,
+            location_x=0.0,
+            location_y=0.0,
+            background_luminance=45.0,
+            density=1.0 / component.visual_space_resolution_deg,
+            orientation=0.6,
+            spatial_frequency=0.8,
+            temporal_frequency=4.0,
+            contrast=90.0,
+        )
+        stimulus._render_whole_frames = render_whole_frames
+        visual_space.clear()
+        visual_space.add_object(str(stimulus), stimulus)
+        responses, _ = component.calculate_kernel_responses(visual_space, duration)
+        return stimulus, responses
+
+    windowed, windowed_responses = kernel_responses(False)
+    whole, whole_responses = kernel_responses(True)
+
+    # Only the cells' windows were rendered on one path, whole frames on the other.
+    assert windowed._img is None and not windowed._render_whole_frames
+    assert whole._img is not None
+    for rf_type in RF_TYPES:
+        assert len(windowed_responses[rf_type]) == 3
+        for windowed_response, whole_response in zip(
+            windowed_responses[rf_type], whole_responses[rf_type]
+        ):
+            assert np.any(windowed_response.contrast != 0.0)
+            assert np.array_equal(windowed_response.contrast, whole_response.contrast)
+            assert np.array_equal(
+                windowed_response.luminance, whole_response.luminance
+            )
 
 
 if __name__ == "__main__" and PROBE_ARGUMENT in sys.argv:

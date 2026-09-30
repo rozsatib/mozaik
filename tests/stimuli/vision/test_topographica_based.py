@@ -825,3 +825,173 @@ class TestRadialGaborApparentMotion(TestGabor):
             overlap = np.logical_or(overlap, flash_mask)
 
         assert np.all(overlap), "There is overlap between apparent motion Gabors"
+
+
+window_topo = dict(default_topo, duration=20)
+
+WINDOW_RENDERED_STIMULI = {
+    "sine_grating": lambda: topo.FullfieldDriftingSinusoidalGrating(
+        orientation=0.7,
+        spatial_frequency=0.9,
+        temporal_frequency=3.0,
+        contrast=80.0,
+        **window_topo,
+    ),
+    "square_grating": lambda: topo.FullfieldDriftingSquareGrating(
+        orientation=2.1,
+        spatial_frequency=0.6,
+        temporal_frequency=5.0,
+        contrast=60.0,
+        **window_topo,
+    ),
+    "null": lambda: topo.Null(**window_topo),
+    "flashed_bar": lambda: topo.FlashedBar(
+        relative_luminance=1.0,
+        orientation=0.4,
+        width=0.3,
+        length=4.0,
+        flash_duration=3,
+        x=1.2,
+        y=-0.8,
+        **window_topo,
+    ),
+}
+
+# Inside the stimulus, partly outside it on two sides, and fully outside it.
+WINDOW_REGIONS = (
+    VisualRegion(1.3, -2.2, 2.05, 1.5),
+    VisualRegion(4.9, 4.7, 3.0, 2.0),
+    VisualRegion(-6.5, 0.0, 3.0, 3.0),
+    VisualRegion(9.0, 9.0, 1.0, 1.0),
+)
+PIXEL_SIZE = 1.0 / default_topo["density"]
+
+
+def _whole_frame_twin(make_stimulus):
+    stimulus = make_stimulus()
+    stimulus._render_whole_frames = True
+    return stimulus
+
+
+class _PatternStimulus(topo.TopographicaBasedVisualStimulus):
+    def frames(self):
+        while True:
+            yield (self.pattern(), [0])
+
+
+class _TooBrightConstant(_PatternStimulus):
+    def pattern(self):
+        return imagen.Constant(
+            scale=3 * self.background_luminance,
+            bounds=BoundingBox(radius=self.size_x / 2),
+            xdensity=self.density,
+            ydensity=self.density,
+        )
+
+
+class _UniformNoise(_PatternStimulus):
+    def pattern(self):
+        return imagen.random.UniformRandom(
+            scale=self.background_luminance,
+            bounds=BoundingBox(radius=self.size_x / 2),
+            xdensity=self.density,
+            ydensity=self.density,
+            random_generator=numpy.random.RandomState(3),
+        )
+
+
+class TestWindowRendering:
+    @pytest.mark.parametrize("name", WINDOW_RENDERED_STIMULI)
+    def test_windows_match_whole_frames(self, name):
+        make_stimulus = WINDOW_RENDERED_STIMULI[name]
+        windowed = make_stimulus()
+        whole = _whole_frame_twin(make_stimulus)
+        for _ in range(20):
+            windowed.update()
+            whole.update()
+            for region in WINDOW_REGIONS:
+                assert numpy.array_equal(
+                    windowed.display(region, PIXEL_SIZE),
+                    whole.display(region, PIXEL_SIZE),
+                )
+            # The windowed stimulus never rendered a whole frame.
+            assert windowed._img is None
+            assert whole._img is not None
+
+    @pytest.mark.parametrize("name", WINDOW_RENDERED_STIMULI)
+    def test_frames_yield_patterns_that_render_the_whole_frame(self, name):
+        stimulus = WINDOW_RENDERED_STIMULI[name]()
+        pattern, variables = next(stimulus.frames())
+        array, array_variables = next(stimulus.frame_arrays())
+        assert isinstance(pattern, imagen.PatternGenerator)
+        assert variables == array_variables
+        assert numpy.array_equal(array, pattern())
+        stimulus.update()
+        assert numpy.array_equal(stimulus.img, array)
+        assert array.shape == stimulus._frame_shape(pattern)
+
+    def test_views_through_visual_space_match_whole_frames(self):
+        make_stimulus = WINDOW_RENDERED_STIMULI["sine_grating"]
+        views = []
+        for stimulus in (make_stimulus(), _whole_frame_twin(make_stimulus)):
+            visual_space = VisualSpace(
+                ParameterSet({"update_interval": 1, "background_luminance": 50.0})
+            )
+            visual_space.clear()
+            visual_space.add_object(str(stimulus), stimulus)
+            frames = []
+            for _ in range(5):
+                visual_space.update()
+                frames.append(
+                    [visual_space.view(r, PIXEL_SIZE) for r in WINDOW_REGIONS]
+                )
+            views.append(frames)
+        for windowed_frame, whole_frame in zip(*views):
+            for windowed_view, whole_view in zip(windowed_frame, whole_frame):
+                assert numpy.array_equal(windowed_view, whole_view)
+
+    def test_windows_covering_the_frame_switch_to_whole_frames(self):
+        make_stimulus = WINDOW_RENDERED_STIMULI["sine_grating"]
+        windowed = make_stimulus()
+        whole = _whole_frame_twin(make_stimulus)
+        # Nine 4 x 4 degree regions cover more pixels than the 11 x 11 degree frame.
+        regions = [
+            VisualRegion(x, y, 4.0, 4.0)
+            for x in (-3.5, 0.0, 3.5)
+            for y in (-3.5, 0, 3.5)
+        ]
+        for frame in range(3):
+            windowed.update()
+            whole.update()
+            for region in regions:
+                assert numpy.array_equal(
+                    windowed.display(region, PIXEL_SIZE),
+                    whole.display(region, PIXEL_SIZE),
+                )
+        assert windowed._render_whole_frames
+        assert windowed._img is not None
+
+    def test_zoomed_view_is_stable_when_cached(self):
+        stimulus = WINDOW_RENDERED_STIMULI["sine_grating"]()
+        stimulus.update()
+        region = VisualRegion(1.0, -1.0, 3.0, 2.0)
+        first = stimulus.display(region, 0.25)
+        second = stimulus.display(region, 0.25)
+        assert first.shape == (8, 12)
+        assert numpy.array_equal(first, second)
+
+    def test_random_patterns_are_rendered_whole(self):
+        stimulus = _UniformNoise(**window_topo)
+        whole = _whole_frame_twin(lambda: _UniformNoise(**window_topo))
+        stimulus.update()
+        whole.update()
+        view = stimulus.display(WINDOW_REGIONS[0], PIXEL_SIZE)
+        assert stimulus._img is not None
+        assert numpy.array_equal(view, whole.display(WINDOW_REGIONS[0], PIXEL_SIZE))
+
+    def test_luminance_is_checked_on_windows(self):
+        stimulus = _TooBrightConstant(**window_topo)
+        stimulus.update()
+        with pytest.raises(AssertionError, match="greater than the maximum luminance"):
+            stimulus.display(WINDOW_REGIONS[0], PIXEL_SIZE)
+        assert stimulus._img is None

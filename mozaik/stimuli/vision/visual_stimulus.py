@@ -27,8 +27,16 @@ class VisualStimulus(BaseStimulus):
     The only function that remains to be implemented by the user whenever creating a new stimulus by subclassing
     this class is the :func:`mozaik.stimuli.stimulus.BaseStimulus.frames` function.
     
-    This class also implements functions common to all visual stimuli that are required for it to be compatible 
+    This class also implements functions common to all visual stimuli that are required for it to be compatible
     with the :class:`mozaik.space.VisualSpace` and  class.
+
+    Frames can be yielded either as 2D arrays or as deferred frames, which are
+    rendered only when needed. A subclass that yields deferred frames implements
+    :func:`_render_frame` and :func:`_frame_shape`. :func:`display` then renders
+    only the pixel window it was asked for, as long as :func:`_renders_windows`
+    allows it for the frame and the windows rendered in a frame stay smaller than
+    the whole frame; otherwise the whole frame is rendered once and cropped. Both
+    paths must produce the same pixels.
     """
     background_luminance = SNumber(lux, doc="Background luminance. Maximum luminance of object allowed is 2*background_luminance")
     density = SNumber(1/(degrees), doc="The density of stimulus - units per degree")
@@ -37,10 +45,17 @@ class VisualStimulus(BaseStimulus):
     size_x = SNumber(degrees, doc="The size of the region in degrees (asimuth).")
     size_y = SNumber(degrees, doc="The size of the region in degrees (elevation).")
 
+    # Set to False to always render whole frames, e.g. to compare both paths.
+    window_rendering = True
+
     def __init__(self, **params):
         BaseStimulus.__init__(self, **params)
         self._zoom_cache = OrderedDict()
         self.region_cache = OrderedDict()
+        self._img = None
+        self._deferred_frame = None
+        self._window_pixels = 0
+        self._render_whole_frames = not self.window_rendering
         self.is_visible = True
         self.transparent = True # And efficiency flag. It should be set to false by the stimulus if there are no transparent points in it. 
                                 # This will avoid all the code related to transparency which is very expensive.
@@ -55,7 +70,7 @@ class VisualStimulus(BaseStimulus):
         small due to rounding error. This is a crude attempt to work around that.
         """
         zoom = actual_pixel_size/desired_pixel_size
-        for i in self.img.shape:
+        for i in self._current_frame_shape():
             if int(zoom*i) != round(zoom*i):
                 zoom *= (1 + 1e-15)
         return zoom
@@ -85,12 +100,13 @@ class VisualStimulus(BaseStimulus):
                 #view_relative_bottom = (intersection.bottom - region.bottom) / region.height
                 view_relative_height = intersection.height / region.height
 
-                img_pixel_size = xy2ij((self.region.size_x, self.region.size_y)) / self.img.shape  # is self.size a tuple or an array?
+                img_shape = self._current_frame_shape()
+                img_pixel_size = xy2ij((self.region.size_x, self.region.size_y)) / img_shape  # is self.size a tuple or an array?
                 assert img_pixel_size[0] == img_pixel_size[1]
-                
+
                 # necessary instead of == comparison due to the floating math rounding errors
                 if abs(pixel_size-img_pixel_size[0])<0.01:
-                    img = self.img
+                    zoom = None
                 else:
                     if self.first_resolution_mismatch_display:
                         logger.warning("Image pixel size does not match desired size (%g vs. %g) degrees. This is extremely inefficient!!!!!!!!!!!" % (pixel_size,img_pixel_size[0]))
@@ -100,16 +116,14 @@ class VisualStimulus(BaseStimulus):
                     # time by not rescaling the whole image, only the part within the view region.
                     zoom = self._calculate_zoom(img_pixel_size[0], pixel_size)  # img_pixel_size[0]/pixel_size
                     #logger.debug("Image pixel size (%g deg) does not match desired size (%g deg). Zooming image by a factor %g" % (img_pixel_size[0], pixel_size, zoom))
-                    if zoom in self._zoom_cache:
-                        img = self._zoom_cache[zoom]
-                    else:
-                        img = interpolation.zoom(self.img, zoom)
-                        self._zoom_cache[zoom] = img
+                    if zoom not in self._zoom_cache:
+                        self._zoom_cache[zoom] = interpolation.zoom(self.img, zoom)
+                    img_shape = self._zoom_cache[zoom].shape
 
-                j_start = numpy.round(img_relative_left * img.shape[1]).astype(int)
-                delta_j = numpy.round(img_relative_width * img.shape[1]).astype(int)
-                i_start = img.shape[0] - numpy.round(img_relative_top * img.shape[0]).astype(int)
-                delta_i = numpy.round(img_relative_height * img.shape[0]).astype(int)
+                j_start = numpy.round(img_relative_left * img_shape[1]).astype(int)
+                delta_j = numpy.round(img_relative_width * img_shape[1]).astype(int)
+                i_start = img_shape[0] - numpy.round(img_relative_top * img_shape[0]).astype(int)
+                delta_i = numpy.round(img_relative_height * img_shape[0]).astype(int)
 
                 l_start = numpy.round(view_relative_left * size_in_pixels[1]).astype(int)
                 delta_l = numpy.round(view_relative_width * size_in_pixels[1]).astype(int)
@@ -137,42 +151,101 @@ class VisualStimulus(BaseStimulus):
                 ##logger.debug("i_start = %d, i_stop = %d, j_start = %d, j_stop = %d" % (i_start, i_stop, j_start, j_stop))
                 ##logger.debug("k_start = %d, k_stop = %d, l_start = %d, l_stop = %d" % (k_start, k_stop, l_start, l_stop))
 
-                try:
-                    self.region_cache[region] = ((k_start,k_stop,l_start,l_stop),(i_start,i_stop, j_start,j_stop))
-                    view[k_start:k_stop, l_start:l_stop] = img[i_start:i_stop, j_start:j_stop]
-                    #self.region_cache[region] = ((k_start,k_start+delta_k,l_start,l_start+delta_l),(i_start,i_start+delta_i, j_start,j_start+delta_j))
-                    #view[k_start:k_start+delta_k, l_start:l_start+delta_l] = img[i_start:i_start+delta_i, j_start:j_start+delta_j]
-                except ValueError:
-                    logger.error("i_start = %d, i_stop = %d, j_start = %d, j_stop = %d" % (i_start, i_stop, j_start, j_stop))
-                    logger.error("k_start = %d, k_stop = %d, l_start = %d, l_stop = %d" % (k_start, k_stop, l_start, l_stop))
-                    logger.error("img.shape = %s, view.shape = %s" % (img.shape, view.shape))
-                    logger.error("img[i_start:i_stop, j_start:j_stop].shape = %s" % str(img[i_start:i_stop, j_start:j_stop].shape))
-                    logger.error("view[k_start:k_stop, l_start:l_stop].shape = %s" % str(view[k_start:k_stop, l_start:l_stop].shape))
-                    raise
-            else:
-                try:
-                    ((sx_min,sx_max,sy_min,sy_max),(tx_min,tx_max,ty_min,ty_max)) = self.region_cache[region]
-                    view[sx_min:sx_max,sy_min:sy_max] = self.img[tx_min:tx_max,ty_min:ty_max]
-                except ValueError:
-                    logger.error("i_start = %d, i_stop = %d, j_start = %d, j_stop = %d" % (i_start, i_stop, j_start, j_stop))
-                    logger.error("k_start = %d, k_stop = %d, l_start = %d, l_stop = %d" % (k_start, k_stop, l_start, l_stop))
-                    logger.error("img.shape = %s, view.shape = %s" % (img.shape, view.shape))
-                    logger.error("img[i_start:i_stop, j_start:j_stop].shape = %s" % str(img[i_start:i_stop, j_start:j_stop].shape))
-                    logger.error("view[k_start:k_stop, l_start:l_stop].shape = %s" % str(view[k_start:k_stop, l_start:l_stop].shape))
-                    raise
+                # The zoom is cached with the slices, as they index the zoomed image.
+                self.region_cache[region] = ((k_start,k_stop,l_start,l_stop),(i_start,i_stop, j_start,j_stop),zoom)
+
+            ((k_start,k_stop,l_start,l_stop),(i_start,i_stop,j_start,j_stop),zoom) = self.region_cache[region]
+            pixels = self._frame_pixels(i_start, i_stop, j_start, j_stop, zoom)
+            try:
+                view[k_start:k_stop, l_start:l_stop] = pixels
+            except ValueError:
+                logger.error("i_start = %d, i_stop = %d, j_start = %d, j_stop = %d" % (i_start, i_stop, j_start, j_stop))
+                logger.error("k_start = %d, k_stop = %d, l_start = %d, l_stop = %d" % (k_start, k_stop, l_start, l_stop))
+                logger.error("frame shape = %s, view.shape = %s" % (self._current_frame_shape(), view.shape))
+                logger.error("frame[i_start:i_stop, j_start:j_stop].shape = %s" % str(pixels.shape))
+                logger.error("view[k_start:k_stop, l_start:l_stop].shape = %s" % str(view[k_start:k_stop, l_start:l_stop].shape))
+                raise
         return view
+
+    def _renders_windows(self, frame):
+        r"""
+        Whether the deferred `frame` can be rendered one pixel window at a time.
+        Subclasses that yield deferred frames override this.
+        """
+        return False
+
+    def _frame_shape(self, frame):
+        r"""
+        The pixel shape of the whole deferred `frame`, obtained without rendering it.
+        """
+        raise NotImplementedError
+
+    def _render_frame(self, frame, window=None):
+        r"""
+        Render the deferred `frame` as a 2D array: the whole frame, or only the pixel
+        window (i_start, i_stop, j_start, j_stop) of the whole frame.
+        """
+        raise NotImplementedError
+
+    def _current_frame_shape(self):
+        if self._img is None and self._deferred_frame is not None:
+            return tuple(self._frame_shape(self._deferred_frame))
+        return self.img.shape
+
+    def _frame_pixels(self, i_start, i_stop, j_start, j_stop, zoom):
+        r"""
+        Pixels [i_start:i_stop, j_start:j_stop] of the current frame, zoomed by `zoom` unless it is None.
+        """
+        if zoom is not None:
+            if zoom not in self._zoom_cache:
+                self._zoom_cache[zoom] = interpolation.zoom(self.img, zoom)
+            return self._zoom_cache[zoom][i_start:i_stop, j_start:j_stop]
+        frame = self._deferred_frame
+        if (self._img is None and frame is not None and not self._render_whole_frames
+                and self._renders_windows(frame)):
+            window = self._check_luminance(self._render_frame(frame, (i_start, i_stop, j_start, j_stop)))
+            self._window_pixels += window.size
+            if self._window_pixels > numpy.prod(self._frame_shape(frame)):
+                # The windows now cost more than the whole frame (e.g. the viewed regions cover
+                # the field), so render whole frames for the rest of this stimulus.
+                self._render_whole_frames = True
+            return window
+        return self.img[i_start:i_stop, j_start:j_stop]
+
+    def _check_luminance(self, frame):
+        assert frame.min() >= 0 or frame.min() == TRANSPARENT, "frame minimum is less than zero: %g" % frame.min()
+        assert frame.max() <= 2*self.background_luminance, "frame maximum (%g) is greater than the maximum luminance (%g)" % (frame.max(), 2*self.background_luminance)
+        return frame
+
+    @property
+    def img(self):
+        r"""
+        The current frame as a 2D array. A deferred frame is rendered whole on first access.
+        """
+        if self._img is None and self._deferred_frame is not None:
+            self._img = self._check_luminance(self._render_frame(self._deferred_frame))
+        return self._img
+
+    @img.setter
+    def img(self, frame):
+        self._deferred_frame = None
+        self._img = self._check_luminance(frame)
 
     def update(self):
         r"""
         Sets the current frame to the next frame in the sequence.
         """
         try:
-            self.img, self.variables = next(self._frames)
+            frame, self.variables = next(self._frames)
         except StopIteration:
             self.visible = False
         else:
-            assert self.img.min() >= 0 or self.img.min() == TRANSPARENT, "frame minimum is less than zero: %g" % self.img.min()
-            assert self.img.max() <= 2*self.background_luminance, "frame maximum (%g) is greater than the maximum luminance (%g)" % (self.img.max(), 2*self.background_luminance)
+            if isinstance(frame, numpy.ndarray):
+                self.img = frame
+            else:
+                self._img = None
+                self._deferred_frame = frame
+            self._window_pixels = 0
         self._zoom_cache = OrderedDict()
 
     def reset(self):
@@ -187,3 +260,12 @@ class VisualStimulus(BaseStimulus):
         r"""For creating movies"""
         self.update()
         return [self.img]
+
+    def frame_arrays(self):
+        r"""
+        Iterate over :func:`frames` with deferred frames rendered whole, i.e. as (2D array, variables) pairs.
+        """
+        for frame, variables in self.frames():
+            if not isinstance(frame, numpy.ndarray):
+                frame = self._render_frame(frame)
+            yield frame, variables

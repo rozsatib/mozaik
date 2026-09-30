@@ -12,6 +12,7 @@ import imagen.random
 from imagen.transferfn import MaximumDynamicRange, FixedNorm
 import param
 from imagen.image import BoundingBox, GenericImage
+from imagen.sheetcoords import SheetCoordinateSystem
 from PIL import Image, ImageOps
 import pickle
 import numpy
@@ -53,10 +54,35 @@ class TopographicaBasedVisualStimulus(VisualStimulus):
     r"""
     As we do not handle transparency in the Topographica stimuli (i.e. all pixels of all stimuli difned here will have 0% transparancy)
     in this abstract class we disable the transparent flag defined by the :class:`mozaik.stimuli.visual_stimulus.VisualStimulus`, to improve efficiency.
+
+    The `frames` of these stimuli may yield an imagen PatternGenerator instead of
+    the array it generates, which lets :func:`display` render only the viewed pixel
+    windows. Yield a pattern only if each pixel depends on nothing but its own
+    coordinates; random patterns and patterns with output functions are always
+    rendered whole.
     """
     def __init__(self,**params):
         VisualStimulus.__init__(self,**params)
         self.transparent = False # We will not handle transparency anywhere here for now so let's make it False by default
+
+    def _renders_windows(self, pattern):
+        # Random patterns draw new values on every call, and output functions act on the whole array.
+        return not isinstance(pattern, imagen.random.RandomGenerator) and not pattern.output_fns
+
+    def _frame_shape(self, pattern):
+        return SheetCoordinateSystem(pattern.bounds, pattern.xdensity, pattern.ydensity).shape
+
+    def _render_frame(self, pattern, window=None):
+        if window is None:
+            return pattern()
+        # imagen rounds pixel-centre coordinates to 10 decimals, so a window whose edges lie on the
+        # pixel grid of the whole frame samples exactly the coordinates of the whole frame.
+        i_start, i_stop, j_start, j_stop = window
+        left, _, _, top = pattern.bounds.lbrt()
+        x_step = 1.0 / pattern.xdensity
+        y_step = 1.0 / pattern.ydensity
+        return pattern(bounds=BoundingBox(points=((left + j_start * x_step, top - i_stop * y_step),
+                                                  (left + j_stop * x_step, top - i_start * y_step))))
 
 class SparseNoise(TopographicaBasedVisualStimulus):
     r"""
@@ -181,7 +207,7 @@ class FullfieldDriftingSinusoidalGrating(TopographicaBasedVisualStimulus):
                                       offset = self.background_luminance*(100.0 - self.contrast)/100.0,
                                       scale=2*self.background_luminance*self.contrast/100.0,
                                       xdensity=self.density,
-                                      ydensity=self.density)(),
+                                      ydensity=self.density),
                    [self.current_phase])
             self.current_phase += 2*pi * (self.frame_duration/1000.0) * self.temporal_frequency
 
@@ -214,7 +240,7 @@ class FullfieldDriftingSquareGrating(TopographicaBasedVisualStimulus):
                     offset = self.background_luminance*(100.0 - self.contrast)/100.0,
                     scale = 2*self.background_luminance*self.contrast/100.0,
                     xdensity = self.density,
-                    ydensity = self.density)(),
+                    ydensity = self.density),
                 [self.current_phase])
             self.current_phase += 2*pi * (self.frame_duration/1000.0) * self.temporal_frequency
 
@@ -346,7 +372,7 @@ class Null(TopographicaBasedVisualStimulus):
             yield (imagen.Constant(scale=self.background_luminance,
                               bounds=BoundingBox(radius=self.size_x/2),
                               xdensity=self.density,
-                              ydensity=self.density)(),
+                              ydensity=self.density),
                    [self.frame_duration])
 
 
@@ -570,21 +596,21 @@ class FlashedBar(TopographicaBasedVisualStimulus):
                                     y = self.y,
                                     orientation=self.orientation,
                                     size = self.width,
-                                    aspect_ratio = self.length/ self.width)()  
+                                    aspect_ratio = self.length/ self.width)
 
-                                    
+
             b = imagen.Constant(scale=self.background_luminance,
                     bounds=BoundingBox(radius=self.size_x/2),
                     xdensity=self.density,
-                    ydensity=self.density)()
-                    
+                    ydensity=self.density)
+
             num_frames += 1;
-            if (num_frames-1) * self.frame_duration < self.flash_duration: 
+            if (num_frames-1) * self.frame_duration < self.flash_duration:
                 yield (d,[1])
             else:
                 yield (b,[0])
-            
-            
+
+
 class DriftingSinusoidalGratingCenterSurroundStimulus(TopographicaBasedVisualStimulus):
     r"""
     Orientation-contrast surround stimulus.
