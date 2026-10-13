@@ -96,6 +96,7 @@ def eccentricity_parameters(**overrides):
     # exercised explicitly by the tests that override this.
     parameters["center_size_log10_residual_sd"] = 0.0
     parameters["center_size_truncation_sd"] = 3.0
+    parameters["debug_legacy_luminance_normalization"] = False
     parameters["temporal_compensation"] = None
     del parameters["density"]
     del parameters["size"]
@@ -699,6 +700,7 @@ def _rf_only_component(
     center_sigmas_by_type=None,
     center_size_log10_residual_sd=0.0,
     center_size_truncation_sd=3.0,
+    debug_legacy_luminance_normalization=False,
     receptive_field_function_parameters=None,
     pynn_seed=936395,
     visual_field_size_x=16.0,
@@ -711,6 +713,9 @@ def _rf_only_component(
         maximum_eccentricity_deg=maximum_eccentricity_deg,
         minimum_samples_per_center_sigma=minimum_samples,
         visual_space_pixel_size_deg=visual_space_pixel_size_deg,
+        debug_legacy_luminance_normalization=(
+            debug_legacy_luminance_normalization
+        ),
     )
     parameters.topography.cap_eccentricity = cap_eccentricity
     parameters.receptive_field.width = width
@@ -1764,6 +1769,39 @@ def spatial_temporal_scale_grid():
 
 
 class TestEccentricityLuminanceCorrection:
+
+    def test_temporary_debug_flag_restores_only_legacy_luminance_mean(self):
+        positions = {
+            "X_ON": np.array([[0.0], [0.0]]),
+            "X_OFF": np.array([[0.0], [0.0]]),
+        }
+        corrected = _rf_only_component(positions)
+        debug_legacy = _rf_only_component(
+            positions, debug_legacy_luminance_normalization=True
+        )
+
+        for rf_type in RF_TYPES:
+            corrected_cell = corrected.input_cells[rf_type][0]
+            debug_cell = debug_legacy.input_cells[rf_type][0]
+            spatial_samples = np.prod(corrected_cell.receptive_field.shape[:2])
+            np.testing.assert_allclose(
+                debug_cell.kernel_response_operator.kernel_luminance_component,
+                corrected_cell.kernel_response_operator.kernel_luminance_component
+                / spatial_samples,
+                rtol=1e-12,
+                atol=1e-12,
+            )
+            image = np.arange(spatial_samples, dtype=float).reshape(
+                corrected_cell.receptive_field.shape[:2]
+            )
+            corrected_response = corrected_cell.kernel_response_operator(image, 45.0)
+            debug_response = debug_cell.kernel_response_operator(image, 45.0)
+            np.testing.assert_allclose(
+                debug_response.contrast,
+                corrected_response.contrast,
+                rtol=0.0,
+                atol=0.0,
+            )
 
     @pytest.mark.parametrize("luminance", np.geomspace(0.01, 100.0, 5))
     @pytest.mark.parametrize("spatial_scale_index", range(5))

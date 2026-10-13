@@ -30,6 +30,13 @@ from scipy.special import ndtri
 logger = mozaik.getMozaikLogger()
 
 
+_DEBUG_LEGACY_LUMINANCE_NORMALIZATION_WARNING = (
+    "TEMPORARY DEBUG ONLY: debug_legacy_luminance_normalization=True restores "
+    "the known-buggy legacy spatial-mean luminance response. It must not be "
+    "used for production simulations, calibration, or accepted model results."
+)
+
+
 _CAI97_RF_NUMERIC_PARAMETERS = (
     "Ac",
     "As",
@@ -1004,12 +1011,42 @@ class CellWithReceptiveField(object):
 class EccentricityDependentCellWithReceptiveField(CellWithReceptiveField):
     """Per-cell eccentricity RF path, including rectangular scaled support."""
 
+    def __init__(
+        self,
+        x,
+        y,
+        receptive_field,
+        gain_control,
+        visual_space,
+        original_2024_lgn_mode=False,
+        kernel_response_operator=None,
+        debug_legacy_luminance_normalization=False,
+    ):
+        # TEMPORARY DEBUG COMPATIBILITY ONLY. This deliberately restores the
+        # legacy bug that used the spatial mean after the RF had already been
+        # sample-normalized, losing a factor nx * ny. Do not make this a
+        # production model choice or use it for accepted calibrations.
+        self.debug_legacy_luminance_normalization = bool(
+            debug_legacy_luminance_normalization
+        )
+        super().__init__(
+            x,
+            y,
+            receptive_field,
+            gain_control,
+            visual_space,
+            original_2024_lgn_mode,
+            kernel_response_operator,
+        )
+
     def _validate_receptive_field_shape(self, kernel_shape):
         pass
 
     def _luminance_spatial_scale(self, kernel_shape):
         """Scale the spatial mean into the full spatial sum."""
 
+        if self.debug_legacy_luminance_normalization:
+            return 1.0
         return kernel_shape[0] * kernel_shape[1]
 
 
@@ -1671,6 +1708,9 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
             ),
             "center_size_log10_residual_sd": float,
             "center_size_truncation_sd": float,
+            # TEMPORARY DEBUG ONLY: restore the known-buggy legacy luminance
+            # spatial-mean response. This must remain False in production.
+            "debug_legacy_luminance_normalization": bool,
             "linear_scaler": float,
             "mpi_reproducible_noise": bool,
             "recorders": ParameterSet,
@@ -1741,6 +1781,8 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
 
     def __init__(self, model, parameters):
         SensoryInputComponent.__init__(self, model, parameters)
+        if self.parameters.debug_legacy_luminance_normalization:
+            logger.warning(_DEBUG_LEGACY_LUMINANCE_NORMALIZATION_WARNING)
         self._validate_stage_2_parameters()
         self._validate_receptive_field_parameters()
         if not hasattr(model, "visual_field"):
@@ -2497,6 +2539,9 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                         gain_control,
                         self.model.input_space,
                         False,
+                        debug_legacy_luminance_normalization=(
+                            self.parameters.debug_legacy_luminance_normalization
+                        ),
                     )
                 )
 
