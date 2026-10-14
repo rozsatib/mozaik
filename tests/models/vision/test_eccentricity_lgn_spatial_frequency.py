@@ -61,6 +61,8 @@ def _eccentricity_parameters():
     parameters["center_size_log10_residual_sd"] = 0.0
     parameters["center_size_truncation_sd"] = 3.0
     parameters["debug_legacy_luminance_normalization"] = False
+    parameters["debug_legacy_2024_input_current_mode"] = False
+    parameters["debug_historical_cai97_receptive_field"] = False
     parameters["temporal_compensation"] = None
     del parameters["density"]
     del parameters["size"]

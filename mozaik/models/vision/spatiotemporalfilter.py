@@ -36,6 +36,41 @@ _DEBUG_LEGACY_LUMINANCE_NORMALIZATION_WARNING = (
     "used for production simulations, calibration, or accepted model results."
 )
 
+_DEBUG_LEGACY_2024_INPUT_CURRENT_MODE_WARNING = (
+    "TEMPORARY DEBUG ONLY: debug_legacy_2024_input_current_mode=True restores "
+    "the legacy zero-luminance initialization, per-presentation filter reset, "
+    "null-input shortcut, and current-source timing. It must not be used for "
+    "production simulations, calibration, or accepted model results."
+)
+
+_DEBUG_HISTORICAL_CAI97_RF_WARNING = (
+    "TEMPORARY DEBUG ONLY: debug_historical_cai97_receptive_field=True replaces "
+    "the eccentric RF family with the historical Cai97 family and historical "
+    "absolute-sum normalization while mapping the selected cells to the same "
+    "nominal SF/TF targets. It must not be used for production simulations, "
+    "calibration, or accepted model results."
+)
+
+_HISTORICAL_CAI97_RF_PARAMETERS = {
+    "Ac": 0.00052060,
+    "As": 0.00002336,
+    "K1": 3.0,
+    "K2": 0.37,
+    "c1": 0.61471462,
+    "c2": 0.22824534 * 2.0 / 3.0,
+    "t1": -44.87613346,
+    "t2": -93.08789616 / (2.0 / 3.0),
+    "n1": 46.84962684,
+    "n2": 44.70041180,
+    "td": 8.86454539,
+    "sigma_c": 0.10780073,
+    "sigma_s": 0.48911512,
+    "subtract_mean": False,
+}
+_HISTORICAL_T_LSC_OFFSET_HZ = 2.5396758618754514
+_HISTORICAL_T_LSC_SLOPE_HZ = 1.9677575087817103
+_ECCENTRIC_RF_REFERENCE_PREFERRED_TF_HZ = 5.401611328125
+
 
 _CAI97_RF_NUMERIC_PARAMETERS = (
     "Ac",
@@ -1293,6 +1328,11 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
 
         return self.parameters.noise
 
+    def _uses_original_2024_lgn_mode(self):
+        """Return whether legacy filter-state and injection behavior is active."""
+
+        return self.parameters.original_2024_lgn_mode
+
     def process_input(self, visual_space, stimulus, duration=None, offset=0):
         r"""
         Present a visual stimulus to the model and create currents for the
@@ -1375,7 +1415,7 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
         keeps the old uncorrected timing.
         """
         ts = self.model.sim.get_time_step()
-        if self.parameters.original_2024_lgn_mode and self.integrated_cs:
+        if self._uses_original_2024_lgn_mode() and self.integrated_cs:
             offset = convert_time_pyNN_to_nest(self.model.sim, offset) + ts
 
         for rf_type in self.rf_types:
@@ -1580,7 +1620,7 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
         Once ``original_2024_lgn_mode`` is no longer needed, it can be merged
         with ``calculate_null_input``.
         """
-        if self.parameters.original_2024_lgn_mode:
+        if self._uses_original_2024_lgn_mode():
             self._provide_legacy_null_input(visual_space, duration, offset)
         else:
             self.inject_currents(self.calculate_null_input(duration), duration, offset)
@@ -1711,6 +1751,14 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
             # TEMPORARY DEBUG ONLY: restore the known-buggy legacy luminance
             # spatial-mean response. This must remain False in production.
             "debug_legacy_luminance_normalization": bool,
+            # TEMPORARY DEBUG ONLY: reproduce the legacy zero-luminance/filter-
+            # reset, null-input, and current-source timing behavior. This must
+            # remain False in production.
+            "debug_legacy_2024_input_current_mode": bool,
+            # TEMPORARY DEBUG ONLY: substitute the historical Cai97 RF family
+            # and exact historical absolute-sum normalization while preserving
+            # the selected cells' preferred frequencies.
+            "debug_historical_cai97_receptive_field": bool,
             "linear_scaler": float,
             "mpi_reproducible_noise": bool,
             "recorders": ParameterSet,
@@ -1783,6 +1831,10 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
         SensoryInputComponent.__init__(self, model, parameters)
         if self.parameters.debug_legacy_luminance_normalization:
             logger.warning(_DEBUG_LEGACY_LUMINANCE_NORMALIZATION_WARNING)
+        if self.parameters.debug_legacy_2024_input_current_mode:
+            logger.warning(_DEBUG_LEGACY_2024_INPUT_CURRENT_MODE_WARNING)
+        if self.parameters.debug_historical_cai97_receptive_field:
+            logger.warning(_DEBUG_HISTORICAL_CAI97_RF_WARNING)
         self._validate_stage_2_parameters()
         self._validate_receptive_field_parameters()
         if not hasattr(model, "visual_field"):
@@ -1945,6 +1997,7 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
             or minimum_eccentricity < 0.0
         ):
             raise ValueError("minimum_eccentricity_deg must be nonnegative and finite")
+
         maximum_eccentricity = self.parameters.maximum_eccentricity_deg
         if maximum_eccentricity is not None and (
             isinstance(maximum_eccentricity, bool)
@@ -1987,6 +2040,89 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                 or value <= 0.0
             ):
                 raise ValueError(f"{name} must be positive and finite")
+
+    def _uses_original_2024_lgn_mode(self):
+        """Return the temporary legacy-input debug mode for eccentricity LGN."""
+
+        return self.parameters.debug_legacy_2024_input_current_mode
+
+    @staticmethod
+    def _apply_historical_abs_sum_normalization(receptive_field):
+        """Apply the legacy ``normalize_abs_sum`` and ``dx * dy * dt`` rule."""
+
+        if receptive_field.factors is None:
+            raw_abs_sum = numpy.abs(receptive_field.kernel).sum()
+            # A dense quantized kernel already includes its old denominator.
+            raw_abs_sum *= receptive_field.normalization_denominator
+        else:
+            spatial_components = []
+            temporal_components = []
+            for spatial, temporal in receptive_field.factors:
+                if isinstance(spatial, tuple):
+                    spatial = numpy.multiply.outer(*spatial)
+                spatial_components.append(spatial)
+                temporal_components.append(temporal)
+            raw_abs_sum = 0.0
+            for sample_index in range(receptive_field.shape[2]):
+                plane = sum(
+                    spatial * temporal[sample_index]
+                    for spatial, temporal in zip(
+                        spatial_components, temporal_components
+                    )
+                )
+                raw_abs_sum += numpy.abs(plane).sum()
+
+        volume_element = (
+            receptive_field.spatial_resolution**2
+            * receptive_field.temporal_resolution
+        )
+        if not numpy.isfinite(raw_abs_sum) or raw_abs_sum <= 0.0:
+            raise ValueError("historical Cai97 RF has a nonpositive absolute sum")
+        receptive_field.normalization_denominator = raw_abs_sum / volume_element
+
+    @staticmethod
+    def _historical_cai97_cell_parameters(
+        current_parameters, center_sigma, surround_sigma, temporal_scale
+    ):
+        """Map one selected cell's nominal SF/TF targets to the legacy RF."""
+
+        desired_sf = cai97.dog_optimal_spatial_frequency(
+            current_parameters.Ac,
+            current_parameters.As,
+            center_sigma,
+            surround_sigma,
+        )
+        historical = ParameterSet(copy.deepcopy(_HISTORICAL_CAI97_RF_PARAMETERS))
+        historical_reference_sf = cai97.dog_optimal_spatial_frequency(
+            historical.Ac,
+            historical.As,
+            historical.sigma_c,
+            historical.sigma_s,
+        )
+        spatial_scale = historical_reference_sf / desired_sf
+        historical.sigma_c *= spatial_scale
+        historical.sigma_s *= spatial_scale
+
+        desired_tf = _ECCENTRIC_RF_REFERENCE_PREFERRED_TF_HZ / temporal_scale
+        t_lsc = (
+            desired_tf - _HISTORICAL_T_LSC_OFFSET_HZ
+        ) / _HISTORICAL_T_LSC_SLOPE_HZ
+        if not numpy.isfinite(t_lsc) or t_lsc <= 0.0:
+            raise ValueError(
+                "historical Cai97 debug RF cannot preserve preferred TF "
+                f"{desired_tf:g} Hz because legacy t_lsc={t_lsc:g}"
+            )
+        historical_temporal_scale = 1.0 / t_lsc
+        for name in ("t1", "t2", "td"):
+            historical[name] *= historical_temporal_scale
+        for name in ("c1", "c2"):
+            historical[name] /= historical_temporal_scale
+
+        width = numpy.ceil(5.0 * historical.sigma_s / 2.0) * 2.0
+        duration = (
+            4.0 * abs(_HISTORICAL_CAI97_RF_PARAMETERS["t1"]) / t_lsc
+        )
+        return historical, float(width), float(duration)
 
     def _validate_eccentricity_domain(self):
         if (
@@ -2485,24 +2621,38 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
             positions = self.sheets[rf_type].canonical_positions_deg
             gain_control = self._gain_control_parameters(rf_type)
             for global_index in numpy.flatnonzero(self.sheets[rf_type].pop._mask_local):
-                per_cell_parameters = copy.deepcopy(function_parameters)
-                per_cell_parameters.sigma_c = float(
-                    parameters["center_sigmas_deg"][global_index]
-                )
-                per_cell_parameters.sigma_s = float(
+                center_sigma = float(parameters["center_sigmas_deg"][global_index])
+                surround_sigma = float(
                     parameters["surround_sigmas_deg"][global_index]
                 )
                 temporal_scale = float(parameters["temporal_scales"][global_index])
-                for name in ("t1", "t2", "td"):
-                    per_cell_parameters[name] *= temporal_scale
-                for name in ("c1", "c2"):
-                    per_cell_parameters[name] /= temporal_scale
+                if self.parameters.debug_historical_cai97_receptive_field:
+                    per_cell_parameters, rf_width, rf_duration = (
+                        self._historical_cai97_cell_parameters(
+                            function_parameters,
+                            center_sigma,
+                            surround_sigma,
+                            temporal_scale,
+                        )
+                    )
+                    rf_height = rf_width
+                else:
+                    per_cell_parameters = copy.deepcopy(function_parameters)
+                    per_cell_parameters.sigma_c = center_sigma
+                    per_cell_parameters.sigma_s = surround_sigma
+                    for name in ("t1", "t2", "td"):
+                        per_cell_parameters[name] *= temporal_scale
+                    for name in ("c1", "c2"):
+                        per_cell_parameters[name] /= temporal_scale
+                    rf_width = float(parameters["widths_deg"][global_index])
+                    rf_height = float(parameters["heights_deg"][global_index])
+                    rf_duration = float(parameters["durations_ms"][global_index])
                 receptive_field_for_cell = SpatioTemporalReceptiveField(
                     rf_function,
                     per_cell_parameters,
-                    parameters["widths_deg"][global_index],
-                    parameters["heights_deg"][global_index],
-                    parameters["durations_ms"][global_index],
+                    rf_width,
+                    rf_height,
+                    rf_duration,
                     polarity=1.0 if rf_type == "X_ON" else -1.0,
                 )
                 receptive_field_for_cell.quantize(
@@ -2511,20 +2661,14 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                     receptive_field.temporal_resolution,
                     use_factorization=True,
                 )
+                if self.parameters.debug_historical_cai97_receptive_field:
+                    self._apply_historical_abs_sum_normalization(
+                        receptive_field_for_cell
+                    )
                 expected_shape = (
-                    int(
-                        numpy.ceil(
-                            parameters["heights_deg"][global_index]
-                            / self.visual_space_resolution_deg
-                        )
-                    ),
-                    int(
-                        numpy.ceil(
-                            parameters["widths_deg"][global_index]
-                            / self.visual_space_resolution_deg
-                        )
-                    ),
-                    int(parameters["temporal_samples"][global_index]),
+                    int(numpy.ceil(rf_height / self.visual_space_resolution_deg)),
+                    int(numpy.ceil(rf_width / self.visual_space_resolution_deg)),
+                    int(numpy.ceil(rf_duration / receptive_field.temporal_resolution)),
                 )
                 if receptive_field_for_cell.shape != expected_shape:
                     raise AssertionError(
@@ -2538,7 +2682,7 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                         receptive_field_for_cell,
                         gain_control,
                         self.model.input_space,
-                        False,
+                        self._uses_original_2024_lgn_mode(),
                         debug_legacy_luminance_normalization=(
                             self.parameters.debug_legacy_luminance_normalization
                         ),
@@ -2559,6 +2703,14 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
 
     def calculate_null_input(self, duration=None):
         return SpatioTemporalFilterRetinaLGN.calculate_null_input(self, duration)
+
+    def _provide_legacy_null_input(self, visual_space, duration=None, offset=0):
+        # TEMPORARY DEBUG ONLY: this delegation exists solely for
+        # debug_legacy_2024_input_current_mode. Eccentricity LGN does not use the
+        # historical null shortcut in production.
+        return SpatioTemporalFilterRetinaLGN._provide_legacy_null_input(
+            self, visual_space, duration, offset
+        )
 
     def provide_null_input(self, visual_space, duration=None, offset=0):
         return SpatioTemporalFilterRetinaLGN.provide_null_input(

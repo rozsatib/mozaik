@@ -97,6 +97,8 @@ def eccentricity_parameters(**overrides):
     parameters["center_size_log10_residual_sd"] = 0.0
     parameters["center_size_truncation_sd"] = 3.0
     parameters["debug_legacy_luminance_normalization"] = False
+    parameters["debug_legacy_2024_input_current_mode"] = False
+    parameters["debug_historical_cai97_receptive_field"] = False
     parameters["temporal_compensation"] = None
     del parameters["density"]
     del parameters["size"]
@@ -701,6 +703,8 @@ def _rf_only_component(
     center_size_log10_residual_sd=0.0,
     center_size_truncation_sd=3.0,
     debug_legacy_luminance_normalization=False,
+    debug_legacy_2024_input_current_mode=False,
+    debug_historical_cai97_receptive_field=False,
     receptive_field_function_parameters=None,
     pynn_seed=936395,
     visual_field_size_x=16.0,
@@ -715,6 +719,12 @@ def _rf_only_component(
         visual_space_pixel_size_deg=visual_space_pixel_size_deg,
         debug_legacy_luminance_normalization=(
             debug_legacy_luminance_normalization
+        ),
+        debug_legacy_2024_input_current_mode=(
+            debug_legacy_2024_input_current_mode
+        ),
+        debug_historical_cai97_receptive_field=(
+            debug_historical_cai97_receptive_field
         ),
     )
     parameters.topography.cap_eccentricity = cap_eccentricity
@@ -1769,6 +1779,75 @@ def spatial_temporal_scale_grid():
 
 
 class TestEccentricityLuminanceCorrection:
+
+    def test_temporary_historical_rf_preserves_sf_and_uses_legacy_abs_sum(self):
+        positions = {
+            "X_ON": np.array([[0.0], [0.0]]),
+            "X_OFF": np.array([[0.0], [0.0]]),
+        }
+        temporal_scales = {rf_type: np.array([1.0]) for rf_type in RF_TYPES}
+        current = _rf_only_component(
+            positions, temporal_scales_by_type=temporal_scales
+        )
+        historical = _rf_only_component(
+            positions,
+            temporal_scales_by_type=temporal_scales,
+            debug_historical_cai97_receptive_field=True,
+        )
+
+        for rf_type in RF_TYPES:
+            current_cell = current.input_cells[rf_type][0]
+            historical_cell = historical.input_cells[rf_type][0]
+            current_parameters = current_cell.receptive_field.func_params
+            historical_parameters = historical_cell.receptive_field.func_params
+            current_sf = cai97.dog_optimal_spatial_frequency(
+                current_parameters.Ac,
+                current_parameters.As,
+                current_parameters.sigma_c,
+                current_parameters.sigma_s,
+            )
+            historical_sf = cai97.dog_optimal_spatial_frequency(
+                historical_parameters.Ac,
+                historical_parameters.As,
+                historical_parameters.sigma_c,
+                historical_parameters.sigma_s,
+            )
+            assert historical_sf == pytest.approx(current_sf, rel=1e-12)
+
+            # The historical runner maps requested TF to its t_lsc parameter
+            # with f = offset + slope * t_lsc. Preserve the eccentric cell's
+            # nominal target under that historical convention.
+            historical_t_lsc = -44.87613346 / historical_parameters.t1
+            historical_nominal_tf = (
+                2.5396758618754514 + 1.9677575087817103 * historical_t_lsc
+            )
+            assert historical_nominal_tf == pytest.approx(
+                5.401611328125, rel=1e-12
+            )
+
+            receptive_field = historical_cell.receptive_field
+            expected_abs_sum = (
+                receptive_field.spatial_resolution**2
+                * receptive_field.temporal_resolution
+            )
+            assert np.abs(receptive_field.as_dense()).sum() == pytest.approx(
+                expected_abs_sum, rel=1e-12
+            )
+
+    def test_temporary_legacy_input_mode_reaches_per_cell_state_machine(self):
+        positions = {
+            "X_ON": np.array([[0.0], [0.0]]),
+            "X_OFF": np.array([[0.0], [0.0]]),
+        }
+        component = _rf_only_component(
+            positions, debug_legacy_2024_input_current_mode=True
+        )
+
+        assert component._uses_original_2024_lgn_mode()
+        for rf_type in RF_TYPES:
+            cell = component.input_cells[rf_type][0]
+            assert cell.original_2024_lgn_mode
+            assert cell.starting_luminance == 0
 
     def test_temporary_debug_flag_restores_only_legacy_luminance_mean(self):
         positions = {
