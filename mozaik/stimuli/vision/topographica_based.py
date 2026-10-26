@@ -1608,7 +1608,8 @@ class PixelMovieExperanto(TopographicaBasedVisualStimulus):
     """
     A visual stimulus that consists of a movie that is loaded from a file, where it is stored as a 3D numpy matrix (npy), 
     with the first axis the time, and 2nd and 3rd axis the visual field. The individual frames are presented one by one 
-    for the self.frame_duration. The stimulus is assumed to have pixel values in the interval [0,1].
+    for the self.frame_duration. Pixel values are scaled from [0, video_max_value] to
+    [0, 2*background_luminance].
 
     For now we only support suqare stimuli.
     """
@@ -1641,7 +1642,7 @@ class PixelMovieExperanto(TopographicaBasedVisualStimulus):
                     # print(">>>>>>>>>>>>>>>>>>>>>>>>>>> Got an image")
                     # if only one frame is present, we need to add a time axis
                     self.mc = self.mc[numpy.newaxis,:,:]
-                PixelMovieExperanto.cache[p] = self.mc/self.video_max_value  # normalizing the pixel values to [0,1]
+                PixelMovieExperanto.cache[p] = self.mc
 
         # assert self.mc.shape[1] == self.mc.shape[2], "The spatial shape of the pixel movie has to be square"
         assert ( self.duration <= self.movie_frame_duration * (len(self.mc)-self.frame_offset)), "The duration of the total stimulus has to be less than number of frames in the movie remaining after the offset times the movie frame duration."
@@ -1653,7 +1654,7 @@ class PixelMovieExperanto(TopographicaBasedVisualStimulus):
         while True:
             frame = int(math.floor(self.time/self.movie_frame_duration) + self.frame_offset)
             image = NDArrayImage(         
-                                self.mc[frame],
+                                self.mc[frame].astype(float, copy=True),
                                 x=self.x_location,
                                 y=self.y_location,
                                 orientation=0,
@@ -1663,7 +1664,7 @@ class PixelMovieExperanto(TopographicaBasedVisualStimulus):
                                 bounds=BoundingBox(points=((-self.size_x/2, -self.size_y/2),
                                                             (self.size_x/2, self.size_y/2))),
                                 scale=2*self.background_luminance,
-                                pattern_sampler= imagen.image.PatternSampler(size_normalization="fit_longest",whole_pattern_output_fns=[MaximumDynamicRange()]))
+                                pattern_sampler= imagen.image.PatternSampler(size_normalization="fit_longest",whole_pattern_output_fns=[FixedNorm(norm_value=self.video_max_value)]))
             
             yield (image(), [frame])
 
