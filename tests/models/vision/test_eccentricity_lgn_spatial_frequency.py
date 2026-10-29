@@ -61,6 +61,10 @@ def _eccentricity_parameters():
     parameters["center_size_log10_residual_sd"] = 0.0
     parameters["center_size_truncation_sd"] = 3.0
     parameters["debug_legacy_luminance_normalization"] = False
+    parameters["luminance_scaler_spatial_mean_units"] = False
+    parameters["rf_scaler_historical_normalization_units"] = False
+    parameters["receptive_field_parameterization"] = None
+    parameters["debug_historical_cai97_receptive_field"] = False
     parameters["temporal_compensation"] = None
     del parameters["density"]
     del parameters["size"]

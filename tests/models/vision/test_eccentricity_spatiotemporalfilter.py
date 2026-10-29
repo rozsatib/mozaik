@@ -97,6 +97,10 @@ def eccentricity_parameters(**overrides):
     parameters["center_size_log10_residual_sd"] = 0.0
     parameters["center_size_truncation_sd"] = 3.0
     parameters["debug_legacy_luminance_normalization"] = False
+    parameters["luminance_scaler_spatial_mean_units"] = False
+    parameters["rf_scaler_historical_normalization_units"] = False
+    parameters["receptive_field_parameterization"] = None
+    parameters["debug_historical_cai97_receptive_field"] = False
     parameters["temporal_compensation"] = None
     del parameters["density"]
     del parameters["size"]
@@ -701,6 +705,10 @@ def _rf_only_component(
     center_size_log10_residual_sd=0.0,
     center_size_truncation_sd=3.0,
     debug_legacy_luminance_normalization=False,
+    luminance_scaler_spatial_mean_units=False,
+    debug_historical_cai97_receptive_field=False,
+    rf_scaler_historical_normalization_units=False,
+    receptive_field_parameterization=None,
     receptive_field_function_parameters=None,
     pynn_seed=936395,
     visual_field_size_x=16.0,
@@ -716,6 +724,10 @@ def _rf_only_component(
         debug_legacy_luminance_normalization=(
             debug_legacy_luminance_normalization
         ),
+        luminance_scaler_spatial_mean_units=luminance_scaler_spatial_mean_units,
+        debug_historical_cai97_receptive_field=debug_historical_cai97_receptive_field,
+        rf_scaler_historical_normalization_units=rf_scaler_historical_normalization_units,
+        receptive_field_parameterization=receptive_field_parameterization,
     )
     parameters.topography.cap_eccentricity = cap_eccentricity
     parameters.receptive_field.width = width
