@@ -64,12 +64,22 @@ class RetinalUniformSheet(Sheet):
         'density': int,  # neurons along each axis
     })
     
-    def __init__(self, model, parameters):
+    def __init__(self, model, parameters, positions_deg=None):
         Sheet.__init__(self, model,parameters.sx, parameters.sy, parameters)
         logger.info("Creating %s with %d neurons." % (self.__class__.__name__, int(parameters.sx * parameters.sy * parameters.density)))
         rs = space.RandomStructure(boundary=space.Cuboid(self.size_x,self.size_y, 0),
                                    origin=(0.0, 0.0, 0.0),
                                    rng=mozaik.pynn_rng)
+        if positions_deg is not None:
+            positions = numpy.asarray(positions_deg, dtype=float)
+            number = int(parameters.sx * parameters.sy * parameters.density)
+            if positions.shape != (2, number) or not numpy.all(numpy.isfinite(positions)):
+                raise ValueError("uniform sheet positions must be finite with shape (2, N)")
+            if numpy.any(numpy.abs(positions) > numpy.array([parameters.sx, parameters.sy])[:, None] / 2):
+                raise ValueError("uniform sheet positions must lie inside its rectangle")
+            self.canonical_positions_deg = positions.copy()
+            self.canonical_positions_deg.setflags(write=False)
+            rs = ExplicitPositions(numpy.vstack((positions, numpy.zeros(number))))
         
         if self.parameters.cell.native_nest:
             self.pop = self.sim.Population(int(parameters.sx * parameters.sy * parameters.density),
@@ -85,6 +95,11 @@ class RetinalUniformSheet(Sheet):
                                                label=self.name)
         # Forces PyNN to generate the positions to ensure the reproducibility with multiprocessing
         self.pop.positions
+        if positions_deg is None:
+            self.canonical_positions_deg = self.pop.positions[:2].copy()
+            self.canonical_positions_deg.setflags(write=False)
+        if positions_deg is not None and not numpy.array_equal(self.pop.positions[:2], self.canonical_positions_deg):
+            raise AssertionError("PyNN realized positions differ from the uniform population plan")
 
     def size_in_degrees(self):
         return (self.parameters.sx, self.parameters.sy)

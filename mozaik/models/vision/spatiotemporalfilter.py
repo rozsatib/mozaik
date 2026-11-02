@@ -11,7 +11,7 @@ import mozaik
 import numbers
 from decimal import Decimal, ROUND_FLOOR
 from pyNN import space
-from mozaik.models.vision import cai97
+from mozaik.models.vision import cai97, lgn_temporal_scales
 from mozaik.models.vision.rf_parameterization import (
     resolve_cai97_cell_parameters,
     validate_rf_parameterization,
@@ -268,13 +268,38 @@ def _sample_eccentricity_lgn_center_sigmas_by_type(
 
 
 def _sample_eccentricity_lgn_temporal_scales_by_type(
-    number_per_polarity, pynn_seed, temporal_scale_distribution
+    number_per_polarity,
+    pynn_seed,
+    temporal_scale_distribution,
+    mode="lognormal",
+    scale=1.0,
 ):
+    if not numpy.isfinite(scale) or scale <= 0.0:
+        raise ValueError("temporal_scale must be positive and finite")
+    if mode == "constant":
+        return OrderedDict(
+            (rf_type, numpy.full(number_per_polarity, scale))
+            for rf_type in _ECCENTRICITY_LGN_RF_TYPES
+        )
     rngs = _temporal_scale_rngs(pynn_seed)
+    if temporal_scale_distribution is None or mode in ("uniform", "custom"):
+        return OrderedDict(
+            (
+                rf_type,
+                scale * lgn_temporal_scales.sample(number_per_polarity, rng, mode),
+            )
+            for rf_type, rng in zip(_ECCENTRICITY_LGN_RF_TYPES, rngs)
+        )
+    # Preserve saved eccentricity profiles that explicitly specify a distribution.
+    if mode != "lognormal":
+        raise ValueError(
+            "temporal_scale_mode must be 'lognormal', 'uniform' or 'custom'"
+        )
     return OrderedDict(
         (
             rf_type,
-            _sample_truncated_lognormal_scales(
+            scale
+            * _sample_truncated_lognormal_scales(
                 number_per_polarity,
                 temporal_scale_distribution.mu,
                 temporal_scale_distribution.sigma,
@@ -296,6 +321,8 @@ def sample_eccentricity_lgn_population_plan(
     temporal_scale_distribution,
     center_size_log10_residual_sd,
     center_size_truncation_sd,
+    temporal_scale_mode="lognormal",
+    temporal_scale=1.0,
 ):
     """Sample an eccentricity-dependent LGN plan without creating neurons."""
 
@@ -329,7 +356,11 @@ def sample_eccentricity_lgn_population_plan(
         center_size_truncation_sd,
     )
     temporal_scales_by_type = _sample_eccentricity_lgn_temporal_scales_by_type(
-        number_per_polarity, pynn_seed, temporal_scale_distribution
+        number_per_polarity,
+        pynn_seed,
+        temporal_scale_distribution,
+        temporal_scale_mode,
+        temporal_scale,
     )
 
     plan = OrderedDict()
@@ -346,6 +377,78 @@ def sample_eccentricity_lgn_population_plan(
                 temporal_scales_by_type[rf_type], dtype=float
             ),
             "source_indices": numpy.arange(number_per_polarity, dtype=numpy.int64),
+        }
+        for array in values.values():
+            array.setflags(write=False)
+        plan[rf_type] = values
+    return plan
+
+
+def sample_uniform_lgn_population_plan(
+    size,
+    density,
+    center_sigma,
+    position_seeds,
+    pynn_seed,
+    temporal_scale_distribution,
+    temporal_scale_mode="constant",
+    temporal_scale=1.0,
+    positions_by_type=None,
+):
+    """Plan uniform rectangular populations with independently assigned RF timescales.
+
+    Density is the number of cells per square degree, separately for ON and OFF.
+    A scale greater than one slows the configured temporal RF prototype.
+    """
+    size = numpy.asarray(size, dtype=float)
+    if (
+        size.shape != (2,)
+        or not numpy.all(numpy.isfinite(size))
+        or numpy.any(size <= 0)
+    ):
+        raise ValueError("spatial_layout.size must contain two positive finite sizes")
+    if not numpy.isfinite(density) or density <= 0:
+        raise ValueError("spatial_layout.density must be positive and finite")
+    number = int(numpy.prod(size) * density)
+    if number < 1:
+        raise ValueError("uniform layout must contain at least one cell per polarity")
+    if positions_by_type is None and len(position_seeds) != len(
+        _ECCENTRICITY_LGN_RF_TYPES
+    ):
+        raise ValueError("position_seeds must contain one seed per LGN polarity")
+    if not numpy.isfinite(center_sigma) or center_sigma <= 0:
+        raise ValueError("uniform RF center sigma must be positive and finite")
+    temporal_scales = _sample_eccentricity_lgn_temporal_scales_by_type(
+        number,
+        pynn_seed,
+        temporal_scale_distribution,
+        temporal_scale_mode,
+        temporal_scale,
+    )
+    plan = OrderedDict()
+    for index, rf_type in enumerate(_ECCENTRICITY_LGN_RF_TYPES):
+        if positions_by_type is None:
+            positions = numpy.random.RandomState(position_seeds[index]).uniform(
+                -size[:, None] / 2, size[:, None] / 2, size=(2, number)
+            )
+        else:
+            positions = numpy.array(positions_by_type[rf_type], dtype=float, copy=True)
+            if positions.shape != (2, number) or not numpy.all(
+                numpy.isfinite(positions)
+            ):
+                raise ValueError(
+                    "uniform sheet positions must be finite with shape (2, N)"
+                )
+            if numpy.any(numpy.abs(positions) > size[:, None] / 2):
+                raise ValueError(
+                    "uniform sheet positions must lie inside its rectangle"
+                )
+        values = {
+            "positions_deg": positions,
+            "eccentricities_deg": numpy.hypot(*positions),
+            "center_sigmas_deg": numpy.full(number, center_sigma),
+            "temporal_scales": temporal_scales[rf_type],
+            "source_indices": numpy.arange(number, dtype=numpy.int64),
         }
         for array in values.values():
             array.setflags(write=False)
@@ -1705,16 +1808,23 @@ class SpatioTemporalFilterRetinaLGN(SensoryInputComponent):
 
 
 class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
-    """Fixed-count eccentricity-dependent LGN population.
+    """Per-cell LGN RFs with eccentric or uniform spatial populations.
 
     Global ON/OFF positions are sampled independently, while each locally
     owned relay cell receives a complete Cai97 kernel whose spatial scale is
     derived from its eccentricity and whose temporal scale is sampled from a
-    truncated log-normal distribution.
+    truncated log-normal distribution. ``spatial_layout`` selects a uniform
+    rectangle when supplied as ``{size: (width, height), density: cells/deg²}``.
+    In that mode RF spatial sizes come directly from ``receptive_field``.
+    ``temporal_scale_mode`` selects ``uniform``, ``lognormal`` or ``custom``; in each
+    case ``temporal_scale`` multiplies the dilation (larger means slower).
     """
 
     required_parameters = ParameterSet(
         {
+            "spatial_layout": ParameterSet,
+            "temporal_scale_mode": str,
+            "temporal_scale": float,
             "number_per_polarity": int,
             "minimum_eccentricity_deg": float,
             "maximum_eccentricity_deg": (float, type(None)),
@@ -1820,12 +1930,32 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
         }
     )
 
-    def __init__(self, model, parameters):
+    def check_parameters(self, parameters):
+        # Preserve existing eccentricity profiles without adding required input
+        # fields to every saved parameter pack, including direct schema checks.
+        parameters.setdefault("spatial_layout", None)
+        parameters.setdefault("temporal_scale_mode", "lognormal")
+        parameters.setdefault("temporal_scale", 1.0)
         # Command-line overrides can supply nested parameter sets as dictionaries.
-        for name in ("receptive_field_parameterization", "temporal_compensation"):
+        for name in (
+            "receptive_field_parameterization",
+            "temporal_compensation",
+            "spatial_layout",
+        ):
             settings = parameters.get(name)
             if isinstance(settings, dict) and not isinstance(settings, ParameterSet):
                 parameters[name] = ParameterSet(settings)
+        if (
+            parameters.spatial_layout is not None
+            and "number_per_polarity" not in parameters
+        ):
+            layout = parameters.spatial_layout
+            parameters["number_per_polarity"] = int(
+                layout.size[0] * layout.size[1] * layout.density
+            )
+        super().check_parameters(parameters)
+
+    def __init__(self, model, parameters):
         SensoryInputComponent.__init__(self, model, parameters)
         if self.parameters.debug_legacy_luminance_normalization:
             logger.warning(_DEBUG_LEGACY_LUMINANCE_NORMALIZATION_WARNING)
@@ -1840,10 +1970,14 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                 "fixation-centred visual rectangle"
             )
 
-        self.topography = RadiallySymmetricLGNTopography(
-            model.visual_field,
-            self.parameters.topography,
-            self.parameters.maximum_eccentricity_deg,
+        self.topography = (
+            RadiallySymmetricLGNTopography(
+                model.visual_field,
+                self.parameters.topography,
+                self.parameters.maximum_eccentricity_deg,
+            )
+            if self.parameters.spatial_layout is None
+            else None
         )
         self._validate_eccentricity_domain()
         self.rf_types = ("X_ON", "X_OFF")
@@ -1865,16 +1999,45 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
             raise ValueError(
                 "model.parameters.pynn_seed is required for population-plan sampling"
             ) from exc
-        sampled_population_plan = sample_eccentricity_lgn_population_plan(
-            self.topography,
-            self._population_plan_sample_count(),
-            self.parameters.minimum_eccentricity_deg,
-            mozaik.get_seeds(2),
-            pynn_seed,
-            self.parameters.temporal_scale_distribution,
-            self.parameters.center_size_log10_residual_sd,
-            self.parameters.center_size_truncation_sd,
-        )
+        legacy_placement = getattr(self, "legacy_uniform_placement", False)
+        if legacy_placement:
+            # Preserve legacy RNG order: both populations/positions precede
+            # noise seeding. This keeps cortical placement and wiring matched.
+            for rf_type in self.rf_types:
+                self.sheets[rf_type] = self._create_retinal_sheet(rf_type)
+        if self.parameters.spatial_layout is None:
+            sampled_population_plan = sample_eccentricity_lgn_population_plan(
+                self.topography,
+                self._population_plan_sample_count(),
+                self.parameters.minimum_eccentricity_deg,
+                mozaik.get_seeds(2),
+                pynn_seed,
+                self.parameters.temporal_scale_distribution,
+                self.parameters.center_size_log10_residual_sd,
+                self.parameters.center_size_truncation_sd,
+                self.parameters.temporal_scale_mode,
+                self.parameters.temporal_scale,
+            )
+        else:
+            layout = self.parameters.spatial_layout
+            sampled_population_plan = sample_uniform_lgn_population_plan(
+                layout.size,
+                layout.density,
+                self.parameters.receptive_field.func_params.sigma_c,
+                None if legacy_placement else mozaik.get_seeds(2),
+                pynn_seed,
+                self.parameters.temporal_scale_distribution,
+                self.parameters.temporal_scale_mode,
+                self.parameters.temporal_scale,
+                positions_by_type=(
+                    {
+                        rf_type: self.sheets[rf_type].canonical_positions_deg
+                        for rf_type in self.rf_types
+                    }
+                    if legacy_placement
+                    else None
+                ),
+            )
         self._population_plan_source_sizes = OrderedDict(
             (
                 rf_type,
@@ -1887,36 +2050,46 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
         )
         self._validate_population_plan()
 
-        for rf_type in self.rf_types:
-            cell = copy.deepcopy(self.parameters.cell)
-            if self.integrated_cs:
-                noise = self._noise_parameters(rf_type)
-                cell.params.update(
-                    [
-                        ("mean", noise.mean * 1000),
-                        ("std", noise.stdev * 1000),
-                        ("dt", self.model.sim.get_time_step()),
-                    ]
+        if not legacy_placement:
+            for rf_type in self.rf_types:
+                self.sheets[rf_type] = self._create_retinal_sheet(
+                    rf_type, self.population_plan[rf_type]["positions_deg"]
                 )
-            self.sheets[rf_type] = RetinalInhomogeneousDiskSheet(
-                model,
-                ParameterSet(
-                    {
-                        "cell": cell,
-                        "name": rf_type,
-                        "artificial_stimulators": OrderedDict(),
-                        "recorders": self.parameters.recorders,
-                        "recording_interval": self.parameters.recording_interval,
-                        "mpi_safe": False,
-                    }
-                ),
-                self.population_plan[rf_type]["positions_deg"],
-                self.topography,
-            )
 
         self._initialize_noise_sources()
         self._initialize_receptive_fields()
         self._initialize_temporal_compensation()
+
+    def _create_retinal_sheet(self, rf_type, positions=None):
+        cell = copy.deepcopy(self.parameters.cell)
+        if self.integrated_cs:
+            noise = self._noise_parameters(rf_type)
+            cell.params.update(
+                [
+                    ("mean", noise.mean * 1000),
+                    ("std", noise.stdev * 1000),
+                    ("dt", self.model.sim.get_time_step()),
+                ]
+            )
+        sheet_parameters = {
+            "cell": cell,
+            "name": rf_type,
+            "artificial_stimulators": OrderedDict(),
+            "recorders": self.parameters.recorders,
+            "recording_interval": self.parameters.recording_interval,
+            "mpi_safe": False,
+        }
+        if self.parameters.spatial_layout is None:
+            return RetinalInhomogeneousDiskSheet(
+                self.model, ParameterSet(sheet_parameters), positions, self.topography
+            )
+        layout = self.parameters.spatial_layout
+        sheet_parameters.update(
+            sx=layout.size[0], sy=layout.size[1], density=layout.density
+        )
+        return RetinalUniformSheet(
+            self.model, ParameterSet(sheet_parameters), positions_deg=positions
+        )
 
     def _population_plan_sample_count(self):
         """Return production count; validation overrides to sample extra candidates."""
@@ -1988,6 +2161,27 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
         self._validate_temporal_scale_distribution()
         self._validate_center_size_distribution()
         self._validate_temporal_compensation_coefficients()
+        layout = self.parameters.get("spatial_layout")
+        if layout is not None:
+            if set(layout) != {"size", "density"}:
+                raise ValueError("spatial_layout requires exactly size and density")
+            size = numpy.asarray(layout.size, dtype=float)
+            if (
+                size.shape != (2,)
+                or not numpy.all(numpy.isfinite(size))
+                or numpy.any(size <= 0)
+            ):
+                raise ValueError(
+                    "spatial_layout.size must contain two positive finite sizes"
+                )
+            if not numpy.isfinite(layout.density) or layout.density <= 0:
+                raise ValueError("spatial_layout.density must be positive and finite")
+            if int(numpy.prod(size) * layout.density) != number:
+                raise ValueError(
+                    "number_per_polarity must equal int(width * height * density)"
+                )
+            if self.parameters.center_size_log10_residual_sd != 0.0:
+                raise ValueError("uniform spatial RFs require zero centre-size scatter")
 
         minimum_eccentricity = self.parameters.minimum_eccentricity_deg
         if (
@@ -2123,6 +2317,18 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
         return historical, float(width), float(duration)
 
     def _validate_eccentricity_domain(self):
+        if self.parameters.get("spatial_layout") is not None:
+            layout = self.parameters.spatial_layout
+            field = self.model.visual_field
+            if field.location_x != 0.0 or field.location_y != 0.0:
+                raise ValueError(
+                    "uniform LGN currently requires a centred visual field"
+                )
+            if layout.size[0] > field.size_x or layout.size[1] > field.size_y:
+                raise ValueError(
+                    "uniform LGN rectangle must fit inside model.visual_field"
+                )
+            return
         if (
             self.parameters.minimum_eccentricity_deg
             >= self.topography.max_eccentricity_deg
@@ -2133,7 +2339,24 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
             )
 
     def _validate_temporal_scale_distribution(self):
+        mode = self.parameters.get("temporal_scale_mode", "lognormal")
+        scale = self.parameters.get("temporal_scale", 1.0)
+        if mode not in ("constant", "uniform", "lognormal", "custom"):
+            raise ValueError(
+                "temporal_scale_mode must be 'lognormal', 'uniform' or 'custom'"
+            )
+        if (
+            isinstance(scale, bool)
+            or not isinstance(scale, numbers.Real)
+            or not numpy.isfinite(scale)
+            or scale <= 0
+        ):
+            raise ValueError("temporal_scale must be positive and finite")
+        if mode in ("constant", "uniform", "custom"):
+            return
         distribution = self.parameters.temporal_scale_distribution
+        if distribution is None:
+            return  # The canonical log-normal parameters are fixed in LGN code.
         for name in ("mu", "sigma", "lower_quantile", "upper_quantile"):
             value = distribution[name]
             if (
@@ -2298,6 +2521,11 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
 
         receptive_field = self.parameters.receptive_field
         distribution = self.parameters.temporal_scale_distribution
+        distribution_parameters = (
+            distribution.as_dict()
+            if distribution is not None
+            else dict(lgn_temporal_scales.CANONICAL_LOGNORMAL_PARAMETERS)
+        )
         profile = self.parameters.receptive_field_parameterization
         override = None
         if profile is not None or any(
@@ -2344,7 +2572,17 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                 name: float(receptive_field.func_params[name])
                 for name in self._TEMPORAL_COMPENSATION_RF_PARAMETERS
             },
-            "temporal_scale_distribution": distribution.as_dict(),
+            "temporal_scale_distribution": (
+                distribution_parameters
+                if self.parameters.get("temporal_scale_mode", "lognormal")
+                == "lognormal"
+                and self.parameters.get("temporal_scale", 1.0) == 1.0
+                else {
+                    "mode": self.parameters.temporal_scale_mode,
+                    "scale": self.parameters.temporal_scale,
+                    "distribution": distribution_parameters,
+                }
+            ),
         }
 
     def _initialize_temporal_compensation(self):
@@ -2460,6 +2698,14 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
             )
         profile = self.parameters.receptive_field_parameterization
         validate_rf_parameterization(profile, _CAI97_RF_NUMERIC_PARAMETERS)
+        if self.parameters.get("spatial_layout") is not None and (
+            profile is not None
+            or self.parameters.debug_historical_cai97_receptive_field
+        ):
+            raise ValueError(
+                "Uniform spatial mode uses receptive_field directly; leave "
+                "receptive_field_parameterization=None and the historical debug RF disabled"
+            )
         if (
             profile is not None
             and self.parameters.debug_historical_cai97_receptive_field
@@ -2587,11 +2833,14 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
         # truncation width. Deriving it here keeps the stimulus grid identical
         # across seeds and across number_per_polarity, at the cost of a grid
         # slightly finer than the realized population strictly requires.
-        minimum_center_sigma, _ = self.topography.center_sigma_bounds_deg(
-            self.parameters.center_size_log10_residual_sd,
-            self.parameters.center_size_truncation_sd,
-            self.parameters.minimum_eccentricity_deg,
-        )
+        if self.parameters.get("spatial_layout") is None:
+            minimum_center_sigma, _ = self.topography.center_sigma_bounds_deg(
+                self.parameters.center_size_log10_residual_sd,
+                self.parameters.center_size_truncation_sd,
+                self.parameters.minimum_eccentricity_deg,
+            )
+        else:
+            minimum_center_sigma = reference_center_sigma
         maximum_pixel_size = (
             minimum_center_sigma / self.parameters.minimum_samples_per_center_sigma
         )
@@ -2670,16 +2919,28 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
             for rf_type in self.rf_types
         }
         logger.info(
-            "Eccentricity LGN RF plan: domain=[%g, %g) deg; user cap=%s; "
+            "Per-cell LGN RF plan: radial extent=[%g, %g) deg; user cap=%s; "
             "resolved mapping cap=%g deg; eccentricity range=[%g, %g] "
             "deg; centre sigma range=[%g, %g] deg; surround sigma "
             "range=[%g, %g] deg; resolution=%g deg/pixel; kernel shape "
             "range=%s..%s; estimated local RF/operator array memory=%.3f MiB "
             "(dense reference %.3f MiB); global counts=%s; local counts=%s",
             self.parameters.minimum_eccentricity_deg,
-            self.topography.max_eccentricity_deg,
-            self.topography.user_cap_eccentricity_deg,
-            self.topography._resolved_mapping_cap_eccentricity_deg,
+            (
+                self.topography.max_eccentricity_deg
+                if self.topography is not None
+                else numpy.hypot(*self.parameters.spatial_layout.size) / 2
+            ),
+            (
+                self.topography.user_cap_eccentricity_deg
+                if self.topography is not None
+                else None
+            ),
+            (
+                self.topography._resolved_mapping_cap_eccentricity_deg
+                if self.topography is not None
+                else 0.0
+            ),
             min(float(numpy.min(values)) for values in all_eccentricities),
             max(float(numpy.max(values)) for values in all_eccentricities),
             min(float(numpy.min(values)) for values in all_center_sigmas),
