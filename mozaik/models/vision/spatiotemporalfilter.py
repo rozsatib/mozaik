@@ -2726,6 +2726,13 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
                 reference, center, surround, temporal_scale
             )
             return parameters, width, width, duration
+        profile = self.parameters.receptive_field_parameterization
+        duration = float(plan["durations_ms"][global_index])
+        if profile is None:
+            reference, duration = lgn_temporal_scales.scale_receptive_field(
+                reference, self.parameters.receptive_field.duration, temporal_scale
+            )
+            temporal_scale = 1.0  # The user-facing function has already scaled the RF.
         return resolve_cai97_cell_parameters(
             reference,
             center,
@@ -2733,8 +2740,8 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
             temporal_scale,
             float(plan["widths_deg"][global_index]),
             float(plan["heights_deg"][global_index]),
-            float(plan["durations_ms"][global_index]),
-            self.parameters.receptive_field_parameterization,
+            duration,
+            profile,
         )
 
     def _initialize_noise_sources(self):
@@ -2804,7 +2811,22 @@ class EccentricityDependentSpatioTemporalFilterRetinaLGN(SensoryInputComponent):
             center_sigmas = planned["center_sigmas_deg"]
             scales = center_sigmas / reference_center_sigma
             temporal_scales = planned["temporal_scales"]
-            durations_ms = receptive_field.duration * temporal_scales
+            if (
+                self.parameters.receptive_field_parameterization is None
+                and not self.parameters.debug_historical_cai97_receptive_field
+            ):
+                durations_ms = numpy.array(
+                    [
+                        lgn_temporal_scales.scale_receptive_field(
+                            function_parameters, receptive_field.duration, float(scale)
+                        )[1]
+                        for scale in temporal_scales
+                    ]
+                )
+            else:
+                durations_ms = receptive_field.duration * temporal_scales
+            if numpy.any(~numpy.isfinite(durations_ms) | (durations_ms <= 0)):
+                raise ValueError("Scaled RF durations must be positive and finite")
             temporal_samples = numpy.ceil(
                 durations_ms / receptive_field.temporal_resolution
             ).astype(int)

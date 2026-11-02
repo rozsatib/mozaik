@@ -3,7 +3,10 @@
 Select ``lognormal``, ``uniform`` or ``custom`` with temporal_scale_mode.
 To try another distribution, edit custom() below and select ``custom``.
 Each function returns one positive time-dilation factor per cell.
+To change how a scale modifies the RF, edit scale_receptive_field().
 """
+
+import copy
 
 import numpy as np
 from scipy.special import ndtri
@@ -29,6 +32,27 @@ CANONICAL_LOGNORMAL_PARAMETERS = {
     "lower_quantile": 0.005,
     "upper_quantile": 0.995,
 }
+
+
+def scale_receptive_field(reference, duration_ms, scale):
+    """Apply one cell's sampled scale to its temporal RF and support.
+
+    Edit this function to change the scaling rule for any distribution policy.
+    The default stretches the time axis: scale 2 makes the RF twice as slow.
+    Keep scale 1 unchanged to preserve the legacy response in uniform mode.
+
+    Return the modified parameter set and its positive finite duration in ms.
+    Spatial RF parameters and the supplied reference should remain unchanged.
+    Kernel sampling and duration metadata both follow the returned duration.
+    Keep this rule deterministic; random sampling belongs in custom().
+    """
+    parameters = copy.deepcopy(reference)
+    for name in ("t1", "t2", "td"):
+        parameters[name] *= scale
+    for name in ("c1", "c2"):
+        parameters[name] /= scale
+    duration_ms *= scale
+    return parameters, duration_ms
 
 
 def lognormal(number, rng):
